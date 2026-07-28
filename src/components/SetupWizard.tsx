@@ -378,6 +378,17 @@ function GhlStep({
 
 /* ------------------------------------------------------------------ */
 
+function groupStagesByPipeline(rows: StageRow[]) {
+  const map = new Map<string, StageRow[]>();
+  for (const r of rows) {
+    const key = r.pipelineName?.trim() || "Ungrouped";
+    const arr = map.get(key);
+    if (arr) arr.push(r);
+    else map.set(key, [r]);
+  }
+  return Array.from(map, ([pipeline, stages]) => ({ pipeline, stages }));
+}
+
 function StageStep({
   clientId,
   stages,
@@ -405,6 +416,8 @@ function StageStep({
 
   const mapped = new Set(rows.map((r) => r.canonicalStage).filter(Boolean));
   const missing = CANONICAL_STAGES.filter((s) => !mapped.has(s));
+  const groups = groupStagesByPipeline(rows);
+  const totalMapped = rows.filter((r) => r.canonicalStage).length;
 
   async function importStages() {
     setBusy(true);
@@ -473,60 +486,105 @@ function StageStep({
 
       {rows.length > 0 && (
         <>
-          <div className="mt-4 flex flex-col gap-2">
-            {rows.map((row) => (
-              <div key={row.id} className="flex flex-wrap items-center gap-2">
-                <div className="min-w-0 flex-1">
+          <p className="mt-3 text-[11px]" style={{ color: "var(--text-muted)" }}>
+            {rows.length} stages across {groups.length} pipeline
+            {groups.length === 1 ? "" : "s"} · {totalMapped} mapped
+          </p>
+          <div className="mt-3 flex flex-col gap-5">
+            {groups.map((group) => {
+              const gMapped = group.stages.filter(
+                (s) => s.canonicalStage,
+              ).length;
+              const full = gMapped === group.stages.length;
+              return (
+                <div key={group.pipeline}>
                   <div
-                    className="truncate text-[13px]"
-                    style={{ color: "var(--text-primary)" }}
+                    className="flex items-center justify-between border-b pb-1.5"
+                    style={{ borderColor: "var(--border)" }}
                   >
-                    {row.name ?? <em style={{ color: "var(--text-muted)" }}>Unnamed stage</em>}
-                    {row.discoveredFromWebhook && (
-                      <span
-                        className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                    <span
+                      className="truncate text-[12px] font-semibold uppercase tracking-wide"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {group.pipeline}
+                    </span>
+                    <span
+                      className="shrink-0 pl-2 text-[11px] tabular-nums"
+                      style={{
+                        color: full
+                          ? "var(--status-good)"
+                          : "var(--text-muted)",
+                      }}
+                    >
+                      {gMapped}/{group.stages.length} mapped
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-col gap-1">
+                    {group.stages.map((row) => (
+                      <div
+                        key={row.id}
+                        className="flex flex-wrap items-center gap-2 rounded-[8px] px-2 py-1.5"
                         style={{
-                          background: "color-mix(in srgb, var(--status-warning) 22%, transparent)",
-                          color: "var(--text-secondary)",
+                          background: row.canonicalStage
+                            ? "transparent"
+                            : "color-mix(in srgb, var(--status-warning) 7%, transparent)",
                         }}
                       >
-                        seen in webhook
-                      </span>
-                    )}
+                        <div className="min-w-0 flex-1">
+                          <div
+                            className="truncate text-[13px]"
+                            style={{ color: "var(--text-primary)" }}
+                          >
+                            {row.name ?? (
+                              <em style={{ color: "var(--text-muted)" }}>
+                                Unnamed stage
+                              </em>
+                            )}
+                            {row.discoveredFromWebhook && (
+                              <span
+                                className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                style={{
+                                  background:
+                                    "color-mix(in srgb, var(--status-warning) 22%, transparent)",
+                                  color: "var(--text-secondary)",
+                                }}
+                              >
+                                seen in webhook
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <select
+                          value={row.canonicalStage ?? ""}
+                          onChange={(e) =>
+                            setRows((prev) =>
+                              prev.map((r) =>
+                                r.id === row.id
+                                  ? {
+                                      ...r,
+                                      canonicalStage: (e.target.value ||
+                                        null) as CanonicalStage | null,
+                                    }
+                                  : r,
+                              ),
+                            )
+                          }
+                          className="min-w-[150px] rounded-[8px] border px-2 py-1.5 text-[13px]"
+                          style={inputStyle}
+                        >
+                          <option value="">— not used —</option>
+                          {CANONICAL_STAGES.map((s) => (
+                            <option key={s} value={s}>
+                              {STAGE_LABELS[s]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
                   </div>
-                  {row.pipelineName && (
-                    <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
-                      {row.pipelineName}
-                    </div>
-                  )}
                 </div>
-                <select
-                  value={row.canonicalStage ?? ""}
-                  onChange={(e) =>
-                    setRows((prev) =>
-                      prev.map((r) =>
-                        r.id === row.id
-                          ? {
-                              ...r,
-                              canonicalStage:
-                                (e.target.value || null) as CanonicalStage | null,
-                            }
-                          : r,
-                      ),
-                    )
-                  }
-                  className="rounded-[8px] border px-2 py-1.5 text-[13px]"
-                  style={inputStyle}
-                >
-                  <option value="">— not used —</option>
-                  {CANONICAL_STAGES.map((s) => (
-                    <option key={s} value={s}>
-                      {STAGE_LABELS[s]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {missing.length > 0 && (
