@@ -302,23 +302,27 @@ export async function refreshIfStale(client: Client): Promise<boolean> {
   const accounts = await activeAdAccounts(client.id);
   if (accounts.length === 0) return false;
 
-  // Advisory lock keyed on the client uuid; non-blocking.
+  // A TRANSACTION-scoped advisory lock, not a session-scoped one. The old
+  // pg_try_advisory_lock + pg_advisory_unlock ran as two separate statements on
+  // a connection pool, so the unlock could land on a different connection than
+  // the one holding the lock — silently failing and wedging this client's
+  // intraday refresh until the idle connection closed. pg_advisory_xact_lock is
+  // bound to the transaction and released automatically (same connection) when it
+  // ends, so it cannot leak.
   const lockKey = hashToInt(client.id);
-  const [{ locked }] = await db.execute<{ locked: boolean }>(
-    sql`SELECT pg_try_advisory_lock(${lockKey}) AS locked`,
-  ).then((r) => (r as unknown as { rows: Array<{ locked: boolean }> }).rows);
-
-  if (!locked) return false;
-
   try {
-    const today = todayKey(client.timezone);
-    await syncClientMetrics(client, { since: today, until: today });
-    return true;
+    return await db.transaction(async (tx) => {
+      const { rows } = (await tx.execute<{ locked: boolean }>(
+        sql`SELECT pg_try_advisory_xact_lock(${lockKey}) AS locked`,
+      )) as unknown as { rows: Array<{ locked: boolean }> };
+      if (!rows[0]?.locked) return false;
+      const today = todayKey(client.timezone);
+      await syncClientMetrics(client, { since: today, until: today });
+      return true;
+    });
   } catch (err) {
     console.error(`[meta] refresh failed for ${client.slug}:`, err);
     return false;
-  } finally {
-    await db.execute(sql`SELECT pg_advisory_unlock(${lockKey})`);
   }
 }
 
@@ -345,12 +349,15 @@ export function isDueForNightlySync(
   targetHour = 2,
   now: Date = new Date(),
 ): boolean {
-  const localHour = Number(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: client.timezone,
-      hour: "numeric",
-      hour12: false,
-    }).format(now),
-  );
+  // `% 24`: some ICU builds format midnight as "24" rather than "0", which would
+  // make targetHour=0 (midnight) never match.
+  const localHour =
+    Number(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: client.timezone,
+        hour: "numeric",
+        hour12: false,
+      }).format(now),
+    ) % 24;
   return localHour === targetHour;
 }

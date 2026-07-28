@@ -186,21 +186,22 @@ export async function refreshGoogleIfStale(client: Client): Promise<boolean> {
     .where(eq(googleAdAccounts.clientId, client.id));
   if (last && Date.now() - last.getTime() < GOOGLE_STALE_AFTER_MS) return false;
 
+  // Transaction-scoped advisory lock — see the Meta refreshIfStale note. A
+  // session lock's unlock could run on a different pooled connection and leak.
   const lockKey = hashToInt(`google:${client.id}`);
-  const [{ locked }] = await db
-    .execute<{ locked: boolean }>(sql`SELECT pg_try_advisory_lock(${lockKey}) AS locked`)
-    .then((r) => (r as unknown as { rows: Array<{ locked: boolean }> }).rows);
-  if (!locked) return false;
-
   try {
-    const today = todayKey(client.timezone);
-    await syncClientGoogleMetrics(client, { since: today, until: today });
-    return true;
+    return await db.transaction(async (tx) => {
+      const { rows } = (await tx.execute<{ locked: boolean }>(
+        sql`SELECT pg_try_advisory_xact_lock(${lockKey}) AS locked`,
+      )) as unknown as { rows: Array<{ locked: boolean }> };
+      if (!rows[0]?.locked) return false;
+      const today = todayKey(client.timezone);
+      await syncClientGoogleMetrics(client, { since: today, until: today });
+      return true;
+    });
   } catch (err) {
     console.error(`[google] refresh failed for ${client.slug}:`, err);
     return false;
-  } finally {
-    await db.execute(sql`SELECT pg_advisory_unlock(${lockKey})`);
   }
 }
 

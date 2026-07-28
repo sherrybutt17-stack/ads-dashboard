@@ -55,10 +55,17 @@ export function LeadSourceSettings({
   const [tag, setTag] = useState(initialTag);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const needsTag = mode === "tagged" || mode === "either";
 
   async function save() {
+    if (needsTag && tag.trim() === "") {
+      setError("Enter the GHL tag that marks a Facebook lead, or switch to Ad-attributed only.");
+      return;
+    }
     setBusy(true);
     setSaved(false);
+    setError(null);
     try {
       const res = await fetch(`/api/clients/${clientId}`, {
         method: "PATCH",
@@ -68,7 +75,12 @@ export function LeadSourceSettings({
       if (res.ok) {
         setSaved(true);
         router.refresh();
+      } else {
+        const body = await res.json().catch(() => null);
+        setError(body?.error ?? "Couldn't save — please try again.");
       }
+    } catch {
+      setError("Couldn't reach the server — please try again.");
     } finally {
       setBusy(false);
     }
@@ -191,6 +203,11 @@ export function LeadSourceSettings({
         {saved && !dirty && (
           <span className="text-xs" style={{ color: "var(--delta-good)" }}>
             ✓ Saved
+          </span>
+        )}
+        {error && (
+          <span className="text-xs" style={{ color: "var(--status-critical)" }}>
+            {error}
           </span>
         )}
       </div>

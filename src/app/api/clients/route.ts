@@ -4,6 +4,7 @@ import { createClient, listClients, webhookUrlFor } from "@/lib/clients";
 import { listAdAccounts } from "@/lib/meta/accounts";
 import { quickHealth } from "@/lib/health";
 import { isValidTimeZone } from "@/lib/dates";
+import { getSessionUser, isStaff } from "@/lib/auth";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -50,6 +51,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (!isStaff(await getSessionUser())) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const body = await req.json().catch(() => null);
   const parsed = CreateSchema.safeParse(body);
   if (!parsed.success) {

@@ -7,6 +7,7 @@ import { encrypt } from "@/lib/crypto";
 import { getClientById, webhookUrlFor } from "@/lib/clients";
 import { removeClient } from "@/lib/client-removal";
 import { isValidTimeZone } from "@/lib/dates";
+import { getSessionUser, isStaff } from "@/lib/auth";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -47,6 +48,11 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  // Re-check staff against the DB (not just the edge token) — this route rotates
+  // GHL tokens and flips client status, so a demoted account must not reach it.
+  if (!isStaff(await getSessionUser())) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const { id } = await ctx.params;
   const body = await req.json().catch(() => null);
   const parsed = PatchSchema.safeParse(body);
@@ -108,6 +114,9 @@ export async function DELETE(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  if (!isStaff(await getSessionUser())) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const { id } = await ctx.params;
   const client = await getClientById(id);
   if (!client) {

@@ -56,14 +56,19 @@ export function HealthChecklist({
 }) {
   const [report, setReport] = useState<HealthReport | null>(initial ?? null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function retest() {
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`/api/clients/${clientId}/health`, {
         cache: "no-store",
       });
       if (res.ok) setReport(await res.json());
+      else setError("Couldn't run the health checks — try again.");
+    } catch {
+      setError("Couldn't reach the server — try again.");
     } finally {
       setLoading(false);
     }
@@ -93,12 +98,30 @@ export function HealthChecklist({
         </button>
       </div>
 
+      {error && (
+        <p
+          className="mb-3 rounded-[8px] px-3 py-2 text-xs"
+          style={{
+            color: "var(--status-critical)",
+            background: "color-mix(in srgb, var(--status-critical) 10%, transparent)",
+          }}
+        >
+          {error}
+        </p>
+      )}
+
       {!report ? (
-        <div className="flex flex-col gap-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="skeleton h-11 w-full" />
-          ))}
-        </div>
+        error ? (
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            No results yet — press Re-test to run the checks.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="skeleton h-11 w-full" />
+            ))}
+          </div>
+        )
       ) : (
         <ul className="flex flex-col">
           {report.checks.map((check) => {
