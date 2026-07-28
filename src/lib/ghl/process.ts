@@ -137,6 +137,29 @@ export async function processWebhookEvent(
       .for("update");
 
     const status = normalizeStatus(remoteStatus ?? evt.status);
+
+    // Prior state (before this event) — the basis for both the from→to diff and
+    // the ordering guard below.
+    const previousStageGhlId = existing?.currentStageGhlId ?? null;
+    const previousStageId = existing?.currentStageId ?? null;
+    const storedChangedAt = existing?.lastStageChangeAt ?? null;
+    const stageChanged = previousStageGhlId !== evt.pipelineStageId;
+
+    /*
+     * ORDERING GUARD. Delivery is at-least-once AND unordered, and `changedAt`
+     * is re-read from the opportunity's CURRENT `lastStageChangeAt`. So a replay
+     * of an old event (after the opportunity has since moved on) or an
+     * out-of-order delivery arrives carrying a `changedAt` that is NOT newer than
+     * what we already stored. Advancing the live stage pointer on such an event
+     * would drag `current_stage` backwards AND append a phantom reverse
+     * transition — inflating funnel counts off an event that describes the past.
+     * Only move the stage forward when this event genuinely supersedes stored
+     * state; equal timestamps count as already-seen.
+     */
+    const incomingIsNewer =
+      !storedChangedAt || changedAt.getTime() > storedChangedAt.getTime();
+    const advanceStage = stageChanged && incomingIsNewer;
+
     const values = {
       clientId: client.id,
       ghlOpportunityId: evt.opportunityId!,
@@ -144,8 +167,14 @@ export async function processWebhookEvent(
       ghlContactId: evt.contactId ?? existing?.ghlContactId ?? null,
       name: remoteName ?? evt.name ?? existing?.name ?? null,
       ghlPipelineId: evt.pipelineId ?? existing?.ghlPipelineId ?? null,
-      currentStageId: toStage?.id ?? null,
-      currentStageGhlId: evt.pipelineStageId!,
+      // Stage pointer + change time only advance when this event supersedes what
+      // we have; a stale/reordered event preserves the newer stored state.
+      currentStageId: advanceStage
+        ? (toStage?.id ?? null)
+        : (existing?.currentStageId ?? toStage?.id ?? null),
+      currentStageGhlId: advanceStage
+        ? evt.pipelineStageId!
+        : (existing?.currentStageGhlId ?? evt.pipelineStageId!),
       status: status ?? existing?.status ?? null,
       monetaryValue:
         evt.monetaryValue !== null
@@ -153,17 +182,13 @@ export async function processWebhookEvent(
           : (existing?.monetaryValue ?? null),
       ghlCreatedAt:
         remoteCreatedAt ?? parseDate(evt.dateAdded) ?? existing?.ghlCreatedAt ?? null,
-      lastStageChangeAt: changedAt,
+      lastStageChangeAt: advanceStage ? changedAt : (storedChangedAt ?? changedAt),
       updatedAt: new Date(),
     };
 
     let opportunityRowId: string;
-    let previousStageGhlId: string | null = null;
-    let previousStageId: string | null = null;
 
     if (existing) {
-      previousStageGhlId = existing.currentStageGhlId;
-      previousStageId = existing.currentStageId;
       await tx
         .update(opportunities)
         .set(values)
@@ -187,11 +212,22 @@ export async function processWebhookEvent(
 
     // No stage change → nothing to append. This is the common case for
     // OpportunityUpdate events that only touched a name or monetary value.
-    if (previousStageGhlId === evt.pipelineStageId) {
+    if (!stageChanged) {
       return {
         status: "processed" as const,
         transitionCreated: false,
         reason: "no stage change",
+      };
+    }
+
+    // Stage differs, but this event is not newer than what we've recorded — a
+    // reordered or replayed-after-move delivery. Skip it rather than fabricate a
+    // backwards transition off a stale snapshot.
+    if (!incomingIsNewer) {
+      return {
+        status: "processed" as const,
+        transitionCreated: false,
+        reason: "out-of-order stage event ignored",
       };
     }
 
@@ -376,7 +412,27 @@ async function upsertContactFromEvent(
     .values(values)
     .onConflictDoUpdate({
       target: [contacts.clientId, contacts.ghlContactId],
-      set: values,
+      // A later re-fetch that omits attribution / name / lead-in time must NEVER
+      // overwrite a previously-captured value with null — doing so silently drops
+      // the lead from paid-CPL (metaCampaignId) or from ghlCreatedAt-windowed
+      // counts. New non-null values still win; nulls preserve what we had.
+      set: {
+        ...values,
+        firstName: sql`COALESCE(${values.firstName}, ${contacts.firstName})`,
+        lastName: sql`COALESCE(${values.lastName}, ${contacts.lastName})`,
+        email: sql`COALESCE(${values.email}, ${contacts.email})`,
+        phone: sql`COALESCE(${values.phone}, ${contacts.phone})`,
+        utmSource: sql`COALESCE(${values.utmSource}, ${contacts.utmSource})`,
+        utmMedium: sql`COALESCE(${values.utmMedium}, ${contacts.utmMedium})`,
+        utmCampaign: sql`COALESCE(${values.utmCampaign}, ${contacts.utmCampaign})`,
+        utmContent: sql`COALESCE(${values.utmContent}, ${contacts.utmContent})`,
+        utmTerm: sql`COALESCE(${values.utmTerm}, ${contacts.utmTerm})`,
+        metaCampaignId: sql`COALESCE(${values.metaCampaignId}, ${contacts.metaCampaignId})`,
+        metaAdsetId: sql`COALESCE(${values.metaAdsetId}, ${contacts.metaAdsetId})`,
+        metaAdId: sql`COALESCE(${values.metaAdId}, ${contacts.metaAdId})`,
+        fbclid: sql`COALESCE(${values.fbclid}, ${contacts.fbclid})`,
+        ghlCreatedAt: sql`COALESCE(${values.ghlCreatedAt}, ${contacts.ghlCreatedAt})`,
+      },
     })
     .returning();
   return row;

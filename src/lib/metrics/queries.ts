@@ -290,14 +290,16 @@ export async function getPeriodReach(
         eq(fbPeriodReach.clientId, clientId),
         eq(fbPeriodReach.periodStart, window.startKey),
         eq(fbPeriodReach.periodEnd, window.endKey),
+        // Account-level total only (campaign id ""). Reach is deduplicated people
+        // and cannot be summed across campaigns OR across ad accounts.
+        eq(fbPeriodReach.metaCampaignId, ""),
       ),
     );
-  if (rows.length === 0) return null;
-  // Campaign-level reach rows also cannot be summed into an account total —
-  // the same person reached by two campaigns is one person overall. Only an
-  // account-level row (campaign id "") is a valid total.
-  const accountRow = rows.find((r) => r.reach !== null);
-  return accountRow ? Number(accountRow.reach) : null;
+  // 0 rows → we never queried this exact window (honest dash). >1 row → the client
+  // runs multiple ad accounts, whose reach cannot be summed into one figure, so we
+  // decline rather than report a wrong total.
+  if (rows.length !== 1) return null;
+  return rows[0].reach !== null ? Number(rows[0].reach) : null;
 }
 
 /** Everything needed to render one period row. */

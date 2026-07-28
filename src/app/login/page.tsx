@@ -25,8 +25,12 @@ function LoginForm() {
       if (!res.ok) {
         throw new Error(body?.error ?? "Sign in failed");
       }
+      // Only follow a same-origin path — never an absolute/protocol-relative URL
+      // (`//evil.com`, `https://…`, `/\evil`), which would turn login into an
+      // open-redirect phishing hop.
       const next = params.get("next");
-      router.push(next || body?.redirect || "/");
+      const safeNext = next && /^\/(?![/\\])/.test(next) ? next : null;
+      router.push(safeNext || body?.redirect || "/");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

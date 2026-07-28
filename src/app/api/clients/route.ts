@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createClient, listClients, webhookUrlFor } from "@/lib/clients";
 import { listAdAccounts } from "@/lib/meta/accounts";
 import { quickHealth } from "@/lib/health";
+import { isValidTimeZone } from "@/lib/dates";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -10,7 +11,12 @@ export const dynamic = "force-dynamic";
 
 const CreateSchema = z.object({
   name: z.string().min(1).max(120),
-  timezone: z.string().min(1).default("America/Los_Angeles"),
+  // Validate against a real IANA zone: an invalid value later crashes every
+  // render path that feeds it to Intl / Postgres `AT TIME ZONE`.
+  timezone: z
+    .string()
+    .default("America/Los_Angeles")
+    .refine(isValidTimeZone, "Invalid IANA timezone"),
   ghlLocationId: z.string().trim().optional(),
   ghlToken: z.string().trim().optional(),
 });

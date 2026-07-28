@@ -149,10 +149,48 @@ export function trailingMonths(
   return out;
 }
 
-/** Short label for a daily row, e.g. "Jul 20" — matching the sheet. */
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
+
+/**
+ * Short label for a daily row, e.g. "Jul 20" — matching the sheet.
+ *
+ * Built from the date-key parts directly rather than via `format(new Date(...))`,
+ * which reads the runtime's local timezone and would render the day off-by-one on
+ * any non-UTC host (e.g. a dev laptop in America/New_York shows "Jul 19" for
+ * "2026-07-20"). This label is already tz-resolved upstream; keep it literal.
+ */
 export function dayLabel(dateKey: string): string {
-  const [y, m, d] = dateKey.split("-").map(Number);
-  return format(new Date(Date.UTC(y, m - 1, d)), "MMM d");
+  const [, m, d] = dateKey.split("-").map(Number);
+  const month = MONTH_ABBR[m - 1] ?? "";
+  return `${month} ${d}`;
+}
+
+/** True only for an IANA zone Intl actually accepts — rejects "" and garbage. */
+export function isValidTimeZone(tz: unknown): tz is string {
+  if (typeof tz !== "string" || tz.trim() === "") return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True only for a real `YYYY-MM-DD` calendar date — used to reject junk URL params. */
+export function isValidDateKey(s: unknown): s is string {
+  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  // Reject non-existent dates like 2026-02-30 (which JS would roll forward).
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === m - 1 &&
+    dt.getUTCDate() === d
+  );
 }
 
 /**

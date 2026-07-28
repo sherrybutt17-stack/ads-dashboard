@@ -6,6 +6,7 @@ import { clients } from "@/db/schema";
 import { encrypt } from "@/lib/crypto";
 import { getClientById, webhookUrlFor } from "@/lib/clients";
 import { removeClient } from "@/lib/client-removal";
+import { isValidTimeZone } from "@/lib/dates";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -13,7 +14,8 @@ export const dynamic = "force-dynamic";
 
 const PatchSchema = z.object({
   name: z.string().min(1).max(120).optional(),
-  timezone: z.string().optional(),
+  // Reject "" / garbage — an invalid zone crashes the dashboard on next render.
+  timezone: z.string().refine(isValidTimeZone, "Invalid IANA timezone").optional(),
   status: z.enum(["active", "paused", "archived"]).optional(),
   ghlLocationId: z.string().trim().nullish(),
   ghlToken: z.string().trim().optional(),

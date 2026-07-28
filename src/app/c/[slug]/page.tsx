@@ -7,7 +7,7 @@ import { refreshIfStale } from "@/lib/meta/sync";
 import { refreshGoogleIfStale } from "@/lib/google/sync";
 import { activeGoogleAccounts } from "@/lib/google/accounts";
 import type { AdPlatform } from "@/lib/metrics/queries";
-import { trailingWindowInclusive } from "@/lib/dates";
+import { trailingWindowInclusive, isValidDateKey } from "@/lib/dates";
 import { SignOut } from "@/components/SignOut";
 import {
   formatCurrency,
@@ -55,17 +55,22 @@ export default async function ClientDashboard({
 
   const platform: AdPlatform = sp.platform === "google" ? "google" : "meta";
 
+  // Range comes straight from the URL (the picker markets links as shareable), so
+  // validate before it reaches the date math / SQL — junk like ?start=foo or
+  // ?days=1e11 would otherwise build an Invalid Date and 500 the whole dashboard.
   const days = sp.days ? Number(sp.days) : 30;
-  const range =
-    sp.start && sp.end
-      ? { startKey: sp.start, endKey: sp.end }
-      : (() => {
-          const w = trailingWindowInclusive(
-            Number.isFinite(days) && days > 0 ? days : 30,
-            client.timezone,
-          );
-          return { startKey: w.startKey, endKey: w.endKey };
-        })();
+  const safeDays =
+    Number.isFinite(days) && days > 0 ? Math.min(Math.floor(days), 365) : 30;
+  const hasValidRange =
+    isValidDateKey(sp.start) &&
+    isValidDateKey(sp.end) &&
+    (sp.start as string) <= (sp.end as string);
+  const range = hasValidRange
+    ? { startKey: sp.start as string, endKey: sp.end as string }
+    : (() => {
+        const w = trailingWindowInclusive(safeDays, client.timezone);
+        return { startKey: w.startKey, endKey: w.endKey };
+      })();
 
   const [data, googleAccounts] = await Promise.all([
     loadDashboard(client, range, platform),

@@ -248,7 +248,19 @@ export class MetaClient {
 
       rows.push(...(res.data ?? []));
       next = res.paging?.next;
-    } while (next && ++page < 50);
+    } while (next && ++page < 100);
+
+    // Fail LOUD rather than return partial spend that reports success. A silent
+    // truncation is exactly the wrong-money-looks-fine failure this app exists to
+    // prevent — the caller records the sync_run as failed and the health check
+    // goes red, instead of the dashboard understating spend on the tail campaigns.
+    // The cap is generous (100 × 500 = 50k daily rows); a genuinely larger account
+    // needs Meta's async insights job.
+    if (next) {
+      throw new Error(
+        `Meta insights exceeded ${100 * 500} rows for ${act} ${since}..${until}; refusing to report partial data`,
+      );
+    }
 
     return rows;
   }

@@ -193,7 +193,11 @@ async function syncAccountPeriodReach(
   until: string,
 ): Promise<number> {
   const meta = metaClientForAccount(account);
-  const rows = await meta.getPeriodReach(account.adAccountId, since, until);
+  // ACCOUNT-level, not campaign-level: reach is deduplicated people and cannot be
+  // summed across campaigns, so we store the one true account total (campaign id
+  // "") that the read side can trust. A per-campaign pull produced rows the reader
+  // could only pick from arbitrarily, understating reach.
+  const rows = await meta.getPeriodReach(account.adAccountId, since, until, "account");
 
   let written = 0;
   for (const r of rows) {
