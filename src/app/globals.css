@@ -1,0 +1,324 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens.
+ *
+ * Colours come from a validated palette — every categorical hue was checked
+ * with the data-viz validator for colourblind separation, chroma, lightness
+ * band, and contrast against BOTH surfaces. Do not substitute a hue by eye;
+ * re-run the validator if these change.
+ *
+ * Dark values are declared under two scopes: the media query covers the OS
+ * setting, the [data-theme] scope covers the in-app toggle, and the toggle must
+ * win in both directions.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --surface-page: #f9f9f7;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f3f0;
+  --surface-raised: #ffffff;
+
+  /* Ink */
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+
+  /* Lines */
+  --border: rgba(11, 11, 11, 0.1);
+  --border-strong: rgba(11, 11, 11, 0.16);
+  --gridline: #e1e0d9;
+  --baseline: #c3c2b7;
+
+  /* Categorical series — fixed order, never cycled. */
+  --series-1: #2a78d6; /* blue    — spend */
+  --series-2: #eb6834; /* orange  — leads */
+  --series-3: #1baf7a; /* aqua    — appointments */
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  /* Sequential blue ramp — ordinal use starts at 250 on light (2:1 floor). */
+  --seq-250: #86b6ef;
+  --seq-300: #6da7ec;
+  --seq-350: #5598e7;
+  --seq-400: #3987e5;
+  --seq-450: #2a78d6;
+  --seq-500: #256abf;
+  --seq-550: #1c5cab;
+  --seq-600: #184f95;
+
+  /* Status — reserved, never reused as a series colour. */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+
+  /* Delta text: distinct from series green so a trend never impersonates one. */
+  --delta-good: #006300;
+  --delta-bad: #c0392b;
+
+  --radius: 10px;
+  --radius-lg: 16px;
+  /* Layered, soft elevation — a premium card floats, it doesn't sit in a box. */
+  --shadow-card: 0 1px 2px rgba(17, 17, 22, 0.04), 0 6px 20px -8px rgba(17, 17, 22, 0.08);
+  --shadow-elevated: 0 2px 4px rgba(17, 17, 22, 0.06), 0 16px 40px -12px rgba(17, 17, 22, 0.16);
+  /* A hairline top highlight gives the card edge a crafted, lit quality. */
+  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --page-glow: transparent;
+  --accent: var(--series-1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+
+    --surface-page: #09090b;
+    --surface-1: #151518;
+    --surface-2: #1f1f23;
+    --surface-raised: #1b1b1f;
+
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+
+    --border: rgba(255, 255, 255, 0.1);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --gridline: #2c2c2a;
+    --baseline: #383835;
+
+    /* Same eight hues, stepped for the dark surface — not an inversion. */
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+
+    --seq-250: #184f95;
+    --seq-300: #1c5cab;
+    --seq-350: #256abf;
+    --seq-400: #2a78d6;
+    --seq-450: #3987e5;
+    --seq-500: #5598e7;
+    --seq-550: #6da7ec;
+    --seq-600: #86b6ef;
+
+    --delta-good: #0ca30c;
+    --delta-bad: #e66767;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -12px rgba(0, 0, 0, 0.7);
+    --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.5), 0 24px 56px -16px rgba(0, 0, 0, 0.85);
+    --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    --page-glow: rgba(57, 135, 229, 0.06);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-page: #09090b;
+  --surface-1: #151518;
+  --surface-2: #1f1f23;
+  --surface-raised: #1b1b1f;
+
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --gridline: #2c2c2a;
+  --baseline: #383835;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --seq-250: #184f95;
+  --seq-300: #1c5cab;
+  --seq-350: #256abf;
+  --seq-400: #2a78d6;
+  --seq-450: #3987e5;
+  --seq-500: #5598e7;
+  --seq-550: #6da7ec;
+  --seq-600: #86b6ef;
+
+  --delta-good: #0ca30c;
+  --delta-bad: #e66767;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -12px rgba(0, 0, 0, 0.7);
+  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.5), 0 24px 56px -16px rgba(0, 0, 0, 0.85);
+  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --page-glow: rgba(57, 135, 229, 0.06);
+}
+
+@theme inline {
+  --color-page: var(--surface-page);
+  --color-surface: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-raised: var(--surface-raised);
+  --color-ink: var(--text-primary);
+  --color-ink-2: var(--text-secondary);
+  --color-ink-3: var(--text-muted);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-grid: var(--gridline);
+}
+
+html,
+body {
+  color: var(--text-primary);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI",
+    system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.006em;
+}
+
+body {
+  /* A single faint accent bloom high on the page — ambient depth, not a gradient
+     hero. Flat in light mode. */
+  background:
+    radial-gradient(1100px 520px at 50% -260px, var(--page-glow), transparent),
+    var(--surface-page);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* Display numerals read tighter and more confident at large sizes. */
+.num-display {
+  font-variant-numeric: proportional-nums;
+  letter-spacing: -0.02em;
+}
+
+/*
+ * Tabular figures for anything that sits in a column.
+ *
+ * This is what makes a dense metrics table readable — proportional digits make
+ * columns of numbers ragged and much slower to scan down. Large standalone
+ * numbers keep proportional figures, which look better at display size.
+ */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-highlight), var(--shadow-card);
+  transition:
+    box-shadow 0.22s ease,
+    border-color 0.22s ease,
+    transform 0.22s ease;
+}
+
+/* Cards the user can act on lift slightly on hover — a quiet, premium tell. */
+.card-interactive:hover {
+  box-shadow: var(--card-highlight), var(--shadow-elevated);
+  border-color: var(--border-strong);
+}
+
+/* Table rows and list rows get a subtle wash on hover. */
+.row-hover {
+  transition: background-color 0.14s ease;
+}
+.row-hover:hover {
+  background: var(--surface-2);
+}
+
+/* Skeletons — a shaped placeholder reads as "loading", a spinner as "stuck". */
+@keyframes shimmer {
+  0% { opacity: 0.55; }
+  50% { opacity: 0.9; }
+  100% { opacity: 0.55; }
+}
+.skeleton {
+  background: var(--surface-2);
+  border-radius: 6px;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+  *, *::before, *::after { transition: none !important; animation-duration: 0.01ms !important; }
+}
+
+/* Wide tables scroll inside their own container; the page never scrolls x. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+:where(a, button, input, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/*
+ * Entrance — one orchestrated load moment, gently staggered top to bottom, so
+ * the dashboard assembles itself rather than snapping in. Motion only; with
+ * reduced-motion the whole block is skipped and content is simply present.
+ */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  main > * {
+    animation: rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  main > *:nth-child(1) { animation-delay: 0.03s; }
+  main > *:nth-child(2) { animation-delay: 0.08s; }
+  main > *:nth-child(3) { animation-delay: 0.13s; }
+  main > *:nth-child(4) { animation-delay: 0.18s; }
+  main > *:nth-child(5) { animation-delay: 0.23s; }
+  main > *:nth-child(6) { animation-delay: 0.28s; }
+  main > *:nth-child(n + 7) { animation-delay: 0.32s; }
+}
+
+/* Refined, unobtrusive scrollbars for the scrollable data areas. */
+.table-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.table-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.table-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.table-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+}
