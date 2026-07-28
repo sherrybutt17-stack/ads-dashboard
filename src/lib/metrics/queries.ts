@@ -598,6 +598,9 @@ export const UNATTRIBUTED = "" as const;
  * Speed to lead — how fast the first outbound CALL reaches a new lead
  * ------------------------------------------------------------------ */
 
+/** Whether a lead's first-call time is measurable, and if so how it went. */
+export type LeadCallStatus = "called" | "not_called";
+
 export interface SpeedToLeadRow {
   name: string | null;
   /** Lead-in time (ISO). */
@@ -606,22 +609,35 @@ export interface SpeedToLeadRow {
   firstCallAt: string | null;
   /** Seconds from lead-in to first call, or null if uncalled. */
   secondsToCall: number | null;
+  /** Only measurable leads appear as rows, so status is called | not_called. */
+  status: LeadCallStatus;
 }
 
 export interface SpeedToLead {
-  /** New leads that came in during the window. */
+  /**
+   * When outbound-call tracking first went live for this client (ISO), or null
+   * if we have never received a call event. Calls, like stage history, only
+   * accumulate FORWARD from this instant — leads that arrived earlier have no
+   * knowable first-call time and must not be counted as "not called".
+   */
+  trackingStartedAt: string | null;
+  /** All paid leads that came in during the window. */
   leads: number;
-  /** Of those, how many have received a first outbound call. */
+  /** Of those, the ones that arrived after tracking went live — measurable. */
+  trackable: number;
+  /** Leads that predate tracking — first-call time unknowable, not a miss. */
+  preTracking: number;
+  /** Trackable leads that received a first outbound call. */
   called: number;
-  /** Leads with no call yet. */
+  /** Trackable leads with no call yet — genuine misses. */
   uncalled: number;
-  /** Median seconds from lead-in to first call (called leads only). */
+  /** Median seconds from lead-in to first call (trackable, called leads only). */
   medianSeconds: number | null;
-  /** Cumulative counts: called within 5 min / 1 hr / 24 hr of arriving. */
+  /** Cumulative counts: called within 5 min / 1 hr / 24 hr (of trackable leads). */
   within5m: number;
   within1h: number;
   within24h: number;
-  /** Per-lead breakdown (uncalled + slowest first), capped at 100. */
+  /** Per-lead breakdown — trackable leads only (misses first, then slowest), capped at 100. */
   rows: SpeedToLeadRow[];
 }
 
@@ -647,11 +663,33 @@ export async function getSpeedToLead(
     sql`c.ghl_created_at < ${window.endUtc}`,
   ];
   if (paid) clauses.push(paid);
+
+  /*
+   * When could we FIRST have observed an outbound call for this client? That is
+   * the earliest OutboundMessage webhook we ever received. Before that instant
+   * we had no call visibility at all, so a lead that arrived earlier has no
+   * knowable first-call time — it is "unknown", never "not called". Anchoring on
+   * this cutover is what stops the widget from mislabelling every historical
+   * lead as a miss (the source sheet's "SHOWN = 0 forever" failure).
+   */
+  const tsRes = await db.execute<{ started: string | Date | null }>(sql`
+    SELECT MIN(received_at) AS started
+    FROM webhook_events
+    WHERE client_id = ${clientId} AND event_type = 'OutboundMessage'
+  `);
+  const startedRaw = resultRows<{ started: string | Date | null }>(tsRes)[0]?.started;
+  const trackingStart: Date | null = startedRaw ? new Date(startedRaw) : null;
+
+  // A lead is "trackable" only if it arrived at or after the cutover — for those
+  // we were watching from the moment they came in, so a missing call is a real
+  // miss rather than an unrecorded one. Null cutover ⇒ nothing is trackable yet.
+  const trackable = sql`c.ghl_created_at >= ${trackingStart}::timestamptz`;
   // Guard against clock-skew rows where a call predates the lead.
-  const called = sql`c.first_call_at IS NOT NULL AND c.first_call_at >= c.ghl_created_at`;
+  const calledSql = sql`${trackable} AND c.first_call_at IS NOT NULL AND c.first_call_at >= c.ghl_created_at`;
 
   type Row = {
     leads: number;
+    trackable: number;
     called: number;
     within_5m: number;
     within_1h: number;
@@ -661,20 +699,25 @@ export async function getSpeedToLead(
   const rows = await db.execute<Row>(sql`
     SELECT
       COUNT(*)::int AS leads,
-      COUNT(*) FILTER (WHERE ${called})::int AS called,
-      COUNT(*) FILTER (WHERE ${called} AND c.first_call_at <= c.ghl_created_at + interval '5 minutes')::int AS within_5m,
-      COUNT(*) FILTER (WHERE ${called} AND c.first_call_at <= c.ghl_created_at + interval '1 hour')::int AS within_1h,
-      COUNT(*) FILTER (WHERE ${called} AND c.first_call_at <= c.ghl_created_at + interval '24 hours')::int AS within_24h,
+      COUNT(*) FILTER (WHERE ${trackable})::int AS trackable,
+      COUNT(*) FILTER (WHERE ${calledSql})::int AS called,
+      COUNT(*) FILTER (WHERE ${calledSql} AND c.first_call_at <= c.ghl_created_at + interval '5 minutes')::int AS within_5m,
+      COUNT(*) FILTER (WHERE ${calledSql} AND c.first_call_at <= c.ghl_created_at + interval '1 hour')::int AS within_1h,
+      COUNT(*) FILTER (WHERE ${calledSql} AND c.first_call_at <= c.ghl_created_at + interval '24 hours')::int AS within_24h,
       percentile_cont(0.5) WITHIN GROUP (
         ORDER BY EXTRACT(EPOCH FROM (c.first_call_at - c.ghl_created_at))
-      ) FILTER (WHERE ${called}) AS median_seconds
+      ) FILTER (WHERE ${calledSql}) AS median_seconds
     FROM contacts c
     WHERE ${sql.join(clauses, sql` AND `)}
   `);
   const r = resultRows<Row>(rows)[0];
   const leads = Number(r?.leads) || 0;
+  const trackableN = Number(r?.trackable) || 0;
   const calledN = Number(r?.called) || 0;
 
+  // Per-lead rows are the ACTIONABLE, trustworthy set only: trackable leads.
+  // Pre-tracking leads are summarised as a count rather than enumerated, so the
+  // list never fills with rows whose call time we simply cannot know.
   type RowR = {
     name: string | null;
     lead_in_at: string | Date;
@@ -686,23 +729,33 @@ export async function getSpeedToLead(
       COALESCE(NULLIF(TRIM(CONCAT(c.first_name, ' ', c.last_name)), ''), c.email, c.phone) AS name,
       c.ghl_created_at AS lead_in_at,
       c.first_call_at AS first_call_at,
-      CASE WHEN ${called} THEN EXTRACT(EPOCH FROM (c.first_call_at - c.ghl_created_at)) END AS seconds_to_call
+      CASE WHEN ${calledSql} THEN EXTRACT(EPOCH FROM (c.first_call_at - c.ghl_created_at)) END AS seconds_to_call
     FROM contacts c
-    WHERE ${sql.join(clauses, sql` AND `)}
-    ORDER BY (c.first_call_at IS NULL) DESC, seconds_to_call DESC NULLS FIRST, c.ghl_created_at DESC
+    WHERE ${sql.join(clauses, sql` AND `)} AND ${trackable}
+    ORDER BY
+      (CASE WHEN ${calledSql} THEN 1 ELSE 0 END) ASC,               -- misses first
+      CASE WHEN NOT (${calledSql}) THEN c.ghl_created_at END ASC,   -- oldest miss first
+      seconds_to_call DESC NULLS LAST                               -- then slowest calls
     LIMIT 100
   `);
-  const perLead: SpeedToLeadRow[] = resultRows<RowR>(perLeadRes).map((x) => ({
-    name: x.name ?? null,
-    leadInAt: new Date(x.lead_in_at).toISOString(),
-    firstCallAt: x.first_call_at ? new Date(x.first_call_at).toISOString() : null,
-    secondsToCall: x.seconds_to_call != null ? Number(x.seconds_to_call) : null,
-  }));
+  const perLead: SpeedToLeadRow[] = resultRows<RowR>(perLeadRes).map((x) => {
+    const seconds = x.seconds_to_call != null ? Number(x.seconds_to_call) : null;
+    return {
+      name: x.name ?? null,
+      leadInAt: new Date(x.lead_in_at).toISOString(),
+      firstCallAt: x.first_call_at ? new Date(x.first_call_at).toISOString() : null,
+      secondsToCall: seconds,
+      status: seconds != null ? "called" : "not_called",
+    };
+  });
 
   return {
+    trackingStartedAt: trackingStart ? trackingStart.toISOString() : null,
     leads,
+    trackable: trackableN,
+    preTracking: Math.max(0, leads - trackableN),
     called: calledN,
-    uncalled: Math.max(0, leads - calledN),
+    uncalled: Math.max(0, trackableN - calledN),
     medianSeconds: r?.median_seconds != null ? Number(r.median_seconds) : null,
     within5m: Number(r?.within_5m) || 0,
     within1h: Number(r?.within_1h) || 0,

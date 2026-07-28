@@ -95,6 +95,8 @@ export function SetupWizard({
           clientId={clientId}
           installation={installation}
           oauthAvailable={oauthAvailable}
+          connectedLocationName={initial.ghlLocationName}
+          webhookAlive={Boolean(initial.firstWebhookAt)}
         />
       ) : (
         <GhlStep clientId={clientId} initial={initial} onDone={() => router.refresh()} />
@@ -139,19 +141,29 @@ function InstallStep({
   clientId,
   installation,
   oauthAvailable,
+  connectedLocationName,
+  webhookAlive,
 }: {
   clientId: string;
   installation: Props["installation"];
   oauthAvailable: boolean;
+  connectedLocationName: string | null;
+  webhookAlive: boolean;
 }) {
   const active = installation && !installation.uninstalledAt;
+  // Connected the original way — bound to a location and already streaming
+  // events — but with no captured OAuth install row. Events are flowing, so the
+  // step is genuinely done; the marketplace install is then only an optional
+  // upgrade, not a "you are not connected" prompt.
+  const connectedViaWebhook =
+    !active && webhookAlive && Boolean(connectedLocationName);
 
   return (
     <Card
       step={1}
       title="Connect GoHighLevel"
       description="Installs the marketplace app on the client's sub-account. No workflow building required — stage changes stream automatically."
-      done={Boolean(active)}
+      done={Boolean(active) || connectedViaWebhook}
     >
       {!oauthAvailable ? (
         <p className="text-xs" style={{ color: "var(--status-warning)" }}>
@@ -173,6 +185,27 @@ function InstallStep({
             }}
           >
             Reconnect
+          </a>
+        </>
+      ) : connectedViaWebhook ? (
+        <>
+          <Result ok>
+            Connected to {connectedLocationName} — receiving events
+          </Result>
+          <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+            Events are already streaming from this sub-account. Re-installing
+            through the marketplace app is optional — it captures an OAuth token
+            for one-click reconnects.
+          </p>
+          <a
+            href={`/api/oauth/authorize?clientId=${clientId}`}
+            className="mt-3 inline-block rounded-[8px] border px-3 py-2 text-[13px] font-medium"
+            style={{
+              borderColor: "var(--border-strong)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            Install via marketplace app
           </a>
         </>
       ) : (

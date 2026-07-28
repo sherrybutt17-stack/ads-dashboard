@@ -12,7 +12,24 @@ function formatDuration(seconds: number | null): string {
   return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
 }
 
+/** Compact "how long ago" for an uncalled lead — its waiting time, the urgency. */
+function ago(iso: string): string {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m`;
+  const h = Math.floor(s / 3600);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
 const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+function shortDate(iso: string, timezone: string): string {
+  return new Date(iso).toLocaleDateString("en-US", {
+    timeZone: timezone,
+    month: "short",
+    day: "numeric",
+  });
+}
 
 /** Colour a response time by how fast it was — green ≤5m, accent ≤1h, amber slower. */
 function toneFor(seconds: number | null): string {
@@ -23,7 +40,6 @@ function toneFor(seconds: number | null): string {
 }
 
 function LeadRow({ row, timezone }: { row: SpeedToLeadRow; timezone: string }) {
-  const called = row.secondsToCall != null;
   const tone = toneFor(row.secondsToCall);
   const leadIn = new Date(row.leadInAt).toLocaleString("en-US", {
     timeZone: timezone,
@@ -55,7 +71,9 @@ function LeadRow({ row, timezone }: { row: SpeedToLeadRow; timezone: string }) {
           background: `color-mix(in srgb, ${tone} 14%, transparent)`,
         }}
       >
-        {called ? formatDuration(row.secondsToCall) : "Not called"}
+        {row.status === "called"
+          ? formatDuration(row.secondsToCall)
+          : `Not called · ${ago(row.leadInAt)}`}
       </span>
     </div>
   );
@@ -64,10 +82,16 @@ function LeadRow({ row, timezone }: { row: SpeedToLeadRow; timezone: string }) {
 /**
  * Speed-to-lead: how fast a new lead gets its first outbound call.
  *
- * The median is over leads that WERE called; the response-time bars use total
- * leads as the denominator, so a lead never called counts against the SLA
- * rather than being quietly excluded. The per-lead list orders the problems
- * first — uncalled leads, then the slowest responses.
+ * Call history — like GHL stage history — only accumulates FORWARD, from the
+ * moment we first received a call event (`trackingStartedAt`). Leads that
+ * arrived earlier have no knowable first-call time, so they are shown as an
+ * "before tracking" count, NEVER as red "not called" — mislabelling them as
+ * misses is the exact silent-failure this dashboard exists to replace.
+ *
+ * The median and the response-time bars are computed over TRACKABLE leads only
+ * (those that arrived after tracking went live); a trackable lead never called
+ * counts against the SLA. The per-lead list is the actionable set — misses
+ * first, then slowest calls.
  */
 export function SpeedToLeadWidget({
   data,
@@ -77,7 +101,10 @@ export function SpeedToLeadWidget({
   timezone: string;
 }) {
   const {
+    trackingStartedAt,
     leads,
+    trackable,
+    preTracking,
     called,
     uncalled,
     medianSeconds,
@@ -87,38 +114,74 @@ export function SpeedToLeadWidget({
     rows,
   } = data;
 
+  const trackingLabel = trackingStartedAt
+    ? shortDate(trackingStartedAt, timezone)
+    : null;
+
   const buckets = [
     { label: "within 5 min", n: within5m, tone: "var(--status-good)" },
     { label: "within 1 hour", n: within1h, tone: "var(--accent)" },
     { label: "within 24 hours", n: within24h, tone: "var(--text-secondary)" },
   ];
 
-  return (
-    <section className="card p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2
-            className="text-[11px] font-semibold uppercase tracking-wide"
-            style={{ color: "var(--text-muted)" }}
-          >
-            Speed to lead
-          </h2>
-          <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-            Time from a new lead to the first outbound call
-          </p>
-        </div>
-        <div
-          className="shrink-0 text-right text-xs tabular-nums"
+  const header = (
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h2
+          className="text-[11px] font-semibold uppercase tracking-wide"
           style={{ color: "var(--text-muted)" }}
         >
-          {leads} lead{leads === 1 ? "" : "s"} · {called} called
-        </div>
+          Speed to lead
+        </h2>
+        <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+          Time from a new lead to the first outbound call
+        </p>
       </div>
+      <div
+        className="shrink-0 text-right text-xs tabular-nums"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {trackingLabel ? `tracking since ${trackingLabel}` : "no call events yet"}
+      </div>
+    </div>
+  );
+
+  // A muted line accounting for leads we simply cannot measure. Keeps the number
+  // honest instead of dropping them or counting them as misses.
+  const preTrackingNote = preTracking > 0 && (
+    <p className="mt-4 text-xs" style={{ color: "var(--text-muted)" }}>
+      {preTracking} earlier lead{preTracking === 1 ? "" : "s"} arrived before call
+      tracking — first-call time unknown.
+    </p>
+  );
+
+  return (
+    <section className="card p-5">
+      {header}
 
       {leads === 0 ? (
         <p className="mt-6 text-sm" style={{ color: "var(--text-muted)" }}>
           No leads arrived in this period.
         </p>
+      ) : trackingStartedAt == null ? (
+        // We have never received a call event — nothing is measurable yet.
+        <>
+          <p className="mt-5 text-sm" style={{ color: "var(--text-secondary)" }}>
+            No outbound-call events have arrived from GoHighLevel yet. Speed-to-lead
+            starts measuring the moment the first call is recorded, then fills in
+            going forward.
+          </p>
+          {preTrackingNote}
+        </>
+      ) : trackable === 0 ? (
+        // Tracking is live, but no lead has arrived since it went live.
+        <>
+          <p className="mt-5 text-sm" style={{ color: "var(--text-secondary)" }}>
+            No new leads since call tracking went live on {trackingLabel}. This
+            fills in as new leads arrive and get their first call.
+          </p>
+          {preTrackingNote}
+        </>
       ) : (
         <>
           <div className="mt-4 grid gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
@@ -136,13 +199,16 @@ export function SpeedToLeadWidget({
                 className="mt-1.5 text-xs"
                 style={{ color: "var(--text-muted)" }}
               >
-                {called === 0 ? "no leads called yet" : "median to first call"}
+                {called === 0
+                  ? `0 of ${trackable} called`
+                  : "median to first call"}
               </div>
             </div>
 
             <div className="flex flex-col gap-2.5">
               {buckets.map((b) => {
-                const p = pct(b.n, leads);
+                // Denominator is trackable leads — the ones we could measure.
+                const p = pct(b.n, trackable);
                 return (
                   <div key={b.label}>
                     <div className="flex items-center justify-between text-xs">
@@ -181,6 +247,8 @@ export function SpeedToLeadWidget({
               )}
             </div>
           </div>
+
+          {preTrackingNote}
 
           {rows.length > 0 && (
             <div className="mt-5">
