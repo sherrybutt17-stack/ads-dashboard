@@ -42,7 +42,7 @@ export function webhookUrlFor(client: Pick<Client, "webhookToken">): string {
   const base =
     process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ??
     "http://localhost:3000";
-  return `${base}/api/webhooks/ghl/${client.webhookToken}`;
+  return `${base}/api/webhooks/crm/${client.webhookToken}`;
 }
 
 /**

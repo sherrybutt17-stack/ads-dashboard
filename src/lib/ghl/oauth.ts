@@ -44,7 +44,7 @@ export function redirectUri(): string {
   const base =
     process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ??
     "http://localhost:3000";
-  return `${base}/api/oauth/ghl/callback`;
+  return `${base}/api/oauth/callback`;
 }
 
 /** Where to send an operator to install the app on a sub-account. */

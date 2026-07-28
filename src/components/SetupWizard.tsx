@@ -165,7 +165,7 @@ function InstallStep({
             Installed on {installation!.locationName ?? installation!.locationId}
           </Result>
           <a
-            href={`/api/oauth/ghl/authorize?clientId=${clientId}`}
+            href={`/api/oauth/authorize?clientId=${clientId}`}
             className="mt-3 inline-block rounded-[8px] border px-3 py-2 text-[13px] font-medium"
             style={{
               borderColor: "var(--border-strong)",
@@ -191,7 +191,7 @@ function InstallStep({
             </p>
           )}
           <a
-            href={`/api/oauth/ghl/authorize?clientId=${clientId}`}
+            href={`/api/oauth/authorize?clientId=${clientId}`}
             className="inline-block rounded-[8px] px-3 py-2 text-[13px] font-medium text-white"
             style={{ background: "var(--series-1)" }}
           >

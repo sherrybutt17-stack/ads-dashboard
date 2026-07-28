@@ -233,7 +233,7 @@ Two schema notes that matter:
 
 ### 1 · Webhook receiver — build first, deploy first
 
-`src/app/api/webhooks/ghl/[token]/route.ts`
+`src/app/api/webhooks/crm/[token]/route.ts`
 
 Each client gets a unique unguessable `webhook_token` in its URL. This routes the
 event to the right tenant without parsing GHL's loosely-shaped workflow payload,
@@ -284,7 +284,7 @@ operator to map. Never drop the event.
    name/currency/timezone so a wrong account ID is caught immediately. Optional
    per-client token override for accounts in a different Business Manager.
 5. **Install the webhook** — display the generated
-   `/api/webhooks/ghl/{token}` URL with copy-paste GHL setup instructions, then
+   `/api/webhooks/crm/{token}` URL with copy-paste GHL setup instructions, then
    **wait for a live event**: the page polls until the first real webhook lands,
    showing "Waiting for first event…" → "✅ Received". This is what proves the
    pipe actually works rather than merely looking configured.
@@ -461,7 +461,7 @@ Documented in `SETUP.md`, since these gate the pipes and cannot be automated:
    the token holder has a role on the app and access to the account.
 2. **GHL, per sub-account** — create a Workflow, trigger "Pipeline Stage
    Changed" (plus one on contact creation), add a Webhook (Outbound) action
-   pointing at that client's `/api/webhooks/ghl/{token}` URL.
+   pointing at that client's `/api/webhooks/crm/{token}` URL.
 3. **Ad URL parameters** — append `utm_campaign={{campaign.name}}`,
    `campaign_id={{campaign.id}}`, `ad_id={{ad.id}}`, `ad_group_id={{adset.id}}`
    to each ad, so GHL captures a real campaign ID per contact. **Required for

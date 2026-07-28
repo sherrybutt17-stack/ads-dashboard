@@ -180,7 +180,7 @@ install the app and stage changes start streaming. No workflow building, ever.
 
 - Distribution: **Agency & Sub-Account**
 - Keep it **private/unlisted** — it does not need to be publicly listed.
-- Redirect URI: `https://YOUR-DOMAIN/api/oauth/ghl/callback`
+- Redirect URI: `https://YOUR-DOMAIN/api/oauth/callback`
 
 Copy the **Client ID** and **Client Secret** → `GHL_CLIENT_ID`,
 `GHL_CLIENT_SECRET`.
@@ -203,7 +203,7 @@ Select exactly:
 App → **Advanced Settings → Webhooks**. Set the URL to:
 
 ```
-https://YOUR-DOMAIN/api/webhooks/ghl
+https://YOUR-DOMAIN/api/webhooks/crm
 ```
 
 Note: **no token in the path.** This is the app-level receiver — one URL for
