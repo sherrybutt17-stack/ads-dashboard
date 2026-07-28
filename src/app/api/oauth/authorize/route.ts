@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes, createHmac } from "node:crypto";
 import { buildAuthorizeUrl, isOauthConfigured } from "@/lib/ghl/oauth";
+import { getSessionUser, isStaff } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,8 +13,16 @@ export const dynamic = "force-dynamic";
  * HMAC so a tampered value cannot cause an install to be attached to somebody
  * else's client. It is also stored in a short-lived cookie and compared on the
  * way back, which is the CSRF defence.
+ *
+ * Staff-only: the `clientId` bound here is caller-supplied, so a non-staff user
+ * could otherwise start an install that rebinds another tenant's GHL wiring on
+ * callback. The callback itself stays open because marketplace-initiated
+ * installs arrive with no session cookie.
  */
 export async function GET(req: NextRequest) {
+  if (!isStaff(await getSessionUser())) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   if (!isOauthConfigured()) {
     return NextResponse.json(
       {

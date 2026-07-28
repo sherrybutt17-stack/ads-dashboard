@@ -145,34 +145,43 @@ export class MetaClient {
       throw err;
     }
 
-    this.readThrottleHeaders(res);
+    await this.readThrottleHeaders(res);
     return body as T;
   }
 
   /**
-   * Surface utilisation so a run approaching the cap is visible in logs before
-   * it starts failing. Meta reports these as percentages of allowance (0–100).
+   * Watch utilisation and ease off BEFORE the cap trips, not after.
+   *
+   * Reacting to a 429 recovers a request that already failed; the cheaper move
+   * is to notice we are near the ceiling on a *successful* response and pause
+   * before the next call. Because per-account calls are serialised, a pause here
+   * throttles the whole run — which is exactly the intent. Meta reports these as
+   * percentages of allowance (0–100).
    */
-  private readThrottleHeaders(res: Response) {
+  private async readThrottleHeaders(res: Response) {
     const insights = res.headers.get("x-fb-ads-insights-throttle");
-    if (insights) {
-      try {
-        const parsed = JSON.parse(insights) as {
-          app_id_util_pct?: number;
-          acc_id_util_pct?: number;
-        };
-        const worst = Math.max(
-          parsed.app_id_util_pct ?? 0,
-          parsed.acc_id_util_pct ?? 0,
+    if (!insights) return;
+    try {
+      const parsed = JSON.parse(insights) as {
+        app_id_util_pct?: number;
+        acc_id_util_pct?: number;
+      };
+      const worst = Math.max(
+        parsed.app_id_util_pct ?? 0,
+        parsed.acc_id_util_pct ?? 0,
+      );
+      if (worst >= 95) {
+        // On the edge of the cap — spend a few seconds now rather than eat a
+        // hard block (code 4/17) that stalls the account for minutes.
+        console.warn(`[meta] insights throttle at ${worst}% — easing off`);
+        await new Promise((r) => setTimeout(r, 5_000));
+      } else if (worst >= 80) {
+        console.warn(
+          `[meta] insights throttle at ${worst}% — approaching the cap`,
         );
-        if (worst >= 80) {
-          console.warn(
-            `[meta] insights throttle at ${worst}% — approaching the cap`,
-          );
-        }
-      } catch {
-        /* header shape drifts; never fail a request over telemetry */
       }
+    } catch {
+      /* header shape drifts; never fail a request over telemetry */
     }
   }
 
@@ -280,15 +289,24 @@ export class MetaClient {
     level: "account" | "campaign" = "campaign",
   ): Promise<Array<{ campaignId: string; reach: number; frequency: number }>> {
     const act = MetaClient.normalizeAccountId(accountId);
-    const res = await this.request<{ data?: MetaInsightRow[] }>(
-      `/${act}/insights`,
-      {
-        level,
-        time_range: JSON.stringify({ since, until }),
-        fields: "campaign_id,reach,frequency",
-        limit: 500,
-      },
-    );
+    const res = await this.request<{
+      data?: MetaInsightRow[];
+      paging?: { next?: string };
+    }>(`/${act}/insights`, {
+      level,
+      time_range: JSON.stringify({ since, until }),
+      fields: "campaign_id,reach,frequency",
+      limit: 500,
+    });
+    // Account-level reach is a single row, so this never trips in practice. At
+    // campaign level an account with >500 campaigns would truncate — and a
+    // half-a-reach-table is worse than none, since the read side would treat the
+    // partial as authoritative. Fail loud, exactly like getDailyInsights.
+    if (res.paging?.next) {
+      throw new Error(
+        `Meta reach exceeded 500 rows for ${act} ${since}..${until}; refusing to report partial data`,
+      );
+    }
     return (res.data ?? []).map((r) => ({
       campaignId: r.campaign_id ?? "",
       reach: num(r.reach),

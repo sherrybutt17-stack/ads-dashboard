@@ -680,7 +680,10 @@ function LeadFilterNote({
       style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
     >
       <span style={{ color: "var(--text-secondary)" }}>{description}</span>
-      {excluded > 0 && filter.mode !== "all" && (
+      {/* Google always filters by its own attribution (there is no "all" mode
+          for it), so the excluded count is meaningful regardless of the Meta
+          `filter.mode` — only suppress it on the Meta tab's "count everything". */}
+      {excluded > 0 && (platform === "google" || filter.mode !== "all") && (
         <span className="tnum" style={{ color: "var(--text-muted)" }}>
           · {excluded} non-paid lead{excluded === 1 ? "" : "s"} excluded
         </span>
