@@ -9,7 +9,10 @@ import {
   recordMessageTouch,
 } from "@/lib/ghl/process";
 import { getInstallationByLocation, markUninstalled } from "@/lib/ghl/oauth";
-import { verifyWebhookSignature } from "@/lib/ghl/signature";
+import {
+  verifyWebhookSignature,
+  webhookEnforcementEnabled,
+} from "@/lib/ghl/signature";
 import { normalizeWebhookPayload } from "@/lib/ghl/normalize";
 
 /**
@@ -47,28 +50,41 @@ export async function POST(req: NextRequest) {
     whSignature: req.headers.get("x-wh-signature"),
   });
 
-  // A signature that is present and WRONG always means forgery — reject.
-  if (signature.status === "invalid") {
+  // Fail-closed is STAGED behind GHL_WEBHOOK_ENFORCE. Off (the default), we
+  // still compute and record `signature.status` on every event — so a newly
+  // configured key can be proven against live traffic — but we never reject.
+  // On, the two forgery signals below return 401. See webhookEnforcementEnabled.
+  const enforce = webhookEnforcementEnabled();
+
+  // A signature that is present and WRONG always means forgery.
+  const forgedSignature = signature.status === "invalid";
+
+  // This receiver routes by `locationId`, a NON-secret identifier — so once a
+  // verification key is configured, an unsigned delivery in production is a
+  // forgery attempt against the append-only ledger. When no key is set we cannot
+  // verify at all (status "not_configured"), so this never trips and the
+  // delivery is preserved — data loss here is permanent (GHL has no history API).
+  const unsignedInProd =
+    signature.status === "skipped" &&
+    signature.code === "no_signature" &&
+    process.env.NODE_ENV === "production";
+
+  if (enforce && (forgedSignature || unsignedInProd)) {
     return NextResponse.json(
-      { ok: false, error: "invalid signature" },
+      {
+        ok: false,
+        error: forgedSignature ? "invalid signature" : "unsigned delivery rejected",
+      },
       { status: 401 },
     );
   }
 
-  // This receiver routes by `locationId`, a NON-secret identifier — so once a
-  // verification key is configured, an unsigned delivery in production is a
-  // forgery attempt against the append-only ledger and is rejected. When no key
-  // is set we cannot verify, so we preserve the delivery (data loss here is
-  // permanent — GHL has no history API) and rely on the health checklist to
-  // surface that verification is inactive.
-  if (
-    signature.status === "skipped" &&
-    signature.code === "no_signature" &&
-    process.env.NODE_ENV === "production"
-  ) {
-    return NextResponse.json(
-      { ok: false, error: "unsigned delivery rejected" },
-      { status: 401 },
+  // Observe mode: a would-be rejection is logged (and captured in
+  // `__signature` below) but the delivery is still processed, so the rollout can
+  // be watched without dropping funnel history.
+  if (!enforce && (forgedSignature || unsignedInProd)) {
+    console.warn(
+      `[webhook] signature ${signature.status} — observe mode, not enforced (set GHL_WEBHOOK_ENFORCE=true once live deliveries read "valid")`,
     );
   }
 
@@ -116,7 +132,11 @@ export async function POST(req: NextRequest) {
       clientId: client?.id ?? null,
       webhookToken: null,
       eventType,
-      headers: { ...headers, __signature: signature.status },
+      headers: {
+        ...headers,
+        __signature: signature.status,
+        __signatureEnforced: enforce ? "on" : "off",
+      },
       payload: payload as object,
       status: client ? "pending" : "ignored",
       error: client

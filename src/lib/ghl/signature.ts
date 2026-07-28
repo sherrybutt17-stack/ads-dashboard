@@ -20,6 +20,24 @@ import { createPublicKey, createVerify, verify as edVerify } from "node:crypto";
  * checklist reports when verification is inactive.
  */
 
+/**
+ * Whether unverified deliveries are REJECTED (fail-closed) or merely observed.
+ *
+ * Off by default, deliberately. A freshly-configured public key must be proven
+ * against live traffic before it can be trusted to reject: the `__signature`
+ * status is recorded on every event regardless, so the operator can confirm
+ * real deliveries read "valid" FIRST, then flip this on. Only then do forged or
+ * unsigned deliveries get a 401. The staged rollout exists because a wrong key
+ * would 401 correctly-signed events, and GoHighLevel has no history API to
+ * replay a dropped stage transition from — the loss would be permanent.
+ *
+ * Accepts 1 / true / yes / on (case-insensitive); anything else is off.
+ */
+export function webhookEnforcementEnabled(): boolean {
+  const v = (process.env.GHL_WEBHOOK_ENFORCE ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
 export type SignatureResult =
   | { status: "valid"; scheme: "ed25519" | "rsa" }
   | { status: "invalid"; scheme: "ed25519" | "rsa"; reason: string }
