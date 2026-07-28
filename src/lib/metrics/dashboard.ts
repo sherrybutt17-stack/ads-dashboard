@@ -26,12 +26,14 @@ import {
   getLeadAttributionBreakdown,
   getPipelineDistribution,
   getLeads,
+  getSpeedToLead,
   type AdPlatform,
   type DailyPoint,
   type PeriodMetrics,
   type PaidLeadFilter,
   type PipelineStageCount,
   type LeadRow,
+  type SpeedToLead,
 } from "./queries";
 
 /** The moving-average windows the source sheet reported. */
@@ -74,6 +76,8 @@ export interface DashboardData {
   pipelineDistribution: { stages: PipelineStageCount[]; total: number };
   /** Every paid lead as a row — who, which stage, which campaign. */
   leads: LeadRow[];
+  /** Speed to lead: time from lead-in to first outbound call, for this range. */
+  speedToLead: SpeedToLead;
   /** True when we have spend data but zero CRM leads attributed to campaigns. */
   attributionGap: boolean;
   /** How the paid-lead filter is configured, and what it is excluding. */
@@ -131,6 +135,7 @@ export async function loadDashboard(
     leadBreakdown,
     pipelineDistribution,
     leads,
+    speedToLead,
   ] = await Promise.all([
     getPeriodMetrics(client.id, range, "Selected range", undefined, filter, platform),
     getPeriodMetrics(client.id, prevRange, "Previous period", undefined, filter, platform),
@@ -186,6 +191,7 @@ export async function loadDashboard(
     getLeadAttributionBreakdown(client.id, range, filter, platform),
     getPipelineDistribution(client.id, filter, platform),
     getLeads(client.id, filter, 2000, platform),
+    getSpeedToLead(client.id, range, filter, platform),
   ]);
 
   // Reach is only valid when queried for this exact window — never summed.
@@ -296,6 +302,7 @@ export async function loadDashboard(
     campaigns,
     pipelineDistribution,
     leads,
+    speedToLead,
     /*
      * Spend exists but NOT A SINGLE paid lead reached the CRM — the failure
      * worth shouting about, because cost-per-lead genuinely reads as a dash.

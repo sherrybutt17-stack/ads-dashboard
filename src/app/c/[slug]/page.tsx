@@ -18,6 +18,7 @@ import {
 import { StatTile } from "@/components/StatTile";
 import { Funnel } from "@/components/Funnel";
 import { PipelineExplorer } from "@/components/PipelineExplorer";
+import { SpeedToLeadWidget } from "@/components/SpeedToLead";
 import { TrendCharts } from "@/components/TrendCharts";
 import { MetricsTable } from "@/components/MetricsTable";
 import { DateRangePicker } from "@/components/DateRangePicker";
@@ -283,6 +284,9 @@ export default async function ClientDashboard({
             footnote={`${formatCurrency(current.derived.cpWon, currency)} each`}
           />
         </section>
+
+        {/* Speed to lead — first outbound call vs lead-in */}
+        <SpeedToLeadWidget data={data.speedToLead} />
 
         {/* Where leads are now — filter by campaign, click a stage to see who */}
         <PipelineExplorer

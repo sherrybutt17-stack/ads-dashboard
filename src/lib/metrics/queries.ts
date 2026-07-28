@@ -595,6 +595,85 @@ export async function getLeadsByCampaign(
 export const UNATTRIBUTED = "" as const;
 
 /* ------------------------------------------------------------------ *
+ * Speed to lead — how fast the first outbound CALL reaches a new lead
+ * ------------------------------------------------------------------ */
+
+export interface SpeedToLead {
+  /** New leads that came in during the window. */
+  leads: number;
+  /** Of those, how many have received a first outbound call. */
+  called: number;
+  /** Leads with no call yet. */
+  uncalled: number;
+  /** Median seconds from lead-in to first call (called leads only). */
+  medianSeconds: number | null;
+  /** Cumulative counts: called within 5 min / 1 hr / 24 hr of arriving. */
+  within5m: number;
+  within1h: number;
+  within24h: number;
+}
+
+/**
+ * Speed to lead = time from a lead arriving to the FIRST outbound call.
+ *
+ * Anchored on `contacts.first_call_at` (set by an OutboundMessage webhook where
+ * messageType = CALL) minus `ghl_created_at` (lead-in). Measured over leads that
+ * ARRIVED in the window, so it answers "how fast did we call this period's
+ * leads", and surfaces the ones never called at all — the number a manual stage
+ * move would hide.
+ */
+export async function getSpeedToLead(
+  clientId: string,
+  window: DateWindow,
+  filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
+  platform: AdPlatform = "meta",
+): Promise<SpeedToLead> {
+  const paid = platformLeadPredicate(platform, filter);
+  const clauses: SQL[] = [
+    sql`c.client_id = ${clientId}`,
+    sql`c.ghl_created_at >= ${window.startUtc}`,
+    sql`c.ghl_created_at < ${window.endUtc}`,
+  ];
+  if (paid) clauses.push(paid);
+  // Guard against clock-skew rows where a call predates the lead.
+  const called = sql`c.first_call_at IS NOT NULL AND c.first_call_at >= c.ghl_created_at`;
+
+  type Row = {
+    leads: number;
+    called: number;
+    within_5m: number;
+    within_1h: number;
+    within_24h: number;
+    median_seconds: number | null;
+  };
+  const rows = await db.execute<Row>(sql`
+    SELECT
+      COUNT(*)::int AS leads,
+      COUNT(*) FILTER (WHERE ${called})::int AS called,
+      COUNT(*) FILTER (WHERE ${called} AND c.first_call_at <= c.ghl_created_at + interval '5 minutes')::int AS within_5m,
+      COUNT(*) FILTER (WHERE ${called} AND c.first_call_at <= c.ghl_created_at + interval '1 hour')::int AS within_1h,
+      COUNT(*) FILTER (WHERE ${called} AND c.first_call_at <= c.ghl_created_at + interval '24 hours')::int AS within_24h,
+      percentile_cont(0.5) WITHIN GROUP (
+        ORDER BY EXTRACT(EPOCH FROM (c.first_call_at - c.ghl_created_at))
+      ) FILTER (WHERE ${called}) AS median_seconds
+    FROM contacts c
+    WHERE ${sql.join(clauses, sql` AND `)}
+  `);
+  const r = resultRows<Row>(rows)[0];
+  const leads = Number(r?.leads) || 0;
+  const calledN = Number(r?.called) || 0;
+  return {
+    leads,
+    called: calledN,
+    uncalled: Math.max(0, leads - calledN),
+    medianSeconds: r?.median_seconds != null ? Number(r.median_seconds) : null,
+    within5m: Number(r?.within_5m) || 0,
+    within1h: Number(r?.within_1h) || 0,
+    within24h: Number(r?.within_24h) || 0,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Pipeline distribution — "where every lead sits right now"
  * ------------------------------------------------------------------ */
 

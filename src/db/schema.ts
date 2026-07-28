@@ -498,6 +498,18 @@ export const contacts = pgTable(
     }),
 
     ghlCreatedAt: timestamp("ghl_created_at", { withTimezone: true }),
+
+    /**
+     * First OUTBOUND CALL to this lead — the anchor for speed-to-lead. Set once
+     * (COALESCE) from an OutboundMessage webhook where messageType = CALL.
+     */
+    firstCallAt: timestamp("first_call_at", { withTimezone: true }),
+    /**
+     * First message in either direction — we reached out, or they replied. The
+     * signal for auto-detecting "contacted" independent of a manual stage move.
+     */
+    firstTouchAt: timestamp("first_touch_at", { withTimezone: true }),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

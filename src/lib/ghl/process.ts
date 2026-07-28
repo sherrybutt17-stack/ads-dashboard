@@ -495,3 +495,54 @@ export async function touchClientWebhookMarkers(clientId: string) {
     })
     .where(eq(clients.id, clientId));
 }
+
+/**
+ * Record a communication touch from a message webhook.
+ *
+ * `first_touch_at` is set on any message (we reached out, or they replied) — the
+ * "contact was made" signal, independent of a manual stage move. `first_call_at`
+ * is set only on the first OUTBOUND CALL (`messageType === "CALL"`), the anchor
+ * for speed-to-lead. Both use COALESCE so only the FIRST of each kind sticks and
+ * GHL's at-least-once redeliveries are harmless.
+ */
+export async function recordMessageTouch(
+  clientId: string,
+  payload: unknown,
+): Promise<{ isCall: boolean; contactMatched: boolean }> {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const ghlContactId = typeof p.contactId === "string" ? p.contactId : null;
+  if (!ghlContactId) return { isCall: false, contactMatched: false };
+
+  const direction = typeof p.direction === "string" ? p.direction : null;
+  const messageType =
+    typeof p.messageType === "string" ? p.messageType.toUpperCase() : null;
+  const dateStr =
+    typeof p.dateAdded === "string"
+      ? p.dateAdded
+      : typeof p.timestamp === "string"
+        ? p.timestamp
+        : null;
+  const at = (dateStr ? parseDate(dateStr) : null) ?? new Date();
+  const isCall = messageType === "CALL" && direction === "outbound";
+
+  const set: Record<string, unknown> = {
+    firstTouchAt: sql`COALESCE(${contacts.firstTouchAt}, ${at})`,
+    updatedAt: new Date(),
+  };
+  if (isCall) {
+    set.firstCallAt = sql`COALESCE(${contacts.firstCallAt}, ${at})`;
+  }
+
+  const updated = await db
+    .update(contacts)
+    .set(set)
+    .where(
+      and(
+        eq(contacts.clientId, clientId),
+        eq(contacts.ghlContactId, ghlContactId),
+      ),
+    )
+    .returning({ id: contacts.id });
+
+  return { isCall, contactMatched: updated.length > 0 };
+}

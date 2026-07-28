@@ -6,6 +6,7 @@ import {
   processWebhookEvent,
   finalizeEvent,
   touchClientWebhookMarkers,
+  recordMessageTouch,
 } from "@/lib/ghl/process";
 import { getInstallationByLocation, markUninstalled } from "@/lib/ghl/oauth";
 import { verifyWebhookSignature } from "@/lib/ghl/signature";
@@ -163,6 +164,22 @@ export async function POST(req: NextRequest) {
       reason: "client archived",
     });
     return NextResponse.json({ ok: true, ignored: true });
+  }
+
+  // Message events feed speed-to-lead / first-touch, not the stage ledger.
+  if (eventType === "OutboundMessage" || eventType === "InboundMessage") {
+    const touch = await recordMessageTouch(client.id, payload);
+    await touchClientWebhookMarkers(client.id);
+    await finalizeEvent(event.id, {
+      status: "processed",
+      transitionCreated: false,
+      reason: touch.isCall
+        ? touch.contactMatched
+          ? "first-call recorded"
+          : "call for unknown contact"
+        : "message touch",
+    });
+    return NextResponse.json({ ok: true, isCall: touch.isCall });
   }
 
   try {
