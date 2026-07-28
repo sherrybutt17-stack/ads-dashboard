@@ -128,7 +128,8 @@ export function PipelineExplorer({
       if (!needle) return true;
       return (
         (l.name ?? "").toLowerCase().includes(needle) ||
-        (l.campaignName ?? "").toLowerCase().includes(needle)
+        (l.campaignName ?? "").toLowerCase().includes(needle) ||
+        (l.ghlPipelineName ?? "").toLowerCase().includes(needle)
       );
     });
   }, [inCampaign, stage, q]);
@@ -240,7 +241,7 @@ export function PipelineExplorer({
                 type="text"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search name or campaign…"
+                placeholder="Search name, campaign, pipeline…"
                 className="w-full rounded-[8px] border px-3 py-1.5 text-[13px] sm:w-56"
                 style={{
                   borderColor: "var(--border-strong)",
@@ -287,14 +288,25 @@ export function PipelineExplorer({
                         )}
                       </td>
                       <td className="px-4 py-2.5">
-                        <span className="inline-flex items-center gap-1.5" style={{ color: "var(--text-secondary)" }}>
-                          <span
-                            className="inline-block h-2 w-2 shrink-0 rounded-full"
-                            style={{ background: colorByStage.get(l.ghlStageName ?? "Unmapped") ?? "var(--text-muted)" }}
-                            aria-hidden="true"
-                          />
-                          {l.ghlStageName ?? "Unmapped"}
-                        </span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="inline-flex items-center gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                            <span
+                              className="inline-block h-2 w-2 shrink-0 rounded-full"
+                              style={{ background: colorByStage.get(l.ghlStageName ?? "Unmapped") ?? "var(--text-muted)" }}
+                              aria-hidden="true"
+                            />
+                            {l.ghlStageName ?? "Unmapped"}
+                          </span>
+                          {l.ghlPipelineName && (
+                            <span
+                              className="truncate text-[11px]"
+                              style={{ color: "var(--text-muted)", paddingLeft: "14px", maxWidth: "240px" }}
+                              title={l.ghlPipelineName}
+                            >
+                              {l.ghlPipelineName}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="tnum px-4 py-2.5" style={{ color: "var(--text-muted)" }}>
                         {fmtDate(l.createdAt, timezone)}

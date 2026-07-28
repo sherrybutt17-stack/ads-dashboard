@@ -843,6 +843,7 @@ export interface LeadRow {
   campaignName: string | null;
   campaignId: string | null;
   ghlStageName: string | null;
+  ghlPipelineName: string | null;
   canonicalStage: CanonicalStage | null;
   displayOrder: number;
   createdAt: string | null;
@@ -874,6 +875,7 @@ export async function getLeads(
     campaign_name: string | null;
     campaign_id: string | null;
     stage_name: string | null;
+    pipeline_name: string | null;
     canonical: string | null;
     ord: number;
     created_at: string | null;
@@ -885,6 +887,7 @@ export async function getLeads(
            c.utm_campaign                 AS campaign_name,
            ${col}                         AS campaign_id,
            ps.ghl_stage_name              AS stage_name,
+           ps.ghl_pipeline_name           AS pipeline_name,
            ps.canonical_stage             AS canonical,
            COALESCE(ps.display_order, 999) AS ord,
            o.ghl_created_at               AS created_at,
@@ -904,6 +907,7 @@ export async function getLeads(
     campaign_name: string | null;
     campaign_id: string | null;
     stage_name: string | null;
+    pipeline_name: string | null;
     canonical: string | null;
     ord: number;
     created_at: string | null;
@@ -915,6 +919,7 @@ export async function getLeads(
     campaignName: r.campaign_name,
     campaignId: r.campaign_id,
     ghlStageName: r.stage_name,
+    ghlPipelineName: r.pipeline_name,
     canonicalStage: (r.canonical as CanonicalStage | null) ?? null,
     displayOrder: Number(r.ord) || 0,
     createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
