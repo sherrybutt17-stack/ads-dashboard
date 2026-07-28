@@ -73,8 +73,11 @@ export async function GET(req: NextRequest) {
     }
 
     const url = req.nextUrl.clone();
-    url.pathname = slug ? `/c/${slug}/setup` : "/";
-    url.search = `?installed=${encodeURIComponent(installation.locationName ?? installation.locationId)}`;
+    url.pathname = "/oauth/result";
+    const params = new URLSearchParams({ status: "success" });
+    if (slug) params.set("slug", slug);
+    params.set("location", installation.locationName ?? installation.locationId);
+    url.search = `?${params.toString()}`;
 
     const res = NextResponse.redirect(url);
     res.cookies.delete("ghl_oauth_state");
@@ -89,8 +92,8 @@ export async function GET(req: NextRequest) {
 
 function redirectWithError(req: NextRequest, message: string) {
   const url = req.nextUrl.clone();
-  url.pathname = "/";
-  url.search = `?oauth_error=${encodeURIComponent(message)}`;
+  url.pathname = "/oauth/result";
+  url.search = `?status=error&message=${encodeURIComponent(message)}`;
   return NextResponse.redirect(url);
 }
 

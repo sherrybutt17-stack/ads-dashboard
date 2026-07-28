@@ -126,6 +126,9 @@ export async function POST(req: NextRequest) {
 
   // App lifecycle events carry no opportunity data.
   if (eventType === "INSTALL" || eventType === "AppInstall") {
+    // An install carries no opportunity data, but it proves the pipe is live —
+    // mark the client so the "no webhook received yet" banner clears.
+    if (client) await touchClientWebhookMarkers(client.id);
     await finalizeEvent(event.id, {
       status: "processed",
       transitionCreated: false,
