@@ -598,6 +598,16 @@ export const UNATTRIBUTED = "" as const;
  * Speed to lead — how fast the first outbound CALL reaches a new lead
  * ------------------------------------------------------------------ */
 
+export interface SpeedToLeadRow {
+  name: string | null;
+  /** Lead-in time (ISO). */
+  leadInAt: string;
+  /** First outbound call time (ISO), or null if never called. */
+  firstCallAt: string | null;
+  /** Seconds from lead-in to first call, or null if uncalled. */
+  secondsToCall: number | null;
+}
+
 export interface SpeedToLead {
   /** New leads that came in during the window. */
   leads: number;
@@ -611,6 +621,8 @@ export interface SpeedToLead {
   within5m: number;
   within1h: number;
   within24h: number;
+  /** Per-lead breakdown (uncalled + slowest first), capped at 100. */
+  rows: SpeedToLeadRow[];
 }
 
 /**
@@ -662,6 +674,31 @@ export async function getSpeedToLead(
   const r = resultRows<Row>(rows)[0];
   const leads = Number(r?.leads) || 0;
   const calledN = Number(r?.called) || 0;
+
+  type RowR = {
+    name: string | null;
+    lead_in_at: string | Date;
+    first_call_at: string | Date | null;
+    seconds_to_call: number | null;
+  };
+  const perLeadRes = await db.execute<RowR>(sql`
+    SELECT
+      COALESCE(NULLIF(TRIM(CONCAT(c.first_name, ' ', c.last_name)), ''), c.email, c.phone) AS name,
+      c.ghl_created_at AS lead_in_at,
+      c.first_call_at AS first_call_at,
+      CASE WHEN ${called} THEN EXTRACT(EPOCH FROM (c.first_call_at - c.ghl_created_at)) END AS seconds_to_call
+    FROM contacts c
+    WHERE ${sql.join(clauses, sql` AND `)}
+    ORDER BY (c.first_call_at IS NULL) DESC, seconds_to_call DESC NULLS FIRST, c.ghl_created_at DESC
+    LIMIT 100
+  `);
+  const perLead: SpeedToLeadRow[] = resultRows<RowR>(perLeadRes).map((x) => ({
+    name: x.name ?? null,
+    leadInAt: new Date(x.lead_in_at).toISOString(),
+    firstCallAt: x.first_call_at ? new Date(x.first_call_at).toISOString() : null,
+    secondsToCall: x.seconds_to_call != null ? Number(x.seconds_to_call) : null,
+  }));
+
   return {
     leads,
     called: calledN,
@@ -670,6 +707,7 @@ export async function getSpeedToLead(
     within5m: Number(r?.within_5m) || 0,
     within1h: Number(r?.within_1h) || 0,
     within24h: Number(r?.within_24h) || 0,
+    rows: perLead,
   };
 }
 

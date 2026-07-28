@@ -286,7 +286,10 @@ export default async function ClientDashboard({
         </section>
 
         {/* Speed to lead — first outbound call vs lead-in */}
-        <SpeedToLeadWidget data={data.speedToLead} />
+        <SpeedToLeadWidget
+          data={data.speedToLead}
+          timezone={data.client.timezone}
+        />
 
         {/* Where leads are now — filter by campaign, click a stage to see who */}
         <PipelineExplorer

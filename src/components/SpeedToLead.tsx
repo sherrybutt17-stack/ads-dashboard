@@ -1,4 +1,4 @@
-import type { SpeedToLead } from "@/lib/metrics/queries";
+import type { SpeedToLead, SpeedToLeadRow } from "@/lib/metrics/queries";
 
 function formatDuration(seconds: number | null): string {
   if (seconds == null) return "—";
@@ -14,17 +14,78 @@ function formatDuration(seconds: number | null): string {
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
 
+/** Colour a response time by how fast it was — green ≤5m, accent ≤1h, amber slower. */
+function toneFor(seconds: number | null): string {
+  if (seconds == null) return "var(--status-critical)";
+  if (seconds <= 300) return "var(--status-good)";
+  if (seconds <= 3600) return "var(--accent)";
+  return "var(--status-warning)";
+}
+
+function LeadRow({ row, timezone }: { row: SpeedToLeadRow; timezone: string }) {
+  const called = row.secondsToCall != null;
+  const tone = toneFor(row.secondsToCall);
+  const leadIn = new Date(row.leadInAt).toLocaleString("en-US", {
+    timeZone: timezone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return (
+    <div
+      className="flex items-center justify-between gap-3 py-2"
+      style={{ borderTop: "1px solid var(--border)" }}
+    >
+      <div className="min-w-0">
+        <div
+          className="truncate text-[13px]"
+          style={{ color: "var(--text-primary)" }}
+        >
+          {row.name ?? "Unnamed lead"}
+        </div>
+        <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+          in {leadIn}
+        </div>
+      </div>
+      <span
+        className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums"
+        style={{
+          color: tone,
+          background: `color-mix(in srgb, ${tone} 14%, transparent)`,
+        }}
+      >
+        {called ? formatDuration(row.secondsToCall) : "Not called"}
+      </span>
+    </div>
+  );
+}
+
 /**
  * Speed-to-lead: how fast a new lead gets its first outbound call.
  *
  * The median is over leads that WERE called; the response-time bars use total
  * leads as the denominator, so a lead never called counts against the SLA
- * rather than being quietly excluded — the whole point of measuring the call
- * itself instead of a manual "Contacted" stage move.
+ * rather than being quietly excluded. The per-lead list orders the problems
+ * first — uncalled leads, then the slowest responses.
  */
-export function SpeedToLeadWidget({ data }: { data: SpeedToLead }) {
-  const { leads, called, uncalled, medianSeconds, within5m, within1h, within24h } =
-    data;
+export function SpeedToLeadWidget({
+  data,
+  timezone,
+}: {
+  data: SpeedToLead;
+  timezone: string;
+}) {
+  const {
+    leads,
+    called,
+    uncalled,
+    medianSeconds,
+    within5m,
+    within1h,
+    within24h,
+    rows,
+  } = data;
 
   const buckets = [
     { label: "within 5 min", n: within5m, tone: "var(--status-good)" },
@@ -59,61 +120,92 @@ export function SpeedToLeadWidget({ data }: { data: SpeedToLead }) {
           No leads arrived in this period.
         </p>
       ) : (
-        <div className="mt-4 grid gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
-          <div
-            className="sm:border-r sm:pr-6"
-            style={{ borderColor: "var(--border)" }}
-          >
+        <>
+          <div className="mt-4 grid gap-5 sm:grid-cols-[auto_1fr] sm:items-center">
             <div
-              className="text-[40px] font-semibold leading-none tabular-nums"
-              style={{ color: "var(--text-primary)" }}
+              className="sm:border-r sm:pr-6"
+              style={{ borderColor: "var(--border)" }}
             >
-              {formatDuration(medianSeconds)}
+              <div
+                className="text-[40px] font-semibold leading-none tabular-nums"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {formatDuration(medianSeconds)}
+              </div>
+              <div
+                className="mt-1.5 text-xs"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {called === 0 ? "no leads called yet" : "median to first call"}
+              </div>
             </div>
-            <div className="mt-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
-              {called === 0 ? "no leads called yet" : "median to first call"}
+
+            <div className="flex flex-col gap-2.5">
+              {buckets.map((b) => {
+                const p = pct(b.n, leads);
+                return (
+                  <div key={b.label}>
+                    <div className="flex items-center justify-between text-xs">
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        {b.label}
+                      </span>
+                      <span
+                        className="tabular-nums"
+                        style={{ color: "var(--text-primary)" }}
+                      >
+                        {b.n}{" "}
+                        <span style={{ color: "var(--text-muted)" }}>
+                          ({p}%)
+                        </span>
+                      </span>
+                    </div>
+                    <div
+                      className="mt-1 h-1.5 w-full overflow-hidden rounded-full"
+                      style={{ background: "var(--border)" }}
+                    >
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${p}%`, background: b.tone }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              {uncalled > 0 && (
+                <p
+                  className="mt-0.5 text-xs"
+                  style={{ color: "var(--status-warning)" }}
+                >
+                  {uncalled} lead{uncalled === 1 ? "" : "s"} not called yet
+                </p>
+              )}
             </div>
           </div>
 
-          <div className="flex flex-col gap-2.5">
-            {buckets.map((b) => {
-              const p = pct(b.n, leads);
-              return (
-                <div key={b.label}>
-                  <div className="flex items-center justify-between text-xs">
-                    <span style={{ color: "var(--text-secondary)" }}>
-                      {b.label}
-                    </span>
-                    <span
-                      className="tabular-nums"
-                      style={{ color: "var(--text-primary)" }}
-                    >
-                      {b.n}{" "}
-                      <span style={{ color: "var(--text-muted)" }}>({p}%)</span>
-                    </span>
-                  </div>
-                  <div
-                    className="mt-1 h-1.5 w-full overflow-hidden rounded-full"
-                    style={{ background: "var(--border)" }}
-                  >
-                    <div
-                      className="h-full rounded-full"
-                      style={{ width: `${p}%`, background: b.tone }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-            {uncalled > 0 && (
-              <p
-                className="mt-0.5 text-xs"
-                style={{ color: "var(--status-warning)" }}
-              >
-                {uncalled} lead{uncalled === 1 ? "" : "s"} not called yet
-              </p>
-            )}
-          </div>
-        </div>
+          {rows.length > 0 && (
+            <div className="mt-5">
+              <div className="flex items-center justify-between">
+                <span
+                  className="text-[11px] font-semibold uppercase tracking-wide"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Per lead
+                </span>
+                <span
+                  className="text-[11px]"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  time to first call
+                </span>
+              </div>
+              <div className="mt-1 max-h-[320px] overflow-y-auto">
+                {rows.map((row, i) => (
+                  <LeadRow key={i} row={row} timezone={timezone} />
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </section>
   );
