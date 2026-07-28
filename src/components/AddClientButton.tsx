@@ -47,8 +47,7 @@ export function AddClientButton() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white"
-        style={{ background: "var(--series-1)" }}
+        className="btn-accent rounded-[8px] px-3 py-2 text-[13px] font-medium"
       >
         Add client
       </button>
@@ -156,8 +155,7 @@ export function AddClientButton() {
               <button
                 type="submit"
                 disabled={busy || !name.trim()}
-                className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
-                style={{ background: "var(--series-1)" }}
+                className="btn-accent rounded-[8px] px-3 py-2 text-[13px] font-medium"
               >
                 {busy ? "Creating…" : "Continue"}
               </button>

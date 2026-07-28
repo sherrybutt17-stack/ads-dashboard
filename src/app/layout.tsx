@@ -13,13 +13,15 @@ export default function RootLayout({
     <html lang="en" className="h-full" suppressHydrationWarning>
       <head>
         {/*
-          Apply the stored theme before first paint. Without this the page
-          renders in the OS theme and then snaps to the stored preference,
-          which is a visible flash on every navigation.
+          Apply the theme before first paint. Bold dark-first: dark is the
+          deliberate default, so absent a stored preference we stamp `dark`
+          rather than following the OS. A user who picks light gets it persisted
+          and honoured here. Stamping before paint avoids the theme flash on
+          every navigation.
         */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}`,
+            __html: `try{var t=localStorage.getItem('theme');document.documentElement.dataset.theme=(t==='light'||t==='dark')?t:'dark'}catch(e){document.documentElement.dataset.theme='dark'}`,
           }}
         />
       </head>

@@ -232,8 +232,7 @@ export function UsersManager({
           type="button"
           onClick={create}
           disabled={busy || !canCreate}
-          className="mt-4 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
-          style={{ background: "var(--series-1)" }}
+          className="mt-4 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
         >
           {busy ? "Creating…" : "Create login"}
         </button>

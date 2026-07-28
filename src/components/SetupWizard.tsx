@@ -225,8 +225,7 @@ function InstallStep({
           )}
           <a
             href={`/api/oauth/authorize?clientId=${clientId}`}
-            className="inline-block rounded-[8px] px-3 py-2 text-[13px] font-medium text-white"
-            style={{ background: "var(--series-1)" }}
+            className="inline-block rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent"
           >
             Install on a sub-account
           </a>
@@ -398,8 +397,7 @@ function GhlStep({
         <button
           onClick={verify}
           disabled={busy || !locationId}
-          className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
-          style={{ background: "var(--series-1)" }}
+          className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
         >
           {busy ? "Verifying…" : "Verify & save"}
         </button>
@@ -756,8 +754,7 @@ function StageStep({
           <button
             onClick={save}
             disabled={busy}
-            className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
-            style={{ background: "var(--series-1)" }}
+            className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
           >
             Save mapping
           </button>
@@ -958,8 +955,7 @@ function MetaAccountsStep({
         <button
           onClick={add}
           disabled={busy || !accountId}
-          className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
-          style={{ background: "var(--series-1)" }}
+          className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
         >
           {busy ? "Verifying…" : "Verify & add"}
         </button>
@@ -1153,8 +1149,7 @@ function GoogleAccountsStep({
             <button
               onClick={add}
               disabled={busy || !customerId}
-              className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
-              style={{ background: "var(--series-1)" }}
+              className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
             >
               {busy ? "Verifying…" : "Verify & add"}
             </button>
@@ -1250,8 +1245,7 @@ function WebhookStep({
           <button
             onClick={() => setListening(true)}
             disabled={listening}
-            className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-            style={{ background: "var(--series-1)" }}
+            className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-60"
           >
             {listening ? "Waiting for first event…" : "Test connection"}
           </button>

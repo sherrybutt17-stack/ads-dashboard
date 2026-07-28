@@ -25,9 +25,9 @@ function subscribe(cb: () => void) {
 function getSnapshot(): "light" | "dark" | null {
   const stamped = document.documentElement.dataset.theme;
   if (stamped === "light" || stamped === "dark") return stamped;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  // Dark-first: the pre-paint script always stamps a value, so this is only a
+  // fallback — and the fallback is dark, not the OS setting.
+  return "dark";
 }
 
 function getServerSnapshot(): "light" | "dark" | null {

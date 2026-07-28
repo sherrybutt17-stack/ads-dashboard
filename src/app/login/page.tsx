@@ -46,6 +46,31 @@ function LoginForm() {
 
   return (
     <form onSubmit={submit} className="card w-full max-w-sm p-6">
+      <div className="mb-5 flex items-center gap-3">
+        <div
+          aria-hidden="true"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] text-[17px] font-bold text-white"
+          style={{
+            background: "linear-gradient(135deg, #4a97ee 0%, #1c5cab 100%)",
+            boxShadow:
+              "0 4px 14px -4px rgba(28, 92, 171, 0.6), inset 0 1px 0 rgba(255,255,255,0.28)",
+          }}
+        >
+          ◆
+        </div>
+        <div className="leading-tight">
+          <div
+            className="text-[15px] font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
+            Ads + CRM
+          </div>
+          <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+            Live pipeline reporting
+          </div>
+        </div>
+      </div>
+
       <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
         Sign in
       </h1>
@@ -98,8 +123,7 @@ function LoginForm() {
       <button
         type="submit"
         disabled={busy || !password}
-        className="mt-4 w-full rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
-        style={{ background: "var(--series-1)" }}
+        className="btn-accent mt-4 w-full rounded-[8px] px-3 py-2 text-[13px] font-medium"
       >
         {busy ? "Checking…" : "Sign in"}
       </button>

@@ -1,16 +1,23 @@
 @import "tailwindcss";
 
 /*
- * Design tokens.
+ * Design tokens — bold dark-first.
+ *
+ * Dark is the deliberate default (see the pre-paint script in layout.tsx): a
+ * deep, faintly-cool near-black canvas with crafted top-lit surfaces and one
+ * confident blue accent that is allowed to GLOW in exactly two places — the
+ * primary action and the hero metric. Light stays fully supported and warm.
  *
  * Colours come from a validated palette — every categorical hue was checked
  * with the data-viz validator for colourblind separation, chroma, lightness
  * band, and contrast against BOTH surfaces. Do not substitute a hue by eye;
- * re-run the validator if these change.
+ * re-run the validator if these change. The surfaces below only ever move
+ * within the near-black / near-white band, so the validated mark contrast is
+ * preserved.
  *
  * Dark values are declared under two scopes: the media query covers the OS
  * setting, the [data-theme] scope covers the in-app toggle, and the toggle must
- * win in both directions.
+ * win in both directions. Keep the two dark blocks identical.
  */
 
 :root {
@@ -21,6 +28,8 @@
   --surface-1: #fcfcfb;
   --surface-2: #f3f3f0;
   --surface-raised: #ffffff;
+  /* Card fill — a whisper of top-lit gradient reads as crafted, not flat. */
+  --card-bg: linear-gradient(180deg, #ffffff 0%, #fbfbf9 100%);
 
   /* Ink */
   --text-primary: #0b0b0b;
@@ -70,7 +79,9 @@
   --shadow-elevated: 0 2px 4px rgba(17, 17, 22, 0.06), 0 16px 40px -12px rgba(17, 17, 22, 0.16);
   /* A hairline top highlight gives the card edge a crafted, lit quality. */
   --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --page-glow: transparent;
+  --page-glow: rgba(42, 120, 214, 0.05);
+  /* Accent glow — the one signature flourish, on the hero tile and the CTA. */
+  --accent-glow: 0 10px 30px -10px rgba(42, 120, 214, 0.35);
   --accent: var(--series-1);
 }
 
@@ -78,19 +89,21 @@
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
 
-    --surface-page: #09090b;
-    --surface-1: #151518;
-    --surface-2: #1f1f23;
-    --surface-raised: #1b1b1f;
+    --surface-page: #0a0b0f;
+    --surface-1: #141519;
+    --surface-2: #20222a;
+    --surface-raised: #1c1e26;
+    /* Top-lit sheen — the card catches the page glow along its upper edge. */
+    --card-bg: linear-gradient(180deg, #1a1c23 0%, #131419 100%);
 
     --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --text-muted: #898781;
+    --text-secondary: #c5c6cd;
+    --text-muted: #8b8d96;
 
-    --border: rgba(255, 255, 255, 0.1);
-    --border-strong: rgba(255, 255, 255, 0.16);
-    --gridline: #2c2c2a;
-    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.15);
+    --gridline: #26272e;
+    --baseline: #34353d;
 
     /* Same eight hues, stepped for the dark surface — not an inversion. */
     --series-1: #3987e5;
@@ -114,29 +127,31 @@
     --delta-good: #0ca30c;
     --delta-bad: #e66767;
 
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -12px rgba(0, 0, 0, 0.7);
-    --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.5), 0 24px 56px -16px rgba(0, 0, 0, 0.85);
-    --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-    --page-glow: rgba(57, 135, 229, 0.06);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 34px -14px rgba(0, 0, 0, 0.78);
+    --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.55), 0 28px 60px -18px rgba(0, 0, 0, 0.9);
+    --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --page-glow: rgba(57, 135, 229, 0.12);
+    --accent-glow: 0 12px 40px -10px rgba(57, 135, 229, 0.5);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --surface-page: #09090b;
-  --surface-1: #151518;
-  --surface-2: #1f1f23;
-  --surface-raised: #1b1b1f;
+  --surface-page: #0a0b0f;
+  --surface-1: #141519;
+  --surface-2: #20222a;
+  --surface-raised: #1c1e26;
+  --card-bg: linear-gradient(180deg, #1a1c23 0%, #131419 100%);
 
   --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted: #898781;
+  --text-secondary: #c5c6cd;
+  --text-muted: #8b8d96;
 
-  --border: rgba(255, 255, 255, 0.1);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --gridline: #2c2c2a;
-  --baseline: #383835;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --gridline: #26272e;
+  --baseline: #34353d;
 
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -159,10 +174,11 @@
   --delta-good: #0ca30c;
   --delta-bad: #e66767;
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -12px rgba(0, 0, 0, 0.7);
-  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.5), 0 24px 56px -16px rgba(0, 0, 0, 0.85);
-  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --page-glow: rgba(57, 135, 229, 0.06);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 34px -14px rgba(0, 0, 0, 0.78);
+  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.55), 0 28px 60px -18px rgba(0, 0, 0, 0.9);
+  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --page-glow: rgba(57, 135, 229, 0.12);
+  --accent-glow: 0 12px 40px -10px rgba(57, 135, 229, 0.5);
 }
 
 @theme inline {
@@ -192,9 +208,9 @@ body {
 
 body {
   /* A single faint accent bloom high on the page — ambient depth, not a gradient
-     hero. Flat in light mode. */
+     hero. Barely-there in light, a felt atmosphere in dark. */
   background:
-    radial-gradient(1100px 520px at 50% -260px, var(--page-glow), transparent),
+    radial-gradient(1200px 560px at 50% -280px, var(--page-glow), transparent),
     var(--surface-page);
   background-attachment: fixed;
   min-height: 100vh;
@@ -203,7 +219,8 @@ body {
 /* Display numerals read tighter and more confident at large sizes. */
 .num-display {
   font-variant-numeric: proportional-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.028em;
+  font-feature-settings: "ss01";
 }
 
 /*
@@ -219,7 +236,7 @@ body {
 }
 
 .card {
-  background: var(--surface-1);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--card-highlight), var(--shadow-card);
@@ -233,6 +250,68 @@ body {
 .card-interactive:hover {
   box-shadow: var(--card-highlight), var(--shadow-elevated);
   border-color: var(--border-strong);
+}
+
+/*
+ * The one place the accent glows: the hero/emphasis tile. An accent-tinted
+ * hairline plus a soft under-bloom, so the single most important number on the
+ * page reads first without shouting.
+ */
+.card-accent {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-strong));
+  box-shadow: var(--card-highlight), var(--shadow-card), var(--accent-glow);
+}
+.card-accent.card-interactive:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  box-shadow: var(--card-highlight), var(--shadow-elevated), var(--accent-glow);
+}
+
+/*
+ * Primary action button — the accent's second sanctioned glow. Reuses the
+ * logo-mark gradient so brand and action read as one system. Theme-independent
+ * by design (a fixed blue works on both grounds).
+ */
+.btn-accent {
+  background: linear-gradient(180deg, #4a97ee 0%, #1f5eb0 100%);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 1px 2px rgba(0, 0, 0, 0.22),
+    0 8px 22px -8px rgba(45, 120, 220, 0.55);
+  transition:
+    filter 0.16s ease,
+    box-shadow 0.22s ease,
+    transform 0.1s ease;
+}
+.btn-accent:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 1px 2px rgba(0, 0, 0, 0.22),
+    0 12px 30px -8px rgba(45, 120, 220, 0.62);
+}
+.btn-accent:active:not(:disabled) {
+  transform: translateY(0.5px);
+  filter: brightness(0.97);
+}
+.btn-accent:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* Secondary / ghost action — bordered, fills to surface-2 on hover. */
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-primary);
 }
 
 /* Table rows and list rows get a subtle wash on hover. */

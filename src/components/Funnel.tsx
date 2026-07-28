@@ -68,10 +68,16 @@ export function Funnel({
 
                   <div className="min-w-0">
                     <div
-                      className="h-8 rounded-r-[4px] transition-[width] duration-500"
+                      className="h-8 rounded-r-[5px] transition-[width] duration-500"
                       style={{
                         width: `${Math.max(pctOfTop * 100, step.count > 0 ? 2 : 0)}%`,
-                        background: RAMP[Math.min(i, RAMP.length - 1)],
+                        // Top-lit sheen over the ordinal step — dimension, not a
+                        // new hue. The ramp identity is preserved; the gradient
+                        // only lightens the upper edge.
+                        background: `linear-gradient(180deg, color-mix(in srgb, ${
+                          RAMP[Math.min(i, RAMP.length - 1)]
+                        } 82%, #ffffff) 0%, ${RAMP[Math.min(i, RAMP.length - 1)]} 100%)`,
+                        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.16)",
                       }}
                     />
                   </div>

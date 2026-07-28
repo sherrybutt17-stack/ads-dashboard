@@ -46,25 +46,36 @@ export default async function ClientsPage() {
     <div className="min-h-full">
       <header className="border-b" style={{ borderColor: "var(--border)" }}>
         <div className="mx-auto flex max-w-[1100px] items-center gap-3 px-4 py-4 sm:px-6">
-          <h1
-            className="flex-1 text-lg font-semibold"
-            style={{ color: "var(--text-primary)" }}
-          >
-            {staff ? "Clients" : "Your dashboards"}
-          </h1>
+          <div className="flex flex-1 items-center gap-2.5">
+            <div
+              aria-hidden="true"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[13px] font-bold text-white"
+              style={{
+                background: "linear-gradient(135deg, #4a97ee 0%, #1c5cab 100%)",
+                boxShadow:
+                  "0 2px 8px -2px rgba(28, 92, 171, 0.5), inset 0 1px 0 rgba(255,255,255,0.25)",
+              }}
+            >
+              ◆
+            </div>
+            <h1
+              className="text-lg font-semibold"
+              style={{ color: "var(--text-primary)" }}
+            >
+              {staff ? "Clients" : "Your dashboards"}
+            </h1>
+          </div>
           {staff && (
             <>
               <Link
                 href="/users"
-                className="rounded-[9px] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)]"
-                style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+                className="btn-ghost rounded-[9px] px-3 py-2 text-[13px] font-medium"
               >
                 Users
               </Link>
               <Link
                 href="/audit"
-                className="rounded-[9px] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)]"
-                style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+                className="btn-ghost rounded-[9px] px-3 py-2 text-[13px] font-medium"
               >
                 Audit log
               </Link>
@@ -85,7 +96,7 @@ export default async function ClientsPage() {
               <li key={c.id}>
                 <Link
                   href={`/c/${c.slug}`}
-                  className="card flex flex-wrap items-center gap-4 p-4 transition-colors hover:border-[var(--border-strong)]"
+                  className="card card-interactive flex flex-wrap items-center gap-4 p-4"
                 >
                   <div className="min-w-0 flex-1">
                     <div

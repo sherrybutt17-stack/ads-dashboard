@@ -116,19 +116,20 @@ export function StatTile({
 
   return (
     <div
-      className="card card-interactive flex flex-col gap-2.5 p-4 sm:p-5"
-      style={emphasis ? { borderColor: "var(--border-strong)" } : undefined}
+      className={`card card-interactive flex flex-col gap-2.5 p-4 sm:p-5${
+        emphasis ? " card-accent" : ""
+      }`}
     >
       <span
         className="text-[10.5px] font-semibold tracking-[0.08em] uppercase"
-        style={{ color: "var(--text-muted)" }}
+        style={{ color: emphasis ? "var(--accent)" : "var(--text-muted)" }}
       >
         {label}
       </span>
 
       {/* Value owns its own line — never truncated by the sparkline. */}
       <div
-        className="num-display text-2xl leading-none font-semibold whitespace-nowrap sm:text-[30px]"
+        className="num-display text-[27px] leading-none font-semibold whitespace-nowrap sm:text-[33px]"
         style={{ color: "var(--text-primary)" }}
       >
         {display}
