@@ -19,18 +19,18 @@ import { useRouter } from "next/navigation";
 const MODES = [
   {
     id: "either",
-    label: "UTM attribution or tag",
-    hint: "Recommended. A lead counts as paid if it has a Facebook campaign ID or the tag below. Covers Instant Form leads, which never carry UTMs.",
+    label: "Ad-attributed or tagged",
+    hint: "Recommended. Counts a lead as paid if it has a Facebook campaign ID OR carries your tag (below) — so leads that are only tagged, with no ad attribution, ARE included. Covers Instant Form leads, which never carry UTMs.",
   },
   {
     id: "attributed",
-    label: "UTM attribution only",
-    hint: "Only leads carrying a Facebook campaign ID. Cleanest, but misses Instant Form leads entirely.",
+    label: "Ad-attributed only (exclude tagged)",
+    hint: "Only leads with a real Facebook campaign ID. Leads that are only tagged — including any added by hand in the CRM — are NOT counted. Cleanest, but misses Instant Form leads.",
   },
   {
     id: "tagged",
-    label: "Tag only",
-    hint: "Only leads carrying the tag. Use when UTMs aren't set up and a GHL workflow applies the tag instead.",
+    label: "Tagged only",
+    hint: "Only leads carrying the tag, regardless of ad attribution. Use when UTMs aren't set up and a GHL workflow applies the tag instead.",
   },
   {
     id: "all",
