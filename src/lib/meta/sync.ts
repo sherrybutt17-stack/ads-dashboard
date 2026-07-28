@@ -11,18 +11,27 @@ import {
 } from "@/db/schema";
 import { parseInsightRow } from "./client";
 import { activeAdAccounts, metaClientForAccount } from "./accounts";
-import { isProvisional, todayKey, trailingWindowInclusive } from "@/lib/dates";
+import {
+  META_PROVISIONAL_DAYS,
+  isProvisional,
+  todayKey,
+  trailingWindowInclusive,
+} from "@/lib/dates";
 
 /**
  * How far back each nightly run re-pulls.
  *
- * Not 1 day. Meta restates spend and conversions for up to 28 days as
- * attribution windows fill, so a write-once-and-never-revisit sync drifts
- * permanently out of agreement with Ads Manager. Re-pulling a trailing window
- * and upserting makes the dashboard self-healing; 7 days captures the bulk of
- * restatement at a fraction of the API cost of 28.
+ * Meta restates spend and conversions for up to 28 days as attribution windows
+ * fill, so a write-once-and-never-revisit sync drifts permanently out of
+ * agreement with Ads Manager. We re-pull the ENTIRE restatement window every
+ * night and upsert, so every day still eligible to change keeps being trued up
+ * until Meta finalises it — which is what makes an arbitrary calendar range
+ * match Ads Manager exactly, not merely the last few days. Coupled to
+ * META_PROVISIONAL_DAYS so the "still changing" and "still re-pulled" windows
+ * can never silently drift apart. (Earlier this was 7, which left days 8–28
+ * frozen at stale values.)
  */
-export const RECONCILE_DAYS = 7;
+export const RECONCILE_DAYS = META_PROVISIONAL_DAYS;
 
 /** Dashboards older than this trigger a background refresh on load. */
 export const STALE_AFTER_MS = 15 * 60 * 1000;

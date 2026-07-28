@@ -43,6 +43,14 @@ export async function GET(req: NextRequest) {
   }
 
   const force = req.nextUrl.searchParams.get("force") === "1";
+  // The per-timezone 2am gate is only meaningful on an HOURLY schedule (Vercel
+  // Pro), where each run must pick out the clients whose local ~2am just struck.
+  // On the Hobby DAILY schedule there is one run, so gating by hour skips every
+  // client whose local hour isn't the target — which is exactly how GG (Pacific)
+  // went weeks with no reconciliation while the cron fired at 08:00 UTC = ~1am
+  // Pacific. Default now: a daily run reconciles every active client. Opt back
+  // into the hourly behaviour with ?hourly=1 when moving to a Pro hourly cron.
+  const hourly = req.nextUrl.searchParams.get("hourly") === "1";
   const targetHour = Number(req.nextUrl.searchParams.get("hour") ?? 2);
 
   const active = await db
@@ -63,7 +71,7 @@ export async function GET(req: NextRequest) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
     }
-    if (!force && !isDueForNightlySync(client, targetHour)) {
+    if (!force && hourly && !isDueForNightlySync(client, targetHour)) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
     }

@@ -19,9 +19,11 @@ import { todayKey, trailingWindowInclusive } from "@/lib/dates";
  * platforms' liveness never cross-contaminate.
  */
 
-/** Trailing window each nightly run re-pulls — Google restates far less than
- *  Meta, but a small window keeps it self-healing at trivial cost. */
-export const GOOGLE_RECONCILE_DAYS = 7;
+/** Trailing window each nightly run re-pulls. Google restates conversions for
+ *  weeks as well, so we re-pull the same 28-day window as Meta and upsert — the
+ *  point is that ANY calendar range the operator picks matches the Google Ads
+ *  UI exactly, not just the last few days. Trivial cost at daily cadence. */
+export const GOOGLE_RECONCILE_DAYS = 28;
 export const GOOGLE_STALE_AFTER_MS = 15 * 60 * 1000;
 
 export interface GoogleSyncOptions {

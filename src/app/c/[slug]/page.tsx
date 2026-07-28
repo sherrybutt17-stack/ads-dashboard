@@ -137,8 +137,13 @@ export default async function ClientDashboard({
             <div className="min-w-0">
               <Link
                 href="/"
-                className="inline-flex items-center gap-1 text-[11px] font-medium tracking-wide transition-colors hover:underline"
-                style={{ color: "var(--text-muted)" }}
+                title="Back to all clients"
+                className="mb-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors hover:opacity-80"
+                style={{
+                  color: "var(--text-secondary)",
+                  borderColor: "var(--border-strong)",
+                  background: "var(--surface-2)",
+                }}
               >
                 <span aria-hidden="true">←</span> All clients
               </Link>
