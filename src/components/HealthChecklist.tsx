@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { HealthLevel, HealthReport } from "@/lib/health";
+import { Icon, type IconName } from "./Icon";
 
 /**
  * Connection health.
@@ -20,12 +21,12 @@ import type { HealthLevel, HealthReport } from "@/lib/health";
 
 const LEVEL_META: Record<
   HealthLevel,
-  { color: string; glyph: string; label: string }
+  { color: string; icon: IconName; label: string }
 > = {
-  green: { color: "var(--status-good)", glyph: "✓", label: "OK" },
-  amber: { color: "var(--status-warning)", glyph: "!", label: "Attention" },
-  red: { color: "var(--status-critical)", glyph: "✕", label: "Broken" },
-  unknown: { color: "var(--text-muted)", glyph: "?", label: "Unknown" },
+  green: { color: "var(--status-good)", icon: "check", label: "OK" },
+  amber: { color: "var(--status-warning)", icon: "alert", label: "Attention" },
+  red: { color: "var(--status-critical)", icon: "x", label: "Broken" },
+  unknown: { color: "var(--text-muted)", icon: "help", label: "Unknown" },
 };
 
 export function HealthBadge({ level }: { level: HealthLevel }) {
@@ -37,10 +38,10 @@ export function HealthBadge({ level }: { level: HealthLevel }) {
     >
       <span
         aria-hidden="true"
-        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[9px] font-bold text-white"
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-white"
         style={{ background: m.color }}
       >
-        {m.glyph}
+        <Icon name={m.icon} size={9} style={{ strokeWidth: 3 }} />
       </span>
       {m.label}
     </span>
@@ -134,10 +135,10 @@ export function HealthChecklist({
               >
                 <span
                   aria-hidden="true"
-                  className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                  className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white"
                   style={{ background: m.color }}
                 >
-                  {m.glyph}
+                  <Icon name={m.icon} size={10} style={{ strokeWidth: 3 }} />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">

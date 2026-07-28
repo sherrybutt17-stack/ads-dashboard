@@ -999,4 +999,66 @@ export async function getLeadAttributionBreakdown(
   };
 }
 
+/** When paid leads arrive, bucketed by weekday × hour of day. */
+export interface LeadHeatmap {
+  /** grid[dow][hour] = paid leads that entered new_lead then. dow 0=Sun..6=Sat. */
+  grid: number[][];
+  byDow: number[]; // length 7
+  byHour: number[]; // length 24
+  max: number; // busiest single cell, for the colour scale
+  total: number;
+}
+
+/**
+ * Lead-arrival heatmap: when do paid leads actually come in?
+ *
+ * Same counting basis as the funnel's lead stage — DISTINCT opportunities
+ * entering `new_lead`, paid-filtered — so the grid totals reconcile with the
+ * "New leads" KPI. Bucketed in the CLIENT's timezone (Postgres `extract` over
+ * `AT TIME ZONE`), because "which hour" is only meaningful locally: a 7pm-local
+ * lead spike is invisible if bucketed in UTC. Directly actionable for ad
+ * scheduling — the sheet could never show it.
+ */
+export async function getLeadArrivalHeatmap(
+  clientId: string,
+  window: DateWindow,
+  tz: string,
+  filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
+  platform: AdPlatform = "meta",
+): Promise<LeadHeatmap> {
+  const paid = platformLeadPredicate(platform, filter);
+  const rows = await db.execute<{ dow: number; hour: number; count: number }>(sql`
+    SELECT
+      extract(dow  from (st.changed_at AT TIME ZONE ${tz}))::int AS dow,
+      extract(hour from (st.changed_at AT TIME ZONE ${tz}))::int AS hour,
+      COUNT(DISTINCT st.opportunity_id)::int AS count
+    FROM stage_transitions st
+    ${paid ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
+    WHERE st.client_id = ${clientId}
+      AND st.to_canonical = 'new_lead'
+      AND st.changed_at >= ${window.startUtc}
+      AND st.changed_at <  ${window.endUtc}
+      ${paid ? sql`AND ${paid}` : sql``}
+    GROUP BY 1, 2
+  `);
+
+  const grid: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0));
+  const byDow = new Array(7).fill(0);
+  const byHour = new Array(24).fill(0);
+  let max = 0;
+  let total = 0;
+  for (const r of resultRows<{ dow: number; hour: number; count: number }>(rows)) {
+    const d = Number(r.dow);
+    const h = Number(r.hour);
+    const n = Number(r.count) || 0;
+    if (d < 0 || d > 6 || h < 0 || h > 23) continue;
+    grid[d][h] = n;
+    byDow[d] += n;
+    byHour[h] += n;
+    total += n;
+    if (n > max) max = n;
+  }
+  return { grid, byDow, byHour, max, total };
+}
+
 export type { CanonicalStage };

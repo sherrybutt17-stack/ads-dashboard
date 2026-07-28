@@ -27,6 +27,7 @@ import {
   getPipelineDistribution,
   getLeads,
   getSpeedToLead,
+  getLeadArrivalHeatmap,
   type AdPlatform,
   type DailyPoint,
   type PeriodMetrics,
@@ -34,6 +35,7 @@ import {
   type PipelineStageCount,
   type LeadRow,
   type SpeedToLead,
+  type LeadHeatmap,
 } from "./queries";
 
 /** The moving-average windows the source sheet reported. */
@@ -78,6 +80,10 @@ export interface DashboardData {
   leads: LeadRow[];
   /** Speed to lead: time from lead-in to first outbound call, for this range. */
   speedToLead: SpeedToLead;
+  /** When paid leads arrive — weekday × hour grid for the selected range. */
+  heatmap: LeadHeatmap;
+  /** Prior period's daily series, index-aligned to `daily`, for the ghost line. */
+  prevDaily: DailyPoint[];
   /** True when we have spend data but zero CRM leads attributed to campaigns. */
   attributionGap: boolean;
   /** How the paid-lead filter is configured, and what it is excluding. */
@@ -136,6 +142,8 @@ export async function loadDashboard(
     pipelineDistribution,
     leads,
     speedToLead,
+    heatmap,
+    prevDailyRaw,
   ] = await Promise.all([
     getPeriodMetrics(client.id, range, "Selected range", undefined, filter, platform),
     getPeriodMetrics(client.id, prevRange, "Previous period", undefined, filter, platform),
@@ -192,6 +200,17 @@ export async function loadDashboard(
     getPipelineDistribution(client.id, filter, platform),
     getLeads(client.id, filter, 2000, platform),
     getSpeedToLead(client.id, range, filter, platform),
+    getLeadArrivalHeatmap(client.id, range, tz, filter, platform),
+    // Prior period, index-aligned to `daily` — the faint ghost behind the trend.
+    getDailySeries(
+      client.id,
+      prevRange,
+      tz,
+      eachDateKey(prevRange, tz),
+      undefined,
+      filter,
+      platform,
+    ),
   ]);
 
   // Reach is only valid when queried for this exact window — never summed.
@@ -303,6 +322,8 @@ export async function loadDashboard(
     pipelineDistribution,
     leads,
     speedToLead,
+    heatmap,
+    prevDaily: prevDailyRaw,
     /*
      * Spend exists but NOT A SINGLE paid lead reached the CRM — the failure
      * worth shouting about, because cost-per-lead genuinely reads as a dash.

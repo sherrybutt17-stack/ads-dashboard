@@ -197,9 +197,12 @@
 html,
 body {
   color: var(--text-primary);
+  /* Geist (self-hosted via next/font) leads; system stack is the fallback if the
+     variable is ever unset. Clean-neutral by design — the data leads, the type
+     recedes. */
   font-family:
-    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI",
-    system-ui, sans-serif;
+    var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -312,6 +315,19 @@ body {
 .btn-ghost:hover:not(:disabled) {
   background: var(--surface-2);
   color: var(--text-primary);
+}
+
+/* Live "synced just now" pulse — a soft expanding ring on a fresh-data dot. */
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-good) 55%, transparent); }
+  70% { box-shadow: 0 0 0 5px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.live-dot {
+  animation: live-pulse 2.2s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
 }
 
 /* Table rows and list rows get a subtle wash on hover. */

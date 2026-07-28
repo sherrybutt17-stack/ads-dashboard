@@ -23,25 +23,30 @@ import type { DailyPoint } from "@/lib/metrics/queries";
  * Stacked panels with a shared x let the eye compare the same instants without
  * inventing a relationship between dollars and lead counts.
  *
- * Each panel carries ONE series, so no legend is needed — the panel title names
- * it. Grid and axes stay recessive; the data is the only thing with weight.
+ * Each panel carries ONE measure, plus a faint dashed GHOST of the previous
+ * period (index-aligned) so "up or down vs last time" is visible without
+ * reading a single number. The ghost is direct-labelled in the panel legend, so
+ * the two lines are never distinguished by colour alone.
  */
 
 interface Props {
   daily: DailyPoint[];
+  prevDaily?: DailyPoint[];
   currency: string;
 }
 
-export function TrendCharts({ daily, currency }: Props) {
-  const data = daily.map((d) => ({
+export function TrendCharts({ daily, prevDaily, currency }: Props) {
+  const data = daily.map((d, i) => ({
     date: d.dateKey,
     label: dayLabel(d.dateKey),
     spend: d.ads.spend,
     leads: d.funnel.new_lead,
-    appts: d.funnel.appointment_booked,
+    prevSpend: prevDaily?.[i]?.ads.spend ?? null,
+    prevLeads: prevDaily?.[i]?.funnel.new_lead ?? null,
   }));
 
   const hasAny = data.some((d) => d.spend > 0 || d.leads > 0);
+  const hasPrev = Boolean(prevDaily?.length);
 
   return (
     <div className="card p-5">
@@ -65,6 +70,7 @@ export function TrendCharts({ daily, currency }: Props) {
             title="Ad spend"
             data={data}
             dataKey="spend"
+            prevKey={hasPrev ? "prevSpend" : undefined}
             color="var(--series-1)"
             format={(v) => formatCurrency(v, currency)}
           />
@@ -72,6 +78,7 @@ export function TrendCharts({ daily, currency }: Props) {
             title="New leads"
             data={data}
             dataKey="leads"
+            prevKey={hasPrev ? "prevLeads" : undefined}
             color="var(--series-2)"
             format={(v) => formatNumber(v)}
           />
@@ -85,20 +92,39 @@ function Panel({
   title,
   data,
   dataKey,
+  prevKey,
   color,
   format,
 }: {
   title: string;
-  data: Array<Record<string, string | number>>;
+  data: Array<Record<string, string | number | null>>;
   dataKey: string;
+  prevKey?: string;
   color: string;
   format: (v: number) => string;
 }) {
   const gradientId = `grad-${dataKey}`;
   return (
     <div>
-      <div className="mb-1 text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
-        {title}
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <div className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
+          {title}
+        </div>
+        {prevKey && (
+          <div className="flex items-center gap-3 text-[10px]" style={{ color: "var(--text-muted)" }}>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-[2px] w-3.5 rounded-full" style={{ background: color }} />
+              This period
+            </span>
+            <span className="flex items-center gap-1">
+              <span
+                className="inline-block h-0 w-3.5"
+                style={{ borderTop: "1.5px dashed var(--text-muted)" }}
+              />
+              Previous
+            </span>
+          </div>
+        )}
       </div>
       <div style={{ height: 132 }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -132,6 +158,8 @@ function Panel({
               cursor={{ stroke: "var(--baseline)", strokeWidth: 1 }}
               content={({ active, payload, label }) => {
                 if (!active || !payload?.length) return null;
+                const cur = payload.find((p) => p.dataKey === dataKey)?.value;
+                const prev = payload.find((p) => p.dataKey === prevKey)?.value;
                 return (
                   <div
                     className="rounded-[8px] px-2.5 py-1.5 text-xs shadow-lg"
@@ -143,12 +171,32 @@ function Panel({
                   >
                     <div style={{ color: "var(--text-muted)" }}>{label}</div>
                     <div className="tnum mt-0.5 font-semibold">
-                      {format(Number(payload[0].value))}
+                      {cur != null ? format(Number(cur)) : "–"}
                     </div>
+                    {prevKey && prev != null && (
+                      <div className="tnum mt-0.5" style={{ color: "var(--text-muted)" }}>
+                        prev {format(Number(prev))}
+                      </div>
+                    )}
                   </div>
                 );
               }}
             />
+            {/* Ghost first, so the current series draws on top of it. */}
+            {prevKey && (
+              <Area
+                type="monotone"
+                dataKey={prevKey}
+                stroke="var(--text-muted)"
+                strokeWidth={1.25}
+                strokeDasharray="3 3"
+                fill="none"
+                dot={false}
+                activeDot={false}
+                isAnimationActive={false}
+                connectNulls
+              />
+            )}
             <Area
               type="monotone"
               dataKey={dataKey}

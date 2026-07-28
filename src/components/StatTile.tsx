@@ -7,6 +7,7 @@ import {
   formatCurrency,
   formatNumber,
 } from "@/lib/metrics/compute";
+import { Icon } from "./Icon";
 
 /**
  * A headline metric: large value, its trend, and a period-over-period delta.
@@ -112,7 +113,8 @@ export function StatTile({
       : sentiment === "bad"
         ? "var(--delta-bad)"
         : "var(--text-muted)";
-  const arrow = change === null || change === 0 ? "" : change > 0 ? "↑" : "↓";
+  const arrow: "arrowUp" | "arrowDown" | null =
+    change === null || change === 0 ? null : change > 0 ? "arrowUp" : "arrowDown";
 
   return (
     <div
@@ -143,8 +145,8 @@ export function StatTile({
 
       <div className="mt-auto flex items-end justify-between gap-3 pt-1">
         <div className="flex items-center gap-1.5 text-xs">
-          <span className="tnum font-semibold" style={{ color }}>
-            {arrow && <span aria-hidden="true">{arrow} </span>}
+          <span className="tnum flex items-center gap-0.5 font-semibold" style={{ color }}>
+            {arrow && <Icon name={arrow} size={12} />}
             {formatChange(change)}
           </span>
           <span className="hidden sm:inline" style={{ color: "var(--text-muted)" }}>

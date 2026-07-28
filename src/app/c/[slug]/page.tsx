@@ -21,9 +21,16 @@ import { PipelineExplorer } from "@/components/PipelineExplorer";
 import { SpeedToLeadWidget } from "@/components/SpeedToLead";
 import { TrendCharts } from "@/components/TrendCharts";
 import { MetricsTable } from "@/components/MetricsTable";
+import { LeadHeatmap } from "@/components/LeadHeatmap";
+import { InsightStrip } from "@/components/InsightStrip";
+import { SyncIndicator } from "@/components/SyncIndicator";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { buildInsights } from "@/lib/metrics/insights";
+import { accentForClient } from "@/lib/accent";
+import { Icon } from "@/components/Icon";
 import type { PeriodMetrics } from "@/lib/metrics/queries";
+import type { CSSProperties } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -116,8 +123,19 @@ export default async function ClientDashboard({
   const sparkAppts = daily.map((d) => d.funnel.appointment_booked);
   const sparkWon = daily.map((d) => d.funnel.closed_won);
 
+  // Per-client accent + the "what changed" headline. The accent is scoped to the
+  // dashboard subtree via CSS vars, so this client's data-identity (hero glow,
+  // mark, heatmap, insight eyebrow) reads in their colour without touching the
+  // fixed brand blue of the action buttons.
+  const accent = accentForClient(client.id);
+  const insights = buildInsights(data);
+  const accentVars = {
+    "--accent": accent.color,
+    "--accent-glow": accent.glow,
+  } as CSSProperties;
+
   return (
-    <div className="min-h-full">
+    <div className="min-h-full" style={accentVars}>
       <header
         className="sticky top-0 z-10 border-b"
         style={{
@@ -133,8 +151,10 @@ export default async function ClientDashboard({
               aria-hidden="true"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[11px] text-[15px] font-bold text-white"
               style={{
-                background: "linear-gradient(135deg, #3f90ea 0%, #1c5cab 100%)",
-                boxShadow: "0 2px 8px -2px rgba(28, 92, 171, 0.5), inset 0 1px 0 rgba(255,255,255,0.25)",
+                background:
+                  "linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 50%, #0d1b30) 100%)",
+                boxShadow:
+                  "0 2px 10px -2px color-mix(in srgb, var(--accent) 55%, transparent), inset 0 1px 0 rgba(255,255,255,0.25)",
               }}
             >
               {data.client.name.trim().charAt(0).toUpperCase() || "•"}
@@ -150,7 +170,7 @@ export default async function ClientDashboard({
                   background: "var(--surface-2)",
                 }}
               >
-                <span aria-hidden="true">←</span> All clients
+                <Icon name="arrowLeft" size={12} /> All clients
               </Link>
               <h1
                 className="truncate text-[17px] leading-tight font-semibold"
@@ -162,6 +182,7 @@ export default async function ClientDashboard({
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <SyncIndicator syncedAt={data.client.lastSyncedAt} />
             {hasGoogle && (
               <div
                 role="group"
@@ -224,6 +245,9 @@ export default async function ClientDashboard({
           platform={platform}
           staff={staff}
         />
+
+        {/* What changed — the narrative above the numbers. */}
+        <InsightStrip insights={insights} />
 
         {/* Headline KPIs */}
         <section
@@ -327,8 +351,15 @@ export default async function ClientDashboard({
               lost: current.funnel.lost,
             }}
           />
-          <TrendCharts daily={daily} currency={currency} />
+          <TrendCharts
+            daily={daily}
+            prevDaily={data.prevDaily}
+            currency={currency}
+          />
         </div>
+
+        {/* When leads arrive — weekday × hour */}
+        <LeadHeatmap data={data.heatmap} />
 
         {/* The four report views from the source sheet */}
         <MetricsTable

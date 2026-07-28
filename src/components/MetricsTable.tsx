@@ -11,6 +11,7 @@ import {
   type FunnelCounts,
   type AdTotals,
 } from "@/lib/metrics/compute";
+import { Icon } from "./Icon";
 
 /**
  * The dense report tables — the sheet's four views, properly typeset.
@@ -52,6 +53,10 @@ const COLUMNS = [
   { key: "cpm", label: "CPM", kind: "currency" as const },
   { key: "cpc", label: "CPC", kind: "currency" as const },
 ];
+
+// Columns that begin a new conceptual group (cost block, then rate block). A
+// faint left rule here lets the eye find "the cost columns" without counting.
+const GROUP_STARTS = new Set(["cpLead", "bookPct"]);
 
 function valueFor(row: MetricRow, key: string): number | null {
   if (key === "spend") return row.ads.spend;
@@ -103,14 +108,14 @@ export function MetricsTable({
           )}
         </div>
         <span
-          className="shrink-0 text-xs transition-transform"
+          className="flex shrink-0 items-center transition-transform"
           style={{
             color: "var(--text-muted)",
             transform: open ? "rotate(180deg)" : "none",
           }}
           aria-hidden="true"
         >
-          ▾
+          <Icon name="chevronDown" size={16} />
         </span>
       </button>
 
@@ -134,7 +139,12 @@ export function MetricsTable({
                   <th
                     key={c.key}
                     className="px-3 py-2.5 text-right text-[11px] font-medium tracking-wider whitespace-nowrap uppercase"
-                    style={{ color: "var(--text-muted)" }}
+                    style={{
+                      color: "var(--text-muted)",
+                      borderLeft: GROUP_STARTS.has(c.key)
+                        ? "1px solid var(--border)"
+                        : undefined,
+                    }}
                   >
                     {c.label}
                   </th>
@@ -154,10 +164,16 @@ export function MetricsTable({
                   <td
                     className="sticky left-0 z-10 px-4 py-2.5 font-medium whitespace-nowrap"
                     style={{
-                      color: "var(--text-secondary)",
+                      color: row.emphasis
+                        ? "var(--text-primary)"
+                        : "var(--text-secondary)",
                       background: row.emphasis
                         ? "var(--surface-2)"
                         : "var(--surface-1)",
+                      // Accent bar marks the row that matters (e.g. "Last 7 days").
+                      boxShadow: row.emphasis
+                        ? "inset 3px 0 0 0 var(--accent)"
+                        : undefined,
                     }}
                   >
                     {row.label}
@@ -174,6 +190,9 @@ export function MetricsTable({
                         key={c.key}
                         className="tnum px-3 py-2.5 text-right whitespace-nowrap"
                         style={{
+                          borderLeft: GROUP_STARTS.has(c.key)
+                            ? "1px solid var(--border)"
+                            : undefined,
                           color:
                             change !== undefined && change !== null
                               ? sentiment === "good"
