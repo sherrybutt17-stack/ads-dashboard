@@ -422,6 +422,28 @@ function groupStagesByPipeline(rows: StageRow[]) {
   return Array.from(map, ([pipeline, stages]) => ({ pipeline, stages }));
 }
 
+/**
+ * Best-guess canonical stage from a GHL stage name. Conservative and name-driven
+ * — it only fills stages a human would map the same way at a glance, and returns
+ * null for anything ambiguous (a bare "Closed", "Long Term Nurture") so the
+ * operator makes the call. Never overwrites an existing mapping; it is a
+ * time-saver over 47 dropdowns, not an authority.
+ */
+function suggestCanonical(name: string | null): CanonicalStage | null {
+  const n = (name ?? "").toLowerCase().trim();
+  if (!n) return null;
+  // Order matters: "no show" contains "show"; "sale closed" contains neither
+  // "won" nor "lost", so the closed-won/lost rules must be explicit.
+  if (/no[\s-]?show|did ?n'?o?t? ?show|missed (appt|appointment)/.test(n)) return "no_show";
+  if (/closed[\s/_-]*won|sale[s]?[\s/_-]*closed|deal[\s_-]*won|(^|\W)won(\W|$)|purchased|customer won/.test(n)) return "closed_won";
+  if (/closed[\s/_-]*lost|(^|\W)lost(\W|$)|not interested|dead lead|disqualif|unqualified|(^|\W)dq(\W|$)/.test(n)) return "lost";
+  if (/appointment|appt|booked|scheduled|(consult|meeting)[^.]*\b(book|schedul)/.test(n)) return "appointment_booked";
+  if (/showed|show(ed)? up|attended|consult[^.]*\b(complete|done|attended)/.test(n)) return "showed";
+  if (/new lead|(^|\W)lead in|new inquiry|new enquiry|new opportunity|opt[\s-]?in|(^|\W)fb leads?(\W|$)/.test(n)) return "new_lead";
+  if (/contact|conversation|reached|engaged|follow[\s-]?up|nurtur|texted|replied|responded|call[\s-]?\d|call back|attempt/.test(n)) return "contacted";
+  return null;
+}
+
 function StageStep({
   clientId,
   stages,
@@ -501,6 +523,64 @@ function StageStep({
     }
   }
 
+  // Which pipeline sections are open. Default: only partially-mapped pipelines
+  // (the ones needing a decision). Fully-mapped and untouched pipelines collapse,
+  // turning a wall of 47 rows into a scannable list of 7.
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const g of groupStagesByPipeline(stages)) {
+      const m = g.stages.filter((x) => x.canonicalStage).length;
+      if (m > 0 && m < g.stages.length) s.add(g.pipeline);
+    }
+    return s;
+  });
+  const toggle = (name: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+
+  const setCanonical = (id: string, canonical: CanonicalStage | null) =>
+    setRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, canonicalStage: canonical } : r)),
+    );
+
+  const pipelineOf = (r: StageRow) => r.pipelineName?.trim() || "Ungrouped";
+
+  // Fill every still-unmapped stage in scope with its name-based suggestion.
+  // Never overwrites an existing mapping — it is a first pass, not an authority.
+  const autoMap = (pipeline?: string) =>
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.canonicalStage) return r;
+        if (pipeline && pipelineOf(r) !== pipeline) return r;
+        const s = suggestCanonical(r.name);
+        return s ? { ...r, canonicalStage: s } : r;
+      }),
+    );
+
+  // Mark a whole pipeline unused in one click — the pipeline-level control most
+  // sub-accounts need, since they carry several pipelines unrelated to the ad
+  // funnel that would otherwise be 12 "not used" dropdowns each.
+  const ignorePipeline = (pipeline: string) => {
+    setRows((prev) =>
+      prev.map((r) =>
+        pipelineOf(r) === pipeline ? { ...r, canonicalStage: null } : r,
+      ),
+    );
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.delete(pipeline);
+      return next;
+    });
+  };
+
+  const autoMappable = rows.filter(
+    (r) => !r.canonicalStage && suggestCanonical(r.name),
+  ).length;
+
   return (
     <Card
       step={2}
@@ -519,102 +599,148 @@ function StageStep({
 
       {rows.length > 0 && (
         <>
-          <p className="mt-3 text-[11px]" style={{ color: "var(--text-muted)" }}>
-            {rows.length} stages across {groups.length} pipeline
-            {groups.length === 1 ? "" : "s"} · {totalMapped} mapped
-          </p>
-          <div className="mt-3 flex flex-col gap-5">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+              {rows.length} stages across {groups.length} pipeline
+              {groups.length === 1 ? "" : "s"} · {totalMapped} mapped
+            </p>
+            {autoMappable > 0 && (
+              <button
+                onClick={() => autoMap()}
+                className="rounded-[8px] border px-2.5 py-1 text-[12px] font-medium"
+                style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+              >
+                ✨ Auto-map {autoMappable} by name
+              </button>
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-col gap-2.5">
             {groups.map((group) => {
-              const gMapped = group.stages.filter(
-                (s) => s.canonicalStage,
+              const gMapped = group.stages.filter((s) => s.canonicalStage).length;
+              const total = group.stages.length;
+              const full = gMapped === total;
+              const none = gMapped === 0;
+              const open = expanded.has(group.pipeline);
+              const gAutoMappable = group.stages.filter(
+                (s) => !s.canonicalStage && suggestCanonical(s.name),
               ).length;
-              const full = gMapped === group.stages.length;
               return (
-                <div key={group.pipeline}>
-                  <div
-                    className="flex items-center justify-between border-b pb-1.5"
-                    style={{ borderColor: "var(--border)" }}
-                  >
-                    <span
-                      className="truncate text-[12px] font-semibold uppercase tracking-wide"
-                      style={{ color: "var(--text-secondary)" }}
+                <div
+                  key={group.pipeline}
+                  className="rounded-[10px] border"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    <button
+                      onClick={() => toggle(group.pipeline)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
-                      {group.pipeline}
-                    </span>
-                    <span
-                      className="shrink-0 pl-2 text-[11px] tabular-nums"
-                      style={{
-                        color: full
-                          ? "var(--status-good)"
-                          : "var(--text-muted)",
-                      }}
-                    >
-                      {gMapped}/{group.stages.length} mapped
-                    </span>
-                  </div>
-                  <div className="mt-2 flex flex-col gap-1">
-                    {group.stages.map((row) => (
-                      <div
-                        key={row.id}
-                        className="flex flex-wrap items-center gap-2 rounded-[8px] px-2 py-1.5"
+                      <span
+                        className="text-[10px] transition-transform"
                         style={{
-                          background: row.canonicalStage
-                            ? "transparent"
-                            : "color-mix(in srgb, var(--status-warning) 7%, transparent)",
+                          color: "var(--text-muted)",
+                          transform: open ? "rotate(90deg)" : "none",
                         }}
+                        aria-hidden="true"
                       >
-                        <div className="min-w-0 flex-1">
-                          <div
-                            className="truncate text-[13px]"
-                            style={{ color: "var(--text-primary)" }}
-                          >
-                            {row.name ?? (
-                              <em style={{ color: "var(--text-muted)" }}>
-                                Unnamed stage
-                              </em>
-                            )}
-                            {row.discoveredFromWebhook && (
-                              <span
-                                className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
-                                style={{
-                                  background:
-                                    "color-mix(in srgb, var(--status-warning) 22%, transparent)",
-                                  color: "var(--text-secondary)",
-                                }}
-                              >
-                                seen in webhook
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <select
-                          value={row.canonicalStage ?? ""}
-                          onChange={(e) =>
-                            setRows((prev) =>
-                              prev.map((r) =>
-                                r.id === row.id
-                                  ? {
-                                      ...r,
-                                      canonicalStage: (e.target.value ||
-                                        null) as CanonicalStage | null,
-                                    }
-                                  : r,
-                              ),
-                            )
-                          }
-                          className="min-w-[150px] rounded-[8px] border px-2 py-1.5 text-[13px]"
-                          style={inputStyle}
+                        ▶
+                      </span>
+                      <span
+                        className="truncate text-[12px] font-semibold uppercase tracking-wide"
+                        style={{ color: "var(--text-secondary)" }}
+                        title={group.pipeline}
+                      >
+                        {group.pipeline}
+                      </span>
+                      <StageBadge full={full} none={none} mapped={gMapped} total={total} />
+                    </button>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {gAutoMappable > 0 && (
+                        <button
+                          onClick={() => autoMap(group.pipeline)}
+                          className="rounded-[6px] px-2 py-1 text-[11px] font-medium"
+                          style={{
+                            color: "var(--accent)",
+                            background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+                          }}
                         >
-                          <option value="">— not used —</option>
-                          {CANONICAL_STAGES.map((s) => (
-                            <option key={s} value={s}>
-                              {STAGE_LABELS[s]}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ))}
+                          Auto-map
+                        </button>
+                      )}
+                      {!none && (
+                        <button
+                          onClick={() => ignorePipeline(group.pipeline)}
+                          className="rounded-[6px] px-2 py-1 text-[11px] font-medium"
+                          style={{ color: "var(--text-muted)", background: "var(--surface-2)" }}
+                        >
+                          Ignore
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {open && (
+                    <div
+                      className="flex flex-col gap-1 border-t px-3 py-2"
+                      style={{ borderColor: "var(--border)" }}
+                    >
+                      {group.stages.map((row) => (
+                        <div
+                          key={row.id}
+                          className="flex flex-wrap items-center gap-2 rounded-[8px] px-2 py-1.5"
+                          style={{
+                            background: row.canonicalStage
+                              ? "transparent"
+                              : "color-mix(in srgb, var(--status-warning) 7%, transparent)",
+                          }}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div
+                              className="truncate text-[13px]"
+                              style={{ color: "var(--text-primary)" }}
+                            >
+                              {row.name ?? (
+                                <em style={{ color: "var(--text-muted)" }}>
+                                  Unnamed stage
+                                </em>
+                              )}
+                              {row.discoveredFromWebhook && (
+                                <span
+                                  className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                  style={{
+                                    background:
+                                      "color-mix(in srgb, var(--status-warning) 22%, transparent)",
+                                    color: "var(--text-secondary)",
+                                  }}
+                                >
+                                  seen in webhook
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <select
+                            value={row.canonicalStage ?? ""}
+                            onChange={(e) =>
+                              setCanonical(
+                                row.id,
+                                (e.target.value || null) as CanonicalStage | null,
+                              )
+                            }
+                            className="min-w-[150px] rounded-[8px] border px-2 py-1.5 text-[13px]"
+                            style={inputStyle}
+                          >
+                            <option value="">— not used —</option>
+                            {CANONICAL_STAGES.map((s) => (
+                              <option key={s} value={s}>
+                                {STAGE_LABELS[s]}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -640,6 +766,33 @@ function StageStep({
 
       {msg && <Result ok={msg.ok}>{msg.msg}</Result>}
     </Card>
+  );
+}
+
+/** Per-pipeline status pill: fully mapped ✓ / partial N∕T / not used. */
+function StageBadge({
+  full,
+  none,
+  mapped,
+  total,
+}: {
+  full: boolean;
+  none: boolean;
+  mapped: number;
+  total: number;
+}) {
+  const { text, color } = full
+    ? { text: "✓ mapped", color: "var(--status-good)" }
+    : none
+      ? { text: "not used", color: "var(--text-muted)" }
+      : { text: `${mapped}/${total}`, color: "var(--status-warning)" };
+  return (
+    <span
+      className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums"
+      style={{ color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}
+    >
+      {text}
+    </span>
   );
 }
 

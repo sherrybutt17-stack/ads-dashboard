@@ -137,10 +137,10 @@ export default async function ClientDashboard({
             <div className="min-w-0">
               <Link
                 href="/"
-                className="text-[11px] font-medium tracking-wide transition-colors hover:underline"
+                className="inline-flex items-center gap-1 text-[11px] font-medium tracking-wide transition-colors hover:underline"
                 style={{ color: "var(--text-muted)" }}
               >
-                Clients
+                <span aria-hidden="true">←</span> All clients
               </Link>
               <h1
                 className="truncate text-[17px] leading-tight font-semibold"
