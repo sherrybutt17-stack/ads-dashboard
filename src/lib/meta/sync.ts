@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clients,
@@ -42,6 +42,16 @@ export interface SyncOptions {
   until?: string;
   /** Also refresh cached period-reach rows. Skipped on fast intraday syncs. */
   includeReach?: boolean;
+  /**
+   * This is a FULL trailing-window reconciliation, so stamp
+   * `clients.lastReconciledAt` on success.
+   *
+   * Set only by the cron routes. The intraday stale-while-revalidate path calls
+   * this same function with `since = until = today`, and if that also counted as
+   * a reconcile, a dashboard someone keeps open would look permanently up to
+   * date while never being trued up against Meta's 28-day restatements.
+   */
+  isReconcile?: boolean;
 }
 
 /**
@@ -90,16 +100,22 @@ export async function syncClientMetrics(
         .where(eq(metaAdAccounts.id, account.id));
     }
 
+    // Stamped only on success — a failed run must never look reconciled, or the
+    // overdue gate would skip the client until tomorrow.
+    const finishedAt = new Date();
     await db
       .update(clients)
-      .set({ lastSyncedAt: new Date() })
+      .set({
+        lastSyncedAt: finishedAt,
+        ...(opts.isReconcile ? { lastMetaReconciledAt: finishedAt } : {}),
+      })
       .where(eq(clients.id, client.id));
 
     await db
       .update(syncRuns)
       .set({
         status: "success",
-        finishedAt: new Date(),
+        finishedAt,
         rowsWritten: written,
         meta: { since, until, accounts: accounts.length },
       })
@@ -337,27 +353,29 @@ function hashToInt(s: string): number {
 }
 
 /**
- * Which clients are due for their nightly reconciliation?
+ * Mark abandoned `sync_runs` rows as failed.
  *
- * Meta buckets days in the ad account's timezone, so "just after midnight"
- * differs per client. We run the cron hourly and each run picks up only the
- * clients whose local hour matches — a single global 11:59pm run would cut some
- * clients' days short and start others' before they began.
+ * A run can only end three ways: success, a caught error, or the process being
+ * killed. The third writes no terminal status — `syncClientMetrics` updates the
+ * row inside `try`/`catch`, and a hard timeout at the route's `maxDuration` runs
+ * neither branch. The row then sits in `running` forever, and the health
+ * checklist reads a stale "in progress" instead of the failure it was.
+ *
+ * Nothing can legitimately outlive the route's own 300s ceiling, so anything
+ * older than this cutoff was killed. Called at the top of each cron run.
  */
-export function isDueForNightlySync(
-  client: Client,
-  targetHour = 2,
-  now: Date = new Date(),
-): boolean {
-  // `% 24`: some ICU builds format midnight as "24" rather than "0", which would
-  // make targetHour=0 (midnight) never match.
-  const localHour =
-    Number(
-      new Intl.DateTimeFormat("en-US", {
-        timeZone: client.timezone,
-        hour: "numeric",
-        hour12: false,
-      }).format(now),
-    ) % 24;
-  return localHour === targetHour;
+export async function reapAbandonedSyncRuns(
+  olderThanMinutes = 30,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000);
+  const reaped = await db
+    .update(syncRuns)
+    .set({
+      status: "failed",
+      finishedAt: new Date(),
+      error: `abandoned — no terminal status recorded within ${olderThanMinutes}m (process killed mid-run)`,
+    })
+    .where(and(eq(syncRuns.status, "running"), lt(syncRuns.startedAt, cutoff)))
+    .returning({ id: syncRuns.id });
+  return reaped.length;
 }

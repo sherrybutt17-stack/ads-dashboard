@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { clients } from "@/db/schema";
-import { isDueForNightlySync } from "@/lib/meta/sync";
+import { reapAbandonedSyncRuns } from "@/lib/meta/sync";
 import {
   syncClientGoogleMetrics,
   GOOGLE_RECONCILE_DAYS,
@@ -10,20 +10,26 @@ import {
 import { activeGoogleAccounts } from "@/lib/google/accounts";
 import { isGoogleConfigured } from "@/lib/google/oauth";
 import { trailingWindowInclusive } from "@/lib/dates";
+import { isReconcileOverdue, DEFAULT_RECONCILE_HOUR } from "@/lib/reconcile";
 import { safeEqual } from "@/lib/crypto";
 
 /**
  * Nightly Google Ads reconciliation — the direct mirror of the Meta cron.
  *
- * Runs hourly; each invocation processes only clients whose local time has just
- * reached the target hour (days are bucketed in the ad account's timezone).
- * Reuses `isDueForNightlySync` from the Meta module so both platforms share the
- * same per-timezone scheduling.
+ * Safe at any cadence: each client is picked up only once its local reconcile
+ * hour has passed without a Google reconcile since. Tracks its own marker
+ * (`lastGoogleReconciledAt`), separate from Meta's, so the two crons cannot mark
+ * each other's work done.
+ *
+ * Query params: `?force=1` ignores the gate, `?hour=N` overrides the local hour.
  */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+/** See the Meta cron — headroom to respond rather than be killed mid-loop. */
+const DISPATCH_BUDGET_MS = 240_000;
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") ?? "";
@@ -37,13 +43,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: "google not configured" });
   }
 
+  const startedAt = Date.now();
   const force = req.nextUrl.searchParams.get("force") === "1";
-  // See the Meta cron: the 2am per-timezone gate is only for an hourly (Pro)
-  // schedule. On the Hobby daily run it just skips clients whose local hour
-  // isn't the target. Default: reconcile every active client each daily run;
-  // ?hourly=1 restores the per-timezone gate for a Pro hourly cron.
-  const hourly = req.nextUrl.searchParams.get("hourly") === "1";
-  const targetHour = Number(req.nextUrl.searchParams.get("hour") ?? 2);
+  // See the Meta cron: Number(null) is 0, so an absent param must not be parsed.
+  const hourRaw = req.nextUrl.searchParams.get("hour");
+  const hourParam = Number(hourRaw ?? NaN);
+  const targetHour =
+    Number.isInteger(hourParam) && hourParam >= 0 && hourParam <= 23
+      ? hourParam
+      : DEFAULT_RECONCILE_HOUR;
+
+  const reaped = await reapAbandonedSyncRuns();
 
   const active = await db
     .select()
@@ -52,18 +62,30 @@ export async function GET(req: NextRequest) {
 
   const results: Array<{
     slug: string;
-    status: "synced" | "skipped" | "failed";
+    status: "synced" | "skipped" | "deferred" | "failed";
     rows?: number;
     error?: string;
   }> = [];
 
   for (const client of active) {
+    if (Date.now() - startedAt > DISPATCH_BUDGET_MS) {
+      results.push({ slug: client.slug, status: "deferred" });
+      continue;
+    }
+
     const accounts = await activeGoogleAccounts(client.id);
     if (accounts.length === 0) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
     }
-    if (!force && hourly && !isDueForNightlySync(client, targetHour)) {
+    if (
+      !force &&
+      !isReconcileOverdue(
+        client.timezone,
+        client.lastGoogleReconciledAt,
+        targetHour,
+      )
+    ) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
     }
@@ -73,6 +95,7 @@ export async function GET(req: NextRequest) {
       const { rowsWritten } = await syncClientGoogleMetrics(client, {
         since: window.startKey,
         until: window.endKey,
+        isReconcile: true,
       });
       results.push({ slug: client.slug, status: "synced", rows: rowsWritten });
     } catch (err) {
@@ -84,5 +107,13 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, results });
+  const deferred = results.filter((r) => r.status === "deferred").length;
+  return NextResponse.json({
+    ok: true,
+    targetHour,
+    reaped,
+    deferred,
+    elapsedMs: Date.now() - startedAt,
+    results,
+  });
 }

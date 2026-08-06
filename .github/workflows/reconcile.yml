@@ -1,0 +1,75 @@
+name: Nightly reconcile
+
+# Trues the dashboard up against Ads Manager as Meta and Google restate spend
+# and conversions over the following ~28 days.
+#
+# Why this lives here and not only in vercel.json: clients are NOT all in one
+# timezone, and each one's day closes at a different instant (both platforms
+# bucket days in the ad account's timezone). Vercel's Hobby tier permits only one
+# cron run per day, which cannot land near every client's local reconcile hour.
+#
+# Cadence is deliberately loose. The endpoints gate each client on "has its local
+# reconcile hour passed without a reconcile since" rather than "is it that hour
+# right now", so a late or skipped run costs nothing but latency — the client is
+# simply still overdue and gets picked up next time. That is what makes a
+# best-effort free scheduler safe here, and what lets this coexist with the daily
+# Vercel cron: whichever fires first does the work, the other finds nothing to do.
+#
+# Setup: add CRON_SECRET under Settings → Secrets and variables → Actions, matching
+# the value in Vercel's environment variables.
+
+on:
+  schedule:
+    # Every 3 hours (UTC). Each client is reconciled within 3h of its local 3am.
+    - cron: "0 */3 * * *"
+  workflow_dispatch: # manual run from the Actions tab
+
+# Never let two reconciles overlap; a slow run should delay the next, not race it.
+concurrency:
+  group: reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_URL: https://ads-dashboard-shaheer4.vercel.app
+    steps:
+      - name: Check secret is configured
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Reconcile Meta
+        run: |
+          # -f fails the step on any HTTP error, so a broken pipe is loud rather
+          # than a green tick over a 401.
+          curl -fsS --max-time 300 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/cron/meta-sync" | tee /tmp/meta.json
+          echo
+
+      - name: Reconcile Google
+        run: |
+          # Returns ok with a "google not configured" note until Google Ads is
+          # wired up, so this is a no-op rather than a failure until then.
+          curl -fsS --max-time 300 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/cron/google-sync" | tee /tmp/google.json
+          echo
+
+      - name: Flag deferred clients
+        run: |
+          # A non-zero "deferred" means the run hit its dispatch budget and did
+          # not reach every overdue client. Harmless once (the next run picks
+          # them up) but persistent deferrals mean the client count has outgrown
+          # a single invocation.
+          for f in /tmp/meta.json /tmp/google.json; do
+            n=$(python3 -c "import json,sys; print(json.load(open('$f')).get('deferred', 0))" 2>/dev/null || echo 0)
+            if [ "$n" != "0" ]; then
+              echo "::warning::$f reported $n deferred client(s) — dispatch budget reached."
+            fi
+          done

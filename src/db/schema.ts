@@ -201,6 +201,29 @@ export const clients = pgTable(
 
     // --- Liveness markers, powering the health checklist ---
     lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    /**
+     * Last FULL trailing-window reconciliation per platform, as opposed to an
+     * intraday current-day refresh.
+     *
+     * Deliberately separate from `lastSyncedAt`, which cannot serve this
+     * purpose: the stale-while-revalidate path on dashboard load calls the same
+     * `syncClientMetrics` with `since = until = today`, writing the same
+     * `sync_runs` kind and the same `lastSyncedAt`. Without a dedicated column
+     * a client viewed all day would look permanently "synced" while never
+     * actually being reconciled against the platform's restatements.
+     *
+     * Also deliberately one column PER PLATFORM. Meta and Google reconcile on
+     * separate crons; a shared column would let whichever ran first mark the
+     * client done and make the other skip it permanently.
+     *
+     * NULL means never reconciled, which correctly reads as overdue.
+     */
+    lastMetaReconciledAt: timestamp("last_meta_reconciled_at", {
+      withTimezone: true,
+    }),
+    lastGoogleReconciledAt: timestamp("last_google_reconciled_at", {
+      withTimezone: true,
+    }),
     /** Proves the webhook pipe has ever actually worked. */
     firstWebhookAt: timestamp("first_webhook_at", { withTimezone: true }),
     lastWebhookAt: timestamp("last_webhook_at", { withTimezone: true }),

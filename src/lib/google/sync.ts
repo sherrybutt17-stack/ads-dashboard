@@ -1,6 +1,7 @@
 import { eq, max, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  clients,
   googleAdAccounts,
   googleDailyMetrics,
   syncRuns,
@@ -16,7 +17,9 @@ import { todayKey, trailingWindowInclusive } from "@/lib/dates";
  * One difference worth noting: Google does NOT stamp `clients.lastSyncedAt` (that
  * marker belongs to Meta and drives the "Meta data fresh" health check). Google
  * freshness lives on `googleAdAccounts.lastSyncedAt` instead, so the two
- * platforms' liveness never cross-contaminate.
+ * platforms' liveness never cross-contaminate. The one `clients` column Google
+ * does write is `lastGoogleReconciledAt`, its own cron scheduling marker — again
+ * separate from Meta's, for the same reason.
  */
 
 /** Trailing window each nightly run re-pulls. Google restates conversions for
@@ -29,6 +32,13 @@ export const GOOGLE_STALE_AFTER_MS = 15 * 60 * 1000;
 export interface GoogleSyncOptions {
   since?: string;
   until?: string;
+  /**
+   * A FULL trailing-window reconciliation — stamp `clients.lastGoogleReconciledAt`
+   * on success. Set only by the cron; the intraday refresh below must not, or a
+   * client viewed all day would never be trued up. Separate from the Meta marker
+   * so the two crons cannot mark each other's work done.
+   */
+  isReconcile?: boolean;
 }
 
 export async function syncClientGoogleMetrics(
@@ -60,11 +70,20 @@ export async function syncClientGoogleMetrics(
         .where(eq(googleAdAccounts.id, account.id));
     }
 
+    // Stamped only on success — a failed run must never look reconciled.
+    const finishedAt = new Date();
+    if (opts.isReconcile) {
+      await db
+        .update(clients)
+        .set({ lastGoogleReconciledAt: finishedAt })
+        .where(eq(clients.id, client.id));
+    }
+
     await db
       .update(syncRuns)
       .set({
         status: "success",
-        finishedAt: new Date(),
+        finishedAt,
         rowsWritten: written,
         meta: { since, until, accounts: accounts.length },
       })

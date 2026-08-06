@@ -42,6 +42,38 @@ export function dayEndUtc(dateKey: string, tz: string): Date {
   return new Date(new TZDate(y, m - 1, d + 1, 0, 0, 0, 0, tz).getTime());
 }
 
+/** `hour:00` local time on a `YYYY-MM-DD` in `tz`, as a UTC instant. */
+export function localHourUtc(dateKey: string, hour: number, tz: string): Date {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(new TZDate(y, m - 1, d, hour, 0, 0, 0, tz).getTime());
+}
+
+/**
+ * The most recent moment local time in `tz` struck `hour:00`, at or before `now`.
+ *
+ * This is what lets scheduled work be gated on "has it happened since the
+ * client's local 3am" rather than "is it exactly 3am for them right now". The
+ * former survives a scheduler that fires late or skips a run; the latter
+ * silently drops that client for the day.
+ *
+ * DST: on a spring-forward day the target hour may not exist locally (US clocks
+ * jump 2am → 3am). TZDate normalises forward, so a boundary still resolves —
+ * but prefer an hour that always exists (3 rather than 2) so the boundary lands
+ * where you expect.
+ */
+export function lastLocalHourBoundary(
+  hour: number,
+  tz: string,
+  now: Date = new Date(),
+): Date {
+  const today = localHourUtc(toDateKey(now, tz), hour, tz);
+  if (today.getTime() <= now.getTime()) return today;
+  // Local time has not reached the boundary yet today, so the most recent one
+  // was yesterday.
+  const yesterday = format(subDays(new TZDate(now, tz), 1), "yyyy-MM-dd");
+  return localHourUtc(yesterday, hour, tz);
+}
+
 export interface DateWindow {
   /** Inclusive first day, `YYYY-MM-DD` in client tz. */
   startKey: string;

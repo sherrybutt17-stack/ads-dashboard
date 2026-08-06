@@ -148,17 +148,64 @@ localhost.
    per-client webhook URL.
 4. Set `DASHBOARD_PASSWORD`. **Without it the dashboard is publicly readable.**
 
-### Cron
+### Cron — the nightly reconcile
 
-`vercel.json` schedules `/api/cron/meta-sync` **hourly**. Each run only
-processes clients whose local time has just reached 02:00, because Meta buckets
-days in the ad account's timezone — one global run cannot be correct across
-regions.
+Both platforms restate spend and conversions for up to ~28 days as attribution
+windows fill, so each night re-pulls that whole trailing window and upserts.
+That is what keeps an arbitrary date range matching Ads Manager instead of
+drifting.
 
-> ⚠️ **Vercel Hobby allows only one cron run per day.** On Hobby, either change
-> the schedule to a fixed hour that is ~02:00 for your clients' shared timezone,
-> or call the endpoint from an external scheduler with
-> `?force=1` and an `Authorization: Bearer $CRON_SECRET` header.
+Clients are **not** all in one timezone, and both Meta and Google bucket days in
+the ad account's timezone, so each client's day closes at a different instant.
+The endpoints therefore gate each client on:
+
+> *has this client's local reconcile hour (default **03:00**) passed without a
+> reconcile since?*
+
+— rather than "is it exactly 3am for them right now". This matters more than it
+looks:
+
+- It is **safe at any cadence**, so a best-effort free scheduler is fine.
+- A **late or skipped run costs nothing but latency** — the client is still
+  overdue and gets picked up next time. An exact-hour match would silently drop
+  every client at that offset for the night.
+- It is **idempotent**, so multiple triggers can coexist without double work.
+
+Hour 3 rather than 2 because local 2am does not exist on spring-forward day in
+the US, EU or Australia.
+
+**Two triggers, deliberately:**
+
+| Trigger | Cadence | Role |
+|---|---|---|
+| `.github/workflows/reconcile.yml` | every 3 hours | Primary. Each client reconciled within 3h of its local 3am. |
+| `vercel.json` crons | once daily | Backstop. If the GitHub trigger breaks, you degrade to daily rather than to nothing. |
+
+Whichever fires first does the work; the other finds nothing to do.
+
+**To enable the GitHub trigger:** add `CRON_SECRET` under
+*Settings → Secrets and variables → Actions*, matching the value in Vercel's
+environment variables. Then run it once manually from the Actions tab to confirm.
+
+> ⚠️ GitHub disables scheduled workflows after **60 days of no repo activity**
+> (it emails you first). The daily Vercel cron is the safety net if that happens.
+
+**Manual true-up**, ignoring the overdue gate entirely:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  "https://<your-app>.vercel.app/api/cron/meta-sync?force=1"
+```
+
+`?hour=N` overrides the local reconcile hour. The response reports `targetHour`,
+how many abandoned `sync_runs` rows were cleared (`reaped`), and per-client
+`synced` / `skipped` / `deferred` / `failed`.
+
+**`deferred` is the one to watch.** A run stops dispatching new clients at 240s
+to leave headroom to respond, and reports the rest as deferred rather than being
+killed mid-loop with no record. One-off deferrals are harmless — the next run
+picks them up. Persistent ones mean the client count has outgrown a single
+invocation, and the reconcile should move to a queue or a Pro plan.
 
 ---
 

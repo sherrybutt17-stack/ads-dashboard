@@ -4,11 +4,12 @@ import { db } from "@/db";
 import { clients } from "@/db/schema";
 import {
   syncClientMetrics,
-  isDueForNightlySync,
+  reapAbandonedSyncRuns,
   RECONCILE_DAYS,
 } from "@/lib/meta/sync";
 import { activeAdAccounts } from "@/lib/meta/accounts";
 import { trailingWindowInclusive } from "@/lib/dates";
+import { isReconcileOverdue, DEFAULT_RECONCILE_HOUR } from "@/lib/reconcile";
 import { safeEqual } from "@/lib/crypto";
 
 /**
@@ -18,19 +19,28 @@ import { safeEqual } from "@/lib/crypto";
  * agreement with Ads Manager as Meta restates spend and conversions over the
  * following weeks.
  *
- * Intended to run HOURLY. Each invocation only processes clients whose local
- * time has just reached the target hour, because Meta buckets days in the ad
- * account's timezone — a single global run cannot be correct for clients in
- * different regions.
+ * Safe to call at ANY cadence. Each client is picked up only once its local
+ * reconcile hour has passed without a reconcile since (see `@/lib/reconcile`),
+ * so this is idempotent and several triggers can coexist: a frequent external
+ * schedule for timeliness, plus Vercel's once-daily cron as a backstop. Whichever
+ * fires first does the work; the other finds nothing to do.
  *
- * ⚠️ Vercel's Hobby tier permits one cron run per day. On Hobby, either pin the
- * schedule to an hour that is ~02:00 for all clients, or pass `?force=1` from
- * an external scheduler.
+ * Query params:
+ *   ?force=1  — ignore the overdue gate and reconcile every active client.
+ *   ?hour=N   — override the local reconcile hour (default 3).
  */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+/**
+ * Stop dispatching new clients past this point, leaving headroom to return a
+ * response. Clients not reached stay overdue and are picked up by the next run —
+ * an explicit, self-correcting deferral rather than a silent mid-loop
+ * truncation at `maxDuration`.
+ */
+const DISPATCH_BUDGET_MS = 240_000;
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") ?? "";
@@ -42,16 +52,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
+  const startedAt = Date.now();
   const force = req.nextUrl.searchParams.get("force") === "1";
-  // The per-timezone 2am gate is only meaningful on an HOURLY schedule (Vercel
-  // Pro), where each run must pick out the clients whose local ~2am just struck.
-  // On the Hobby DAILY schedule there is one run, so gating by hour skips every
-  // client whose local hour isn't the target — which is exactly how GG (Pacific)
-  // went weeks with no reconciliation while the cron fired at 08:00 UTC = ~1am
-  // Pacific. Default now: a daily run reconciles every active client. Opt back
-  // into the hourly behaviour with ?hourly=1 when moving to a Pro hourly cron.
-  const hourly = req.nextUrl.searchParams.get("hourly") === "1";
-  const targetHour = Number(req.nextUrl.searchParams.get("hour") ?? 2);
+  // `?? NaN` matters: Number(null) is 0, and 0 is a valid hour, so an ABSENT
+  // param would silently override the default with midnight.
+  const hourRaw = req.nextUrl.searchParams.get("hour");
+  const hourParam = Number(hourRaw ?? NaN);
+  const targetHour =
+    Number.isInteger(hourParam) && hourParam >= 0 && hourParam <= 23
+      ? hourParam
+      : DEFAULT_RECONCILE_HOUR;
+
+  // Clear rows left behind by a previously killed run, so "running" always means
+  // running and the health checklist stays honest.
+  const reaped = await reapAbandonedSyncRuns();
 
   const active = await db
     .select()
@@ -60,18 +74,27 @@ export async function GET(req: NextRequest) {
 
   const results: Array<{
     slug: string;
-    status: "synced" | "skipped" | "failed";
+    status: "synced" | "skipped" | "deferred" | "failed";
     rows?: number;
     error?: string;
   }> = [];
 
   for (const client of active) {
+    if (Date.now() - startedAt > DISPATCH_BUDGET_MS) {
+      // Out of time. Say so rather than appearing to have covered everyone.
+      results.push({ slug: client.slug, status: "deferred" });
+      continue;
+    }
+
     const accounts = await activeAdAccounts(client.id);
     if (accounts.length === 0) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
     }
-    if (!force && hourly && !isDueForNightlySync(client, targetHour)) {
+    if (
+      !force &&
+      !isReconcileOverdue(client.timezone, client.lastMetaReconciledAt, targetHour)
+    ) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
     }
@@ -82,6 +105,7 @@ export async function GET(req: NextRequest) {
         since: window.startKey,
         until: window.endKey,
         includeReach: true,
+        isReconcile: true,
       });
       results.push({ slug: client.slug, status: "synced", rows: rowsWritten });
     } catch (err) {
@@ -94,5 +118,13 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, results });
+  const deferred = results.filter((r) => r.status === "deferred").length;
+  return NextResponse.json({
+    ok: true,
+    targetHour,
+    reaped,
+    deferred,
+    elapsedMs: Date.now() - startedAt,
+    results,
+  });
 }
