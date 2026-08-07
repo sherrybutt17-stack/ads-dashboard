@@ -19,19 +19,19 @@ name: Nightly reconcile
 # the value in Vercel's environment variables.
 
 on:
-  # ---------------------------------------------------------------------------
-  # TO ACTIVATE: add CRON_SECRET under Settings → Secrets and variables →
-  # Actions, then uncomment the two `schedule` lines below.
-  #
-  # Left disabled deliberately. Without the secret every scheduled run fails on
-  # the guard step, which is correct but emails a failure every 3 hours. The
-  # daily Vercel cron in vercel.json keeps reconciling in the meantime, so
-  # nothing is missed while this is off — it only costs timeliness.
-  # ---------------------------------------------------------------------------
-  # schedule:
-  #   # Every 3 hours (UTC). Each client is reconciled within 3h of its local 3am.
-  #   - cron: "0 */3 * * *"
-  workflow_dispatch: # manual run from the Actions tab — works today
+  schedule:
+    # Every 3 hours (UTC). Each client is reconciled within 3h of its local 3am.
+    #
+    # GitHub's scheduler is best-effort and drifts — observed up to an hour late
+    # on this repo. That is fine here and is the reason the endpoint gates on
+    # "reconciled since local 3am?" rather than "is it 3am now?": a late run
+    # still picks up every overdue client instead of silently skipping them.
+    #
+    # Requires the CRON_SECRET repo secret. Without it every run fails on the
+    # guard step below — correct, but noisy. Remove the secret and you should
+    # comment these two lines out again.
+    - cron: "0 */3 * * *"
+  workflow_dispatch: # manual run from the Actions tab
 
 # Never let two reconciles overlap; a slow run should delay the next, not race it.
 concurrency:
