@@ -178,14 +178,23 @@ the US, EU or Australia.
 
 | Trigger | Cadence | Role |
 |---|---|---|
-| `.github/workflows/reconcile.yml` | every 3 hours | Primary. Each client reconciled within 3h of its local 3am. |
-| `vercel.json` crons | once daily | Backstop. If the GitHub trigger breaks, you degrade to daily rather than to nothing. |
+| `vercel.json` crons | once daily | **Active now.** Reconciles every overdue client each run. |
+| `.github/workflows/reconcile.yml` | every 3 hours | **Currently disabled** — see below. Would reconcile each client within 3h of its local 3am. |
 
 Whichever fires first does the work; the other finds nothing to do.
 
-**To enable the GitHub trigger:** add `CRON_SECRET` under
-*Settings → Secrets and variables → Actions*, matching the value in Vercel's
-environment variables. Then run it once manually from the Actions tab to confirm.
+**To enable the GitHub trigger (two steps, in this order):**
+
+1. Add `CRON_SECRET` under *Settings → Secrets and variables → Actions*, matching
+   the value in Vercel's environment variables.
+2. Uncomment the two `schedule` lines in `.github/workflows/reconcile.yml`.
+
+Then run it once manually from the Actions tab to confirm.
+
+> The schedule is commented out on purpose. Without the secret, every run fails
+> on the guard step — correct, but it emails a failure every 3 hours. Order
+> matters: secret first, schedule second. Nothing is missed while it is off,
+> since the daily Vercel cron still reconciles; you only lose timeliness.
 
 > ⚠️ GitHub disables scheduled workflows after **60 days of no repo activity**
 > (it emails you first). The daily Vercel cron is the safety net if that happens.
