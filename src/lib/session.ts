@@ -6,14 +6,28 @@
  * Everything here uses only Web Crypto + `btoa`/`TextEncoder`, which exist in
  * both the edge (proxy) and node (auth route) runtimes.
  *
- * Token shape:  v3.<userId>.<role>.<slugsCsv>.<expiryMs>.<sig>
- *   sig = base64url(HMAC-SHA256(secret, "<userId>|<role>|<slugsCsv>|<expiryMs>"))
+ * Token shape:  v4.<userId>.<agencyId>.<role>.<slugsCsv>.<expiryMs>.<sig>
+ *   sig = base64url(HMAC-SHA256(secret,
+ *           "<userId>|<agencyId>|<role>|<slugsCsv>|<expiryMs>"))
  *
  * The payload is signed, not encrypted — it carries no secret, only identity and
  * scope, and tampering is rejected by the MAC. Because role/scope are baked into
  * the token, a change to a user's grants takes effect on their next login (or
  * when the token expires); server pages additionally re-check `users.status` on
  * every load, so a disabled account is bounced promptly.
+ *
+ * ── v3 → v4: the tenant joins the payload ────────────────────────────────
+ *
+ * `agencyId` is inside the MAC rather than read from the database per request,
+ * for the same reason role and slugs are: the edge proxy authorizes with no
+ * database call, and a tenant it has to look up is a tenant it will eventually
+ * be tempted to take from the URL.
+ *
+ * 🔴 v3 tokens are rejected outright rather than upgraded in place. A v3 token
+ * names no agency, and the only ways to give it one are to guess (wrong, and
+ * wrong in the direction of admitting someone to a tenant) or to read the
+ * database from the edge (which is the property being protected). Everyone
+ * re-logs in once. That is the whole cost, and it is paid a single time.
  */
 
 export const SESSION_COOKIE = "dash_auth";
@@ -21,11 +35,34 @@ export const SESSION_COOKIE = "dash_auth";
 /** 30 days, matching the cookie maxAge set by the auth route. */
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type SessionRole = "staff" | "client";
+/**
+ * Every role the token may carry.
+ *
+ * 🔴 A literal, not an import from `@/db/schema`. This module runs in the edge
+ * proxy, where pulling in Drizzle and the full schema is not an option — so the
+ * list is duplicated, and `session.test.ts` asserts it against `userRoleEnum`
+ * so the copy cannot drift from the database that authorises against it.
+ */
+export const SESSION_ROLES = ["staff", "superadmin", "agency", "client"] as const;
+
+export type SessionRole = (typeof SESSION_ROLES)[number];
+
+function isSessionRole(v: string): v is SessionRole {
+  return (SESSION_ROLES as readonly string[]).includes(v);
+}
 
 export interface SessionPayload {
   /** The user's uuid, or "shared" for the shared-password staff bootstrap. */
   userId: string;
+  /**
+   * The agency this session acts within.
+   *
+   * Present for every role, `superadmin` included — a superadmin still HAS a
+   * home agency, and crossing the boundary is a permission it exercises rather
+   * than a tenant it lacks. Empty string only for the shared-password
+   * bootstrap, which predates tenancy and is retired before sign-up opens.
+   */
+  agencyId: string;
   role: SessionRole;
   /** Client slugs a `client` user may access. Empty for staff (sees all). */
   slugs: string[];
@@ -67,14 +104,22 @@ function timingSafeEqual(a: string, b: string): boolean {
 export async function createSessionToken(
   payload: SessionPayload,
   now: number = Date.now(),
+  /**
+   * Lifetime override, for sessions that should not last a month.
+   *
+   * The first-run bootstrap uses it: that session has no database row behind
+   * it, so nothing can revoke it once minted — which makes its expiry the only
+   * control there is over how long it exists.
+   */
+  ttlMs: number = SESSION_TTL_MS,
 ): Promise<string> {
-  const exp = now + SESSION_TTL_MS;
+  const exp = now + ttlMs;
   const slugsCsv = payload.slugs.join(",");
   const sig = await hmac(
     authSecret(),
-    `${payload.userId}|${payload.role}|${slugsCsv}|${exp}`,
+    `${payload.userId}|${payload.agencyId}|${payload.role}|${slugsCsv}|${exp}`,
   );
-  return `v3.${payload.userId}.${payload.role}.${slugsCsv}.${exp}.${sig}`;
+  return `v4.${payload.userId}.${payload.agencyId}.${payload.role}.${slugsCsv}.${exp}.${sig}`;
 }
 
 /**
@@ -89,18 +134,23 @@ export async function verifySessionToken(
   if (!token || !secret) return null;
 
   const parts = token.split(".");
-  if (parts.length !== 6 || parts[0] !== "v3") return null;
-  const [, userId, role, slugsCsv, expStr, sig] = parts;
-  if (role !== "staff" && role !== "client") return null;
+  // A v3 token names no agency and cannot be given one here — see the header.
+  if (parts.length !== 7 || parts[0] !== "v4") return null;
+  const [, userId, agencyId, role, slugsCsv, expStr, sig] = parts;
+  if (!isSessionRole(role)) return null;
 
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp <= now) return null;
 
-  const expected = await hmac(secret, `${userId}|${role}|${slugsCsv}|${exp}`);
+  const expected = await hmac(
+    secret,
+    `${userId}|${agencyId}|${role}|${slugsCsv}|${exp}`,
+  );
   if (!timingSafeEqual(sig, expected)) return null;
 
   return {
     userId,
+    agencyId,
     role,
     slugs: slugsCsv ? slugsCsv.split(",") : [],
   };

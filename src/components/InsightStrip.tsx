@@ -15,7 +15,42 @@ const TONE: Record<Insight["tone"], { color: string; caret: string }> = {
 };
 
 export function InsightStrip({ insights }: { insights: Insight[] }) {
-  if (insights.length === 0) return null;
+  /*
+   * 🔴 An empty strip renders a REASON, not nothing.
+   *
+   * Two failures collapse into `return null`. First: with the section list now
+   * configurable, a reader who switches "What changed" on and sees no change at
+   * all files a bug — and the honest answer, that there was not enough volume to
+   * say anything, is genuinely useful.
+   *
+   * Second, and worse: `buildInsights` is gated on absolute counts (≥5 leads in
+   * both periods, ≥$250 spend for cost metrics) precisely because at low volume
+   * 3 leads → 5 leads is "+67%" and announcing that would be noise dressed as a
+   * headline. Vanishing silently makes "we are below the threshold where a
+   * comparison means anything" indistinguishable from "nothing changed" — which
+   * is exactly the kind of quiet, confident emptiness this product exists to
+   * replace.
+   */
+  if (insights.length === 0) {
+    return (
+      <section
+        className="rounded-[12px] border px-4 py-3 text-xs"
+        style={{
+          borderColor: "var(--border)",
+          background: "var(--surface-1)",
+          color: "var(--text-muted)",
+        }}
+        aria-label="What changed this period"
+      >
+        <span style={{ color: "var(--text-secondary)", fontWeight: 500 }}>
+          Not enough activity to compare periods.
+        </span>{" "}
+        Headlines appear once there are at least a handful of leads in both this
+        period and the one before it — below that, a percentage swing says more
+        about the small numbers than about the advertising.
+      </section>
+    );
+  }
 
   return (
     <section

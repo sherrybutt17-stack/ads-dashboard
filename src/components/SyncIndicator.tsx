@@ -65,12 +65,24 @@ export function SyncIndicator({ syncedAt }: { syncedAt: string | null }) {
 
   if (!syncedAt) {
     return (
-      <Shell dot="var(--text-muted)" pulse={false} label="Not synced yet" />
+      <Shell
+        dot="var(--text-muted)"
+        pulse={false}
+        label="Not synced yet"
+        short="No data"
+      />
     );
   }
   if (now === null) {
     // Pre-hydration placeholder — no time math, so no hydration mismatch.
-    return <Shell dot="var(--text-muted)" pulse={false} label="Synced" />;
+    return (
+      <Shell
+        dot="var(--text-muted)"
+        pulse={false}
+        label="Synced"
+        short="Synced"
+      />
+    );
   }
 
   const age = now - new Date(syncedAt).getTime();
@@ -82,30 +94,56 @@ export function SyncIndicator({ syncedAt }: { syncedAt: string | null }) {
       ? "var(--status-critical)"
       : "var(--status-warning)";
 
-  return <Shell dot={dot} pulse={fresh} label={`Synced ${ago(age)}`} />;
+  return (
+    <Shell
+      dot={dot}
+      pulse={fresh}
+      label={`Synced ${ago(age)}`}
+      short={ago(age)}
+    />
+  );
 }
 
+/**
+ * Visible at EVERY width. This was `hidden sm:inline-flex`, so the one element
+ * that says whether the numbers are current disappeared on precisely the device
+ * where someone glances at a dashboard for four seconds between appointments.
+ * "Are these numbers live?" is not a desktop-only question, and a stale figure
+ * read as current on a phone does the same damage as one read on a monitor.
+ *
+ * Below `sm:` it drops the word "Synced" and keeps the dot and the age — the
+ * information survives, only the prose is trimmed. The full phrasing stays in
+ * `title` and in the screen-reader text.
+ */
 function Shell({
   dot,
   pulse,
   label,
+  short,
 }: {
   dot: string;
   pulse: boolean;
   label: string;
+  short: string;
 }) {
   return (
     <span
-      className="hidden items-center gap-1.5 text-[12px] sm:inline-flex"
+      className="inline-flex items-center gap-1.5 text-[12px]"
       style={{ color: "var(--text-muted)" }}
       title={label}
     >
       <span
         aria-hidden="true"
-        className={`inline-block h-1.5 w-1.5 rounded-full${pulse ? " live-dot" : ""}`}
+        className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full${pulse ? " live-dot" : ""}`}
         style={{ background: dot }}
       />
-      {label}
+      <span className="sr-only">{label}</span>
+      <span aria-hidden="true" className="hidden sm:inline">
+        {label}
+      </span>
+      <span aria-hidden="true" className="tnum sm:hidden">
+        {short}
+      </span>
     </span>
   );
 }

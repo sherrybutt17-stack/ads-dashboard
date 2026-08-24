@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { LeadHeatmap as LeadHeatmapData } from "@/lib/metrics/queries";
+import { DataState, type DataStateProps } from "@/components/DataState";
 
 /**
  * When paid leads arrive — weekday × hour.
@@ -19,7 +20,12 @@ import type { LeadHeatmap as LeadHeatmapData } from "@/lib/metrics/queries";
 // Display Monday-first — a business week reads better than Sun-first.
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const HOUR_TICKS: Record<number, string> = { 0: "12a", 6: "6a", 12: "12p", 18: "6p" };
+const HOUR_TICKS: Record<number, string> = {
+  0: "12a",
+  6: "6a",
+  12: "12p",
+  18: "6p",
+};
 
 function hourLabel(h: number): string {
   const period = h < 12 ? "am" : "pm";
@@ -27,17 +33,51 @@ function hourLabel(h: number): string {
   return `${base}${period}`;
 }
 
+/**
+ * The validated sequential ramp, not the per-client accent.
+ *
+ * This built its scale from `var(--accent)`, which is derived per client — so
+ * the same lead volume rendered a different colour for every client, and the
+ * ramp inherited whatever contrast that hue happened to have. A brand colour is
+ * identity; a magnitude encoding has to be a *fixed* scale or the reader cannot
+ * carry any intuition between two dashboards, and the lightest step is not
+ * guaranteed to stay distinguishable from an empty cell.
+ *
+ * `--seq-*` is the palette designed for exactly this: single-hue, evenly
+ * stepped, and individually re-stepped for the dark ground.
+ */
+const SEQ = [
+  "var(--seq-250)", // the ramp's documented ordinal floor on light (2:1)
+  "var(--seq-300)",
+  "var(--seq-350)",
+  "var(--seq-400)",
+  "var(--seq-450)",
+  "var(--seq-500)",
+  "var(--seq-550)",
+  "var(--seq-600)",
+];
+
 function cellColor(n: number, max: number): string {
+  // Zero must stay visibly distinct from the faintest non-zero step, or "nobody
+  // came in at 3am" reads the same as "one person did".
   if (n <= 0 || max <= 0) return "var(--surface-2)";
-  // 14%→96% accent over the surface — a clean light→dark single-hue ramp.
-  const pct = 14 + Math.round((n / max) * 82);
-  return `color-mix(in srgb, var(--accent) ${pct}%, var(--surface-2))`;
+  const i = Math.min(SEQ.length - 1, Math.floor((n / max) * SEQ.length));
+  return SEQ[Math.max(0, i)];
 }
 
-export function LeadHeatmap({ data }: { data: LeadHeatmapData }) {
-  const [hover, setHover] = useState<{ d: number; h: number; n: number } | null>(
-    null,
-  );
+export function LeadHeatmap({
+  data,
+  emptyState,
+}: {
+  data: LeadHeatmapData;
+  /** Why the grid is blank, when the CRM pipe itself is the reason. */
+  emptyState?: DataStateProps | null;
+}) {
+  const [hover, setHover] = useState<{
+    d: number;
+    h: number;
+    n: number;
+  } | null>(null);
 
   // Peak cell, for the headline callout.
   let peak = { d: -1, h: -1, n: 0 };
@@ -50,7 +90,10 @@ export function LeadHeatmap({ data }: { data: LeadHeatmapData }) {
   return (
     <section className="card p-5">
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2
+          className="text-sm font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
           When leads arrive
         </h2>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -59,21 +102,34 @@ export function LeadHeatmap({ data }: { data: LeadHeatmapData }) {
       </div>
 
       {data.total === 0 ? (
-        <div
-          className="mt-4 rounded-[10px] border border-dashed p-6 text-center text-sm"
-          style={{ borderColor: "var(--border-strong)", color: "var(--text-muted)" }}
-        >
-          No paid leads arrived in this period.
+        // An empty grid is only allowed to mean "nobody came in" once we know
+        // the CRM is actually delivering. If it has never delivered, or has gone
+        // quiet, that is the fact worth reporting — not a tidy blank week.
+        <div className="mt-4">
+          <DataState
+            {...(emptyState ?? {
+              title: "No paid leads arrived in this period",
+              detail:
+                "The CRM is connected and sending events — this range genuinely had none.",
+              tone: "neutral" as const,
+            })}
+            size="compact"
+          />
         </div>
       ) : (
         <>
           {peak.n > 0 && (
-            <p className="mb-3 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+            <p
+              className="mb-3 text-[13px]"
+              style={{ color: "var(--text-secondary)" }}
+            >
               Busiest:{" "}
               <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
-                {DAY_LABELS[peak.d]} {hourLabel(peak.h)}–{hourLabel((peak.h + 1) % 24)}
+                {DAY_LABELS[peak.d]} {hourLabel(peak.h)}–
+                {hourLabel((peak.h + 1) % 24)}
               </span>{" "}
-              · <span className="tnum">{peak.n}</span> lead{peak.n === 1 ? "" : "s"}
+              · <span className="tnum">{peak.n}</span> lead
+              {peak.n === 1 ? "" : "s"}
             </p>
           )}
 
@@ -136,7 +192,10 @@ export function LeadHeatmap({ data }: { data: LeadHeatmapData }) {
 
           {/* Legend + live hover readout. */}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+            <div
+              className="flex items-center gap-1.5 text-[11px]"
+              style={{ color: "var(--text-muted)" }}
+            >
               <span>Less</span>
               {[0, 0.25, 0.5, 0.75, 1].map((t) => (
                 <span
@@ -147,11 +206,16 @@ export function LeadHeatmap({ data }: { data: LeadHeatmapData }) {
               ))}
               <span>More</span>
             </div>
-            <div className="text-xs tnum" style={{ color: "var(--text-secondary)", minHeight: 16 }}>
+            <div
+              className="text-xs tnum"
+              style={{ color: "var(--text-secondary)", minHeight: 16 }}
+            >
               {hover && (
                 <>
                   {DAY_LABELS[hover.d]} {hourLabel(hover.h)} ·{" "}
-                  <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                  <span
+                    style={{ color: "var(--text-primary)", fontWeight: 600 }}
+                  >
                     {hover.n}
                   </span>{" "}
                   lead{hover.n === 1 ? "" : "s"}

@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSessionUser, isStaff } from "@/lib/auth";
-import { listUsers } from "@/lib/users";
-import { listClients } from "@/lib/clients";
+import { getSessionUser, isAgencyOperator } from "@/lib/auth";
+import { listUsersForAgency } from "@/lib/users";
+import { assignableRoles } from "@/lib/roles";
+import { listClientsForSession } from "@/lib/clients";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UsersManager } from "@/components/UsersManager";
 
@@ -10,9 +11,12 @@ export const dynamic = "force-dynamic";
 
 export default async function UsersPage() {
   const session = await getSessionUser();
-  if (!isStaff(session)) redirect("/");
+  if (!isAgencyOperator(session)) redirect("/");
 
-  const [users, clientRows] = await Promise.all([listUsers(), listClients()]);
+  const [users, clientRows] = await Promise.all([
+    listUsersForAgency(session!.agencyId),
+    listClientsForSession(session),
+  ]);
 
   return (
     <div className="min-h-full">
@@ -26,7 +30,10 @@ export default async function UsersPage() {
             >
               ← Clients
             </Link>
-            <h1 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
+            <h1
+              className="text-lg font-semibold"
+              style={{ color: "var(--text-primary)" }}
+            >
               Users &amp; access
             </h1>
           </div>
@@ -36,6 +43,17 @@ export default async function UsersPage() {
 
       <main className="mx-auto max-w-[1100px] px-4 py-6 sm:px-6">
         <UsersManager
+          /*
+           * 🔴 The form's options come from the SAME rule the API enforces.
+           *
+           * They used to be hardcoded to `["client", "staff"]`, which for an
+           * agency operator meant the only non-client button was a role
+           * `assignableRoles` forbids — so it 403'd every time — and the
+           * `agency` role they ARE allowed to hand out could not be reached at
+           * all. A form that offers a button which always fails is worse than
+           * one that omits it.
+           */
+          assignable={assignableRoles(session!.role)}
           users={users.map((u) => ({
             id: u.id,
             email: u.email,

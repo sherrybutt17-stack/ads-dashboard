@@ -49,7 +49,10 @@ export async function GET(req: NextRequest) {
 
   // Vercel Cron sends the CRON_SECRET as a bearer token.
   if (!secret || !safeEqual(bearer, secret)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      { ok: false, error: "unauthorized" },
+      { status: 401 },
+    );
   }
 
   const startedAt = Date.now();
@@ -93,7 +96,11 @@ export async function GET(req: NextRequest) {
     }
     if (
       !force &&
-      !isReconcileOverdue(client.timezone, client.lastMetaReconciledAt, targetHour)
+      !isReconcileOverdue(
+        client.timezone,
+        client.lastMetaReconciledAt,
+        targetHour,
+      )
     ) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
@@ -106,6 +113,12 @@ export async function GET(req: NextRequest) {
         until: window.endKey,
         includeReach: true,
         isReconcile: true,
+        // Creative reporting and audience breakdowns ride the nightly
+        // reconciliation, not the intraday refresh: together they are a second
+        // insights pass, an ads listing and five segmented queries, and the
+        // on-load path has to stay cheap enough to fire on every page view.
+        includeAdLevel: true,
+        includeBreakdowns: true,
       });
       results.push({ slug: client.slug, status: "synced", rows: rowsWritten });
     } catch (err) {

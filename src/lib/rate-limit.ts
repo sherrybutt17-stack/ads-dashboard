@@ -47,9 +47,37 @@ export function rateLimit(
   return { ok: true, retryAfterMs: 0 };
 }
 
-/** Best-effort client IP from proxy headers, for use as a limiter key. */
+/**
+ * Best-effort client IP from proxy headers, for use as a limiter key.
+ *
+ * ── Why the header order is what it is ────────────────────────────────
+ *
+ * A limiter keyed on a value the caller controls is not a limiter — spoof a
+ * fresh IP per request and sign-up, sign-in and PDF rendering are all
+ * unthrottled. So the question is which of these headers an attacker can set.
+ *
+ * On Vercel, `x-forwarded-for` is safe, and this was checked rather than
+ * assumed: *"If you are trying to use Vercel behind a proxy, we currently
+ * overwrite the X-Forwarded-For header and do not forward external IPs. This
+ * restriction is in place to prevent IP spoofing."*
+ *
+ * `x-vercel-forwarded-for` is preferred anyway, for the one case their docs
+ * carve out: *"x-forwarded-for could be overwritten if you're using a proxy on
+ * top of Vercel."* Putting Cloudflare in front — the obvious move for
+ * client-owned vanity domains — is exactly that case, and it would silently
+ * hand the limiter a caller-supplied value. Vercel's own header cannot be
+ * reached that way.
+ *
+ * The fallback still takes the FIRST entry: where these headers are trustworthy
+ * they hold one address, and where a chain appears the leftmost is the original
+ * client. Neither is currently exploitable on this deployment.
+ */
 export function clientIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip")?.trim() || "unknown";
+  const first = (v: string | null) => v?.split(",")[0]?.trim() || null;
+  return (
+    first(req.headers.get("x-vercel-forwarded-for")) ??
+    first(req.headers.get("x-forwarded-for")) ??
+    first(req.headers.get("x-real-ip")) ??
+    "unknown"
+  );
 }

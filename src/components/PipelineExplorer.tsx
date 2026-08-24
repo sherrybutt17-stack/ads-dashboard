@@ -1,9 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { formatCurrency, formatNumber, formatPercent } from "@/lib/metrics/compute";
-import type { CanonicalStage } from "@/db/schema";
-import type { LeadRow } from "@/lib/metrics/queries";
+import {
+  formatCurrency,
+  formatNumber,
+  formatPercent,
+} from "@/lib/metrics/compute";
+import type { CanonicalStage } from "@/lib/stages";
+import type { LeadRow, PipelineStageCount } from "@/lib/metrics/queries";
 
 /**
  * The pipeline, made explorable across TWO dimensions:
@@ -31,9 +35,13 @@ const RAMP = [
   "var(--seq-550)",
 ];
 
-function stageColor(canonical: CanonicalStage | null, rampIndex: number): string {
+function stageColor(
+  canonical: CanonicalStage | null,
+  rampIndex: number,
+): string {
   if (canonical === "closed_won") return "var(--delta-good)";
-  if (canonical === "no_show" || canonical === "lost") return "var(--text-muted)";
+  if (canonical === "no_show" || canonical === "lost")
+    return "var(--text-muted)";
   return RAMP[Math.min(rampIndex, RAMP.length - 1)];
 }
 
@@ -53,12 +61,25 @@ function fmtDate(iso: string | null, tz: string): string {
 
 export function PipelineExplorer({
   leads,
+  distribution,
   currency,
   timezone,
   campaignColors,
   campaignNames,
 }: {
   leads: LeadRow[];
+  /**
+   * Exact per-stage counts, aggregated in SQL over every opportunity.
+   *
+   * The `leads` array is capped, so counting stages from it is only correct
+   * while the cap is not reached — and a client whose lead list exceeds it would
+   * silently read a smaller pipeline than they have, with proportionally wrong
+   * bars. That is the failure this dashboard exists to eliminate, so the
+   * unfiltered view is driven by the aggregate instead. Per-campaign views still
+   * derive from `leads` (the aggregate is not campaign-scoped) and the header
+   * says so when the two can differ.
+   */
+  distribution: { stages: PipelineStageCount[]; total: number };
   currency: string;
   /** The client account's timezone — dates are bucketed/displayed in it. */
   timezone: string;
@@ -74,7 +95,10 @@ export function PipelineExplorer({
   // Campaign groups from the leads themselves (all-time), largest first,
   // Unattributed always last.
   const campaigns = useMemo(() => {
-    const seen = new Map<string, { key: string; label: string; count: number }>();
+    const seen = new Map<
+      string,
+      { key: string; label: string; count: number }
+    >();
     for (const l of leads) {
       const key = l.campaignId || UNATTRIB;
       const label =
@@ -93,38 +117,87 @@ export function PipelineExplorer({
   }, [leads, campaignNames]);
 
   const inCampaign = useMemo(
-    () => (campaign === "all" ? leads : leads.filter((l) => (l.campaignId || UNATTRIB) === campaign)),
+    () =>
+      campaign === "all"
+        ? leads
+        : leads.filter((l) => (l.campaignId || UNATTRIB) === campaign),
     [leads, campaign],
   );
 
-  // Stage distribution for the selected campaign — "where are these leads".
+  /*
+   * Stage distribution.
+   *
+   * "All campaigns" uses the SQL aggregate, which is exact regardless of how
+   * many leads exist. A selected campaign has to be derived from `leads`,
+   * because the aggregate is not campaign-scoped — accurate while the lead list
+   * is complete, which `truncated` below reports on when it is not.
+   */
   const stages = useMemo(() => {
-    const seen = new Map<
-      string,
-      { name: string; canonical: CanonicalStage | null; ord: number; count: number }
-    >();
-    for (const l of inCampaign) {
-      const key = l.ghlStageName ?? "Unmapped";
-      const e = seen.get(key) ?? { name: key, canonical: l.canonicalStage, ord: l.displayOrder, count: 0 };
-      e.count++;
-      seen.set(key, e);
-    }
-    const list = [...seen.values()].sort((a, b) => a.ord - b.ord);
+    const list =
+      campaign === "all"
+        ? distribution.stages.map((s) => ({
+            name: s.ghlStageName ?? "Unmapped",
+            canonical: s.canonicalStage,
+            ord: s.displayOrder,
+            count: s.count,
+          }))
+        : (() => {
+            const seen = new Map<
+              string,
+              {
+                name: string;
+                canonical: CanonicalStage | null;
+                ord: number;
+                count: number;
+              }
+            >();
+            for (const l of inCampaign) {
+              const key = l.ghlStageName ?? "Unmapped";
+              const e = seen.get(key) ?? {
+                name: key,
+                canonical: l.canonicalStage,
+                ord: l.displayOrder,
+                count: 0,
+              };
+              e.count++;
+              seen.set(key, e);
+            }
+            return [...seen.values()];
+          })();
+
+    const sorted = [...list].sort((a, b) => a.ord - b.ord);
     let ramp = 0;
-    return list.map((s) => {
+    return sorted.map((s) => {
       const special =
-        s.canonical === "closed_won" || s.canonical === "no_show" || s.canonical === "lost";
+        s.canonical === "closed_won" ||
+        s.canonical === "no_show" ||
+        s.canonical === "lost";
       return { ...s, color: stageColor(s.canonical, special ? 0 : ramp++) };
     });
-  }, [inCampaign]);
+  }, [inCampaign, campaign, distribution]);
 
-  const colorByStage = useMemo(() => new Map(stages.map((s) => [s.name, s.color])), [stages]);
+  /** How many leads the bars describe — exact for "all", derived per campaign. */
+  const shownTotal =
+    campaign === "all" ? distribution.total : inCampaign.length;
+
+  /**
+   * The lead list is capped server-side. When it is short of the true total the
+   * drill-down is a sample, and saying so is the difference between a partial
+   * list and a wrong one.
+   */
+  const truncated = distribution.total > leads.length;
+
+  const colorByStage = useMemo(
+    () => new Map(stages.map((s) => [s.name, s.color])),
+    [stages],
+  );
   const maxCount = stages.reduce((m, s) => Math.max(m, s.count), 0);
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return inCampaign.filter((l) => {
-      if (stage !== "all" && (l.ghlStageName ?? "Unmapped") !== stage) return false;
+      if (stage !== "all" && (l.ghlStageName ?? "Unmapped") !== stage)
+        return false;
       if (!needle) return true;
       return (
         (l.name ?? "").toLowerCase().includes(needle) ||
@@ -135,26 +208,43 @@ export function PipelineExplorer({
   }, [inCampaign, stage, q]);
 
   const campaignColor = (key: string) =>
-    key === UNATTRIB ? "var(--text-muted)" : campaignColors[key] ?? "var(--series-1)";
+    key === UNATTRIB
+      ? "var(--text-muted)"
+      : (campaignColors[key] ?? "var(--series-1)");
 
   return (
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-baseline justify-between gap-2 p-5 pb-3">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2
+          className="text-sm font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
           Where your leads are now
         </h2>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-          Live snapshot · <span className="tnum">{formatNumber(leads.length)}</span> Facebook leads
+          Live snapshot ·{" "}
+          <span className="tnum">{formatNumber(distribution.total)}</span>{" "}
+          Facebook leads
+          {truncated && (
+            <>
+              {" "}
+              · showing the most recent{" "}
+              <span className="tnum">{formatNumber(leads.length)}</span> below
+            </>
+          )}
         </span>
       </div>
 
-      {leads.length === 0 ? (
+      {distribution.total === 0 ? (
         <div className="px-5 pb-5">
           <div
             className="rounded-[10px] border border-dashed p-6 text-center"
             style={{ borderColor: "var(--border-strong)" }}
           >
-            <p className="text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+            <p
+              className="text-sm font-medium"
+              style={{ color: "var(--text-secondary)" }}
+            >
               No Facebook leads in the pipeline yet
             </p>
           </div>
@@ -166,7 +256,7 @@ export function PipelineExplorer({
             <CampaignChip
               active={campaign === "all"}
               label="All campaigns"
-              count={leads.length}
+              count={distribution.total}
               onClick={() => {
                 setCampaign("all");
                 setStage("all");
@@ -188,12 +278,23 @@ export function PipelineExplorer({
           </div>
 
           {/* Dimension 2 — stage distribution for the selected campaign */}
-          <div className="border-t px-5 pt-3 pb-4" style={{ borderColor: "var(--border)" }}>
-            <div className="mb-2 flex items-baseline gap-2 text-[12px]" style={{ color: "var(--text-muted)" }}>
-              <span className="font-semibold" style={{ color: "var(--text-secondary)" }}>
-                {campaign === "all" ? "All campaigns" : campaigns.find((c) => c.key === campaign)?.label}
+          <div
+            className="border-t px-5 pt-3 pb-4"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <div
+              className="mb-2 flex items-baseline gap-2 text-[12px]"
+              style={{ color: "var(--text-muted)" }}
+            >
+              <span
+                className="font-semibold"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                {campaign === "all"
+                  ? "All campaigns"
+                  : campaigns.find((c) => c.key === campaign)?.label}
               </span>
-              · where {formatNumber(inCampaign.length)} leads sit · click a stage
+              · where {formatNumber(shownTotal)} leads sit · click a stage
             </div>
             <div className="flex flex-col gap-1">
               {stages.map((s) => (
@@ -204,8 +305,10 @@ export function PipelineExplorer({
                   pctOfMax={maxCount > 0 ? s.count / maxCount : 0}
                   color={s.color}
                   active={stage === s.name}
-                  total={inCampaign.length}
-                  onClick={() => setStage((cur) => (cur === s.name ? "all" : s.name))}
+                  total={shownTotal}
+                  onClick={() =>
+                    setStage((cur) => (cur === s.name ? "all" : s.name))
+                  }
                 />
               ))}
             </div>
@@ -215,12 +318,18 @@ export function PipelineExplorer({
           <div className="border-t" style={{ borderColor: "var(--border)" }}>
             <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
               <div className="flex items-center gap-2 text-[13px]">
-                <span className="font-semibold" style={{ color: "var(--text-primary)" }}>
+                <span
+                  className="font-semibold"
+                  style={{ color: "var(--text-primary)" }}
+                >
                   {stage === "all" ? "All leads" : stage}
                 </span>
                 <span
                   className="tnum rounded-full px-2 py-0.5 text-[12px]"
-                  style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
+                  style={{
+                    background: "var(--surface-2)",
+                    color: "var(--text-secondary)",
+                  }}
                 >
                   {formatNumber(visible.length)}
                 </span>
@@ -256,7 +365,10 @@ export function PipelineExplorer({
               style={{ borderColor: "var(--border)" }}
             >
               <table className="w-full border-collapse text-[13px]">
-                <thead className="sticky top-0 z-10" style={{ background: "var(--surface-1)" }}>
+                <thead
+                  className="sticky top-0 z-10"
+                  style={{ background: "var(--surface-1)" }}
+                >
                   <tr style={{ color: "var(--text-muted)" }}>
                     <Th className="text-left">Lead</Th>
                     <Th className="text-left">Campaign</Th>
@@ -267,8 +379,15 @@ export function PipelineExplorer({
                 </thead>
                 <tbody>
                   {visible.map((l) => (
-                    <tr key={l.id} className="row-hover border-t" style={{ borderColor: "var(--border)" }}>
-                      <td className="px-4 py-2.5 font-medium" style={{ color: "var(--text-primary)" }}>
+                    <tr
+                      key={l.id}
+                      className="row-hover border-t"
+                      style={{ borderColor: "var(--border)" }}
+                    >
+                      <td
+                        className="px-4 py-2.5 font-medium"
+                        style={{ color: "var(--text-primary)" }}
+                      >
                         {l.name?.trim() || "Unnamed lead"}
                       </td>
                       <td className="px-4 py-2.5">
@@ -276,23 +395,42 @@ export function PipelineExplorer({
                           <span className="inline-flex max-w-[240px] items-center gap-1.5 align-middle">
                             <span
                               className="inline-block h-2 w-2 shrink-0 rounded-full"
-                              style={{ background: campaignColor(l.campaignId || UNATTRIB) }}
+                              style={{
+                                background: campaignColor(
+                                  l.campaignId || UNATTRIB,
+                                ),
+                              }}
                               aria-hidden="true"
                             />
-                            <span className="truncate text-[12.5px]" style={{ color: "var(--text-secondary)" }} title={l.campaignName}>
-                              {campaignNames[l.campaignId ?? ""] || l.campaignName}
+                            <span
+                              className="truncate text-[12.5px]"
+                              style={{ color: "var(--text-secondary)" }}
+                              title={l.campaignName}
+                            >
+                              {campaignNames[l.campaignId ?? ""] ||
+                                l.campaignName}
                             </span>
                           </span>
                         ) : (
-                          <span style={{ color: "var(--text-muted)" }}>Unattributed</span>
+                          <span style={{ color: "var(--text-muted)" }}>
+                            Unattributed
+                          </span>
                         )}
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="flex flex-col gap-0.5">
-                          <span className="inline-flex items-center gap-1.5" style={{ color: "var(--text-secondary)" }}>
+                          <span
+                            className="inline-flex items-center gap-1.5"
+                            style={{ color: "var(--text-secondary)" }}
+                          >
                             <span
                               className="inline-block h-2 w-2 shrink-0 rounded-full"
-                              style={{ background: colorByStage.get(l.ghlStageName ?? "Unmapped") ?? "var(--text-muted)" }}
+                              style={{
+                                background:
+                                  colorByStage.get(
+                                    l.ghlStageName ?? "Unmapped",
+                                  ) ?? "var(--text-muted)",
+                              }}
                               aria-hidden="true"
                             />
                             {l.ghlStageName ?? "Unmapped"}
@@ -300,7 +438,11 @@ export function PipelineExplorer({
                           {l.ghlPipelineName && (
                             <span
                               className="truncate text-[11px]"
-                              style={{ color: "var(--text-muted)", paddingLeft: "14px", maxWidth: "240px" }}
+                              style={{
+                                color: "var(--text-muted)",
+                                paddingLeft: "14px",
+                                maxWidth: "240px",
+                              }}
                               title={l.ghlPipelineName}
                             >
                               {l.ghlPipelineName}
@@ -308,10 +450,16 @@ export function PipelineExplorer({
                           )}
                         </div>
                       </td>
-                      <td className="tnum px-4 py-2.5" style={{ color: "var(--text-muted)" }}>
+                      <td
+                        className="tnum px-4 py-2.5"
+                        style={{ color: "var(--text-muted)" }}
+                      >
                         {fmtDate(l.createdAt, timezone)}
                       </td>
-                      <td className="tnum px-4 py-2.5 text-right" style={{ color: "var(--text-secondary)" }}>
+                      <td
+                        className="tnum px-4 py-2.5 text-right"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
                         {l.value > 0 ? formatCurrency(l.value, currency) : "–"}
                       </td>
                     </tr>
@@ -319,7 +467,10 @@ export function PipelineExplorer({
                 </tbody>
               </table>
               {visible.length === 0 && (
-                <div className="px-4 py-8 text-center text-[13px]" style={{ color: "var(--text-muted)" }}>
+                <div
+                  className="px-4 py-8 text-center text-[13px]"
+                  style={{ color: "var(--text-muted)" }}
+                >
                   No leads match this filter.
                 </div>
               )}
@@ -351,12 +502,24 @@ function CampaignChip({
       className="inline-flex max-w-full items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-medium transition-colors"
       style={
         active
-          ? { background: "var(--series-1)", color: "#fff", border: "1px solid var(--series-1)" }
-          : { background: "var(--surface-1)", color: "var(--text-secondary)", border: "1px solid var(--border-strong)" }
+          ? {
+              background: "var(--series-1)",
+              color: "#fff",
+              border: "1px solid var(--series-1)",
+            }
+          : {
+              background: "var(--surface-1)",
+              color: "var(--text-secondary)",
+              border: "1px solid var(--border-strong)",
+            }
       }
     >
       {dot && !active && (
-        <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: dot }} aria-hidden="true" />
+        <span
+          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+          style={{ background: dot }}
+          aria-hidden="true"
+        />
       )}
       <span className="max-w-[200px] truncate">{label}</span>
       <span className="tnum" style={{ opacity: 0.75 }}>
@@ -406,12 +569,21 @@ function StageRow({
       <span className="min-w-0">
         <span
           className="block h-7 rounded-r-[4px] transition-[width] duration-500"
-          style={{ width: `${Math.max(pctOfMax * 100, count > 0 ? 2 : 0)}%`, background: color }}
+          style={{
+            width: `${Math.max(pctOfMax * 100, count > 0 ? 2 : 0)}%`,
+            background: color,
+          }}
         />
       </span>
-      <span className="tnum shrink-0 pl-1 text-right text-[13px] font-semibold whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
+      <span
+        className="tnum shrink-0 pl-1 text-right text-[13px] font-semibold whitespace-nowrap"
+        style={{ color: "var(--text-primary)" }}
+      >
         {formatNumber(count)}
-        <span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--text-muted)" }}>
+        <span
+          className="ml-1.5 text-[11px] font-normal"
+          style={{ color: "var(--text-muted)" }}
+        >
           {formatPercent(total > 0 ? count / total : null, 0)}
         </span>
       </span>
@@ -419,7 +591,13 @@ function StageRow({
   );
 }
 
-function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function Th({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <th
       className={`px-4 py-2 text-[11px] font-semibold tracking-wider uppercase ${className}`}

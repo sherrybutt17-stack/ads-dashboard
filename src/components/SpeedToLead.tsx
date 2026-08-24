@@ -1,7 +1,10 @@
 import type { SpeedToLead, SpeedToLeadRow } from "@/lib/metrics/queries";
+import { DASH } from "@/lib/metrics/compute";
 
 function formatDuration(seconds: number | null): string {
-  if (seconds == null) return "—";
+  // DASH, not a hardcoded em-dash: "no value" must look identical everywhere,
+  // or the reader learns two glyphs mean two different things when they don't.
+  if (seconds == null) return DASH;
   const s = Math.round(seconds);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -14,7 +17,10 @@ function formatDuration(seconds: number | null): string {
 
 /** Compact "how long ago" for an uncalled lead — its waiting time, the urgency. */
 function ago(iso: string): string {
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  const s = Math.max(
+    0,
+    Math.round((Date.now() - new Date(iso).getTime()) / 1000),
+  );
   if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m`;
   const h = Math.floor(s / 3600);
   if (h < 24) return `${h}h`;
@@ -31,11 +37,19 @@ function shortDate(iso: string, timezone: string): string {
   });
 }
 
-/** Colour a response time by how fast it was — green ≤5m, accent ≤1h, amber slower. */
+/**
+ * Colour a response time by how fast it was — green ≤5m, blue ≤1h, amber slower.
+ *
+ * The middle rung was `var(--accent)`, the per-client brand colour. That is a
+ * rung in an ORDINAL scale sitting between good and warning, so a client whose
+ * brand is red made "within an hour" indistinguishable from critical, and a
+ * green brand collided with good. Identity colour must never carry a position
+ * in a scale; `--seq-450` is fixed and sits cleanly between the two statuses.
+ */
 function toneFor(seconds: number | null): string {
   if (seconds == null) return "var(--status-critical)";
   if (seconds <= 300) return "var(--status-good)";
-  if (seconds <= 3600) return "var(--accent)";
+  if (seconds <= 3600) return "var(--seq-450)";
   return "var(--status-warning)";
 }
 
@@ -120,7 +134,8 @@ export function SpeedToLeadWidget({
 
   const buckets = [
     { label: "within 5 min", n: within5m, tone: "var(--status-good)" },
-    { label: "within 1 hour", n: within1h, tone: "var(--accent)" },
+    // Same ordinal scale as toneFor — must stay the fixed hue, not the brand.
+    { label: "within 1 hour", n: within1h, tone: "var(--seq-450)" },
     { label: "within 24 hours", n: within24h, tone: "var(--text-secondary)" },
   ];
 
@@ -141,7 +156,9 @@ export function SpeedToLeadWidget({
         className="shrink-0 text-right text-xs tabular-nums"
         style={{ color: "var(--text-muted)" }}
       >
-        {trackingLabel ? `tracking since ${trackingLabel}` : "no call events yet"}
+        {trackingLabel
+          ? `tracking since ${trackingLabel}`
+          : "no call events yet"}
       </div>
     </div>
   );
@@ -150,8 +167,8 @@ export function SpeedToLeadWidget({
   // honest instead of dropping them or counting them as misses.
   const preTrackingNote = preTracking > 0 && (
     <p className="mt-4 text-xs" style={{ color: "var(--text-muted)" }}>
-      {preTracking} earlier lead{preTracking === 1 ? "" : "s"} arrived before call
-      tracking — first-call time unknown.
+      {preTracking} earlier lead{preTracking === 1 ? "" : "s"} arrived before
+      call tracking — first-call time unknown.
     </p>
   );
 
@@ -166,17 +183,23 @@ export function SpeedToLeadWidget({
       ) : trackingStartedAt == null ? (
         // We have never received a call event — nothing is measurable yet.
         <>
-          <p className="mt-5 text-sm" style={{ color: "var(--text-secondary)" }}>
-            No outbound-call events have arrived from GoHighLevel yet. Speed-to-lead
-            starts measuring the moment the first call is recorded, then fills in
-            going forward.
+          <p
+            className="mt-5 text-sm"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            No outbound-call events have arrived from GoHighLevel yet.
+            Speed-to-lead starts measuring the moment the first call is
+            recorded, then fills in going forward.
           </p>
           {preTrackingNote}
         </>
       ) : trackable === 0 ? (
         // Tracking is live, but no lead has arrived since it went live.
         <>
-          <p className="mt-5 text-sm" style={{ color: "var(--text-secondary)" }}>
+          <p
+            className="mt-5 text-sm"
+            style={{ color: "var(--text-secondary)" }}
+          >
             No new leads since call tracking went live on {trackingLabel}. This
             fills in as new leads arrive and get their first call.
           </p>

@@ -24,11 +24,26 @@ function isObj(v: unknown): v is Json {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Read a dotted path, tolerating missing intermediates. */
+/**
+ * Read a dotted path, tolerating missing intermediates.
+ *
+ * ⚠️ OWN properties only. Plain `cur[key]` walks the prototype chain, so a
+ * polluted `Object.prototype` would feed values straight into a webhook event —
+ * and the field names probed here (`id`, `name`, `status`, `source`, `value`)
+ * are exactly the generic ones such an attack sets.
+ *
+ * Not a live vulnerability: the payload reaches us through `JSON.parse`, which
+ * makes `__proto__` an ORDINARY OWN KEY rather than setting a prototype
+ * (verified — `JSON.parse('{"__proto__":{"x":1}}')` leaves the prototype as
+ * `Object.prototype`). So the only way to reach the chain is for something else
+ * in the process to pollute it. This closes that door anyway, because the cost
+ * is one predicate and the thing on the other side of it is the one dataset in
+ * this system that cannot be rebuilt.
+ */
 function at(obj: unknown, path: string): unknown {
   let cur: unknown = obj;
   for (const key of path.split(".")) {
-    if (!isObj(cur)) return undefined;
+    if (!isObj(cur) || !Object.hasOwn(cur, key)) return undefined;
     cur = cur[key];
   }
   return cur;

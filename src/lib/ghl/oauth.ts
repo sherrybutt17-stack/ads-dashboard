@@ -1,8 +1,10 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { ghlInstallations, type GhlInstallation } from "@/db/schema";
+import { ghlInstallations, type GhlInstallation, type Client } from "@/db/schema";
 import { encrypt, decrypt } from "@/lib/crypto";
+import { agencyIdForClient } from "@/lib/tenancy";
 import { GhlClient } from "./client";
+import { appBaseUrlOr } from "@/lib/app-url";
 
 /**
  * GoHighLevel OAuth 2.0.
@@ -41,9 +43,7 @@ export function isOauthConfigured(): boolean {
 }
 
 export function redirectUri(): string {
-  const base =
-    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ??
-    "http://localhost:3000";
+  const base = appBaseUrlOr("http://localhost:3000");
   return `${base}/api/oauth/callback`;
 }
 
@@ -100,7 +100,10 @@ async function postToken(body: Record<string, string>): Promise<TokenResponse> {
 }
 
 /** Exchange the authorization code from the OAuth callback. */
-export async function exchangeCode(code: string): Promise<GhlInstallation> {
+export async function exchangeCode(
+  code: string,
+  intendedClientId: string | null,
+): Promise<GhlInstallation> {
   const token = await postToken({
     client_id: process.env.GHL_CLIENT_ID!,
     client_secret: process.env.GHL_CLIENT_SECRET!,
@@ -121,11 +124,16 @@ export async function exchangeCode(code: string): Promise<GhlInstallation> {
     );
   }
 
-  return upsertInstallation(token);
+  return upsertInstallation(token, intendedClientId);
 }
 
 async function upsertInstallation(
   token: TokenResponse,
+  /**
+   * The client this install is being performed FOR, from the signed OAuth
+   * state — null for an agency-level install with no target.
+   */
+  intendedClientId: string | null,
 ): Promise<GhlInstallation> {
   // Refresh a minute early so a request in flight cannot land on a dead token.
   const expiresAt = new Date(Date.now() + (token.expires_in - 60) * 1000);
@@ -154,12 +162,33 @@ async function upsertInstallation(
     updatedAt: new Date(),
   };
 
+  /*
+   * 🔴 A reinstall must not deliver fresh tokens into somebody else's row.
+   *
+   * `values` deliberately omits `clientId`, so an upsert PRESERVES whatever
+   * client the row was already bound to. That is right for the ordinary case —
+   * the same client reinstalling after a scope change should not have to
+   * re-claim. It is wrong the moment a sub-account moves between agencies:
+   * agency B reinstalls, and B's working access and refresh tokens land in a
+   * row still pointing at agency A's client, which then reads B's contacts and
+   * pipeline through them.
+   *
+   * So the binding is cleared whenever the install names a DIFFERENT client
+   * than the row holds. `claimInstallation` below then re-binds it, with the
+   * authorization this function has no way to perform.
+   */
+  const existing = await getInstallationByLocation(token.locationId!);
+  const rebinding =
+    intendedClientId !== null &&
+    existing?.clientId != null &&
+    existing.clientId !== intendedClientId;
+
   const [row] = await db
     .insert(ghlInstallations)
     .values(values)
     .onConflictDoUpdate({
       target: ghlInstallations.locationId,
-      set: values,
+      set: rebinding ? { ...values, clientId: null } : values,
     })
     .returning();
 
@@ -225,31 +254,89 @@ export async function getInstallationForClient(
   return row ?? null;
 }
 
-/** Bind an install to a client, and vice versa. */
+/**
+ * Bind an install to a client, and vice versa.
+ *
+ * ── What was wrong with this ─────────────────────────────────────────────
+ *
+ * 🔴 It took `(installationId, clientId)` and did as it was told. No check that
+ * the caller was entitled to either, and no check that the install was already
+ * claimed — so it would silently re-point any installation at any client. A
+ * sub-account's tokens, contacts and stage transitions could be moved to
+ * another tenant by supplying two ids.
+ *
+ * Two changes close it:
+ *
+ *  1. **It takes a `Client`, not a client id.** The caller cannot pass an id it
+ *     never loaded, and every route that loads one now does so through
+ *     `requireClient` / `getClientForSession`. Authorization moves to the one
+ *     place that can actually perform it, and this function stops pretending
+ *     an id is a permission.
+ *  2. **An already-claimed install may only move WITHIN an agency.** Moving a
+ *     sub-account between an agency's own clients is ordinary housekeeping.
+ *     Moving it across a tenant boundary is the attack, and there is no
+ *     legitimate flow that needs it — a genuine handover goes through an
+ *     uninstall and a fresh install by the new owner.
+ */
 export async function claimInstallation(
   installationId: string,
-  clientId: string,
+  client: Client,
 ): Promise<void> {
+  const [existing] = await db
+    .select()
+    .from(ghlInstallations)
+    .where(eq(ghlInstallations.id, installationId))
+    .limit(1);
+  if (!existing) throw new Error("Installation not found");
+
+  if (existing.clientId && existing.clientId !== client.id) {
+    const holder = await agencyIdForClient(existing.clientId);
+    if (holder !== client.agencyId) {
+      /*
+       * Deliberately says nothing about who holds it. The caller has just
+       * demonstrated they do not own this install; confirming which tenant does
+       * would turn a failed claim into a lookup service.
+       */
+      throw new Error(
+        "That GoHighLevel sub-account is already connected elsewhere. Disconnect it there first.",
+      );
+    }
+  }
+
   const [installation] = await db
     .update(ghlInstallations)
-    .set({ clientId, updatedAt: new Date() })
+    .set({ clientId: client.id, updatedAt: new Date() })
     .where(eq(ghlInstallations.id, installationId))
     .returning();
-
   if (!installation) throw new Error("Installation not found");
 
   const { clients } = await import("@/db/schema");
   await db
     .update(clients)
     .set({
+      /*
+       * The ONLY writer of `ghlLocationId` that can be trusted, because the
+       * value comes out of a completed OAuth exchange rather than out of a form
+       * field. See the note on the column.
+       */
       ghlLocationId: installation.locationId,
       ghlLocationName: installation.locationName,
       ghlAuthMethod: "oauth",
       updatedAt: new Date(),
     })
-    .where(eq(clients.id, clientId));
+    .where(eq(clients.id, client.id));
 }
 
+/**
+ * Mark an install dead by location id.
+ *
+ * ⚠️ Location-keyed, and therefore only safe when GHL itself is the one saying
+ * so — i.e. the uninstall webhook, whose payload names the location. Do NOT
+ * call this from a user-initiated path: `clients.ghlLocationId` can be typed
+ * into a form, so "delete my client" would let one tenant kill another tenant's
+ * live connection by having entered their location id. That path uses
+ * `markUninstalledForClient` instead.
+ */
 export async function markUninstalled(locationId: string): Promise<void> {
   await db
     .update(ghlInstallations)
@@ -257,8 +344,60 @@ export async function markUninstalled(locationId: string): Promise<void> {
     .where(eq(ghlInstallations.locationId, locationId));
 }
 
+/**
+ * Mark this CLIENT's install dead, whatever location it points at.
+ *
+ * Keyed on the binding rather than on a location string, so it can only ever
+ * touch a row that was actually claimed by this client.
+ */
+export async function markUninstalledForClient(clientId: string): Promise<void> {
+  await db
+    .update(ghlInstallations)
+    .set({ uninstalledAt: new Date(), updatedAt: new Date() })
+    .where(eq(ghlInstallations.clientId, clientId));
+}
+
 /** Installs not yet bound to a client — surfaced in the UI to be claimed. */
 export async function listUnclaimedInstallations(): Promise<GhlInstallation[]> {
   const rows = await db.select().from(ghlInstallations);
   return rows.filter((r) => !r.clientId && !r.uninstalledAt);
+}
+
+/**
+ * Refuse a location id that belongs to somebody else's live install.
+ *
+ * ── Why this exists at all ───────────────────────────────────────────────
+ *
+ * `clients.ghlLocationId` cannot simply be made non-writable: the Private
+ * Integration Token path has no OAuth exchange to learn it from, so an operator
+ * genuinely types it in. That leaves the field as caller input, and caller
+ * input naming another tenant's sub-account is the squat — the marketplace
+ * callback no longer auto-binds on it (see the GHL callback route), but a typed
+ * id still steers webhook routing and every "which client is this location"
+ * lookup.
+ *
+ * So the value is validated instead of forbidden. It is only dangerous when it
+ * collides with a live install owned by a different agency; within an agency it
+ * is ordinary configuration, and against no install at all it is a client being
+ * set up ahead of its connection.
+ *
+ * 🔴 The rejection names nothing. Saying "that belongs to Acme Dental" would
+ * turn this validation into the lookup service it exists to prevent.
+ */
+export async function assertLocationIdAvailable(
+  agencyId: string,
+  locationId: string,
+  /** The client being edited, so re-saving its own value is not a clash. */
+  clientId?: string,
+): Promise<void> {
+  const existing = await getInstallationByLocation(locationId);
+  if (!existing || existing.uninstalledAt || !existing.clientId) return;
+  if (existing.clientId === clientId) return;
+
+  const holder = await agencyIdForClient(existing.clientId);
+  if (holder && holder !== agencyId) {
+    throw new Error(
+      "That GoHighLevel location is already connected elsewhere. Disconnect it there first.",
+    );
+  }
 }

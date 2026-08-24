@@ -1,4 +1,14 @@
 import { TZDate } from "@date-fns/tz";
+
+/**
+ * Longest selectable window, in days.
+ *
+ * Shared by the dashboard's URL validation and the range picker's presets so
+ * the two cannot drift. They did: the picker offered "All" as 800 days, the
+ * page silently clamped it to 365, and the control still rendered "All" as the
+ * active segment — so the label named a window the page was not showing.
+ */
+export const MAX_RANGE_DAYS = 365;
 import {
   addDays,
   differenceInCalendarDays,
@@ -145,6 +155,22 @@ export function previousWindow(w: DateWindow, tz: string): DateWindow {
   );
 }
 
+/**
+ * A date key `days` earlier or later, as a calendar date.
+ *
+ * Deliberately plain UTC arithmetic on the key's own parts, with no timezone
+ * involved. A date key is already resolved in the client's zone upstream — it
+ * is a label for a calendar day, not an instant — so shifting it is calendar
+ * arithmetic. Routing it through `TZDate` would reintroduce the zone a second
+ * time and land off by one across a DST boundary, which is the one place this
+ * is used: extending a window backwards to give an anomaly baseline its lead-in.
+ */
+export function shiftDateKey(dateKey: string, days: number): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const t = Date.UTC(y, m - 1, d) + days * 86_400_000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
 /** Every date key in a window, ascending. */
 export function eachDateKey(w: DateWindow, tz: string): string[] {
   const out: string[] = [];
@@ -181,6 +207,76 @@ export function trailingMonths(
   return out;
 }
 
+/**
+ * The shape of one calendar month in the client's timezone: its window, its
+ * length, and how far into it "now" is.
+ *
+ * `dayOfMonth` is what budget pacing divides by, and it is deliberately
+ * expressed so that a CLOSED month reads as `daysInMonth + 1` — one past the
+ * last day, meaning every day is complete. Without that, the last day of a
+ * finished month would be treated as still running and its spend excluded from
+ * the run rate forever.
+ *
+ * A month in the FUTURE reads as day 1 — nothing has happened yet, which is the
+ * honest answer and keeps every downstream divisor at zero rather than negative.
+ */
+export function monthShape(
+  monthKey: string,
+  tz: string,
+  now: Date = new Date(),
+): DateWindow & { monthKey: string; daysInMonth: number; dayOfMonth: number } {
+  const [y, m] = monthKey.split("-").map(Number);
+  /*
+   * Anchored at NOON rather than midnight.
+   *
+   * Local midnight on the 1st does not always exist: America/Asuncion skipped
+   * it on 2017-10-01 and 2023-10-01, and Asia/Amman on 2016-04-01, when those
+   * zones moved their clocks forward at 00:00. TZDate normalises such a time
+   * forward to 01:00 on the same date, so a midnight anchor happens to resolve
+   * to the right month anyway — but that correctness is borrowed from a
+   * normalisation rule rather than stated here. Noon exists in every zone on
+   * every day, so it needs no rule.
+   */
+  const anchor = new TZDate(y, m - 1, 1, 12, 0, 0, tz);
+  const first = startOfMonth(anchor);
+  const last = endOfMonth(anchor);
+  const startKey = format(first, "yyyy-MM-dd");
+  const endKey = format(last, "yyyy-MM-dd");
+  const daysInMonth = differenceInCalendarDays(last, first) + 1;
+
+  const todayIso = todayKey(tz, now);
+  const dayOfMonth =
+    todayIso > endKey
+      ? daysInMonth + 1 // closed: every day complete
+      : todayIso < startKey
+        ? 1 // not started
+        : Number(todayIso.slice(8, 10));
+
+  return {
+    ...windowFromKeys(startKey, endKey, tz),
+    monthKey,
+    daysInMonth,
+    dayOfMonth,
+  };
+}
+
+/**
+ * The hour of the day, 0–23, as it is right now in `tz`.
+ *
+ * For deciding whether a message should go out at all. A pacing alert is a
+ * slow-moving fact about a whole month — landing it at 3am local buys nothing
+ * and trains the recipient to mute the channel it shares with the lead alerts,
+ * which are the ones with a five-minute half-life.
+ */
+export function localHour(tz: string, now: Date = new Date()): number {
+  return Number(format(new TZDate(now, tz), "H"));
+}
+
+/** `yyyy-MM` for "now" in the client's timezone. */
+export function currentMonthKey(tz: string, now: Date = new Date()): string {
+  return todayKey(tz, now).slice(0, 7);
+}
+
 const MONTH_ABBR = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -198,6 +294,27 @@ export function dayLabel(dateKey: string): string {
   const [, m, d] = dateKey.split("-").map(Number);
   const month = MONTH_ABBR[m - 1] ?? "";
   return `${month} ${d}`;
+}
+
+/**
+ * A whole period as one label — "1–31 Jul 2026", "28 Jun – 4 Jul 2026".
+ *
+ * Both keys are already resolved in the client's timezone upstream, so this
+ * reads them literally rather than constructing Dates: passing "2026-07-01"
+ * through `new Date()` would reinterpret it as UTC midnight and render the
+ * previous day for anyone west of Greenwich — the exact off-by-one that makes a
+ * report disagree with the dashboard it was generated from.
+ */
+export function rangeLabel(startKey: string, endKey: string): string {
+  const [sy, sm, sd] = startKey.split("-").map(Number);
+  const [ey, em, ed] = endKey.split("-").map(Number);
+  const sMon = MONTH_ABBR[sm - 1] ?? "";
+  const eMon = MONTH_ABBR[em - 1] ?? "";
+
+  if (startKey === endKey) return `${sd} ${sMon} ${sy}`;
+  if (sy === ey && sm === em) return `${sd}–${ed} ${eMon} ${ey}`;
+  if (sy === ey) return `${sd} ${sMon} – ${ed} ${eMon} ${ey}`;
+  return `${sd} ${sMon} ${sy} – ${ed} ${eMon} ${ey}`;
 }
 
 /** True only for an IANA zone Intl actually accepts — rejects "" and garbage. */

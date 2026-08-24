@@ -34,7 +34,14 @@
   /* Ink */
   --text-primary: #0b0b0b;
   --text-secondary: #52514e;
-  --text-muted: #898781;
+  /*
+   * Darkened from #898781, which measured 3.41:1 on --surface-page and 3.23:1
+   * on --surface-2 — below the 4.5:1 AA floor for small text, and this is the
+   * colour of roughly 117 labels, footnotes and axis ticks across the app.
+   * #6b6a65 measures 5.14 / 4.88 on the same surfaces while keeping the warm
+   * grey cast that separates it from --text-secondary.
+   */
+  --text-muted: #6b6a65;
 
   /* Lines */
   --border: rgba(11, 11, 11, 0.1);
@@ -62,11 +69,31 @@
   --seq-550: #1c5cab;
   --seq-600: #184f95;
 
-  /* Status — reserved, never reused as a series colour. */
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
-  --status-serious: #ec835a;
-  --status-critical: #d03b3b;
+  /* Status — reserved, never reused as a series colour.
+
+     🔴 These are almost always TEXT. Of ~155 references across the app, about
+     110 set `color:` and three set a background or border — so the bar is the
+     4.5:1 AA floor for small text, not the 3:1 for a graphical object.
+
+     They used to be one set shared by both themes, chosen against the light
+     ground and never restepped for dark. Measured, the light set was the worse
+     half: --status-warning #fab219 came out at 1.65:1 on --surface-2, which is
+     an alarm nobody can read, and good and serious failed too. Dark inherited
+     them and failed only on critical (3.30:1).
+
+     Now stepped per theme. The values below are the light steps; the dark ones
+     live in both dark scopes. `status-contrast.test.ts` computes every pair and
+     fails the build under 4.5:1, because "looks fine on my monitor" is exactly
+     how the old set survived.
+
+     An amber that clears 4.5:1 on near-white is necessarily brown — that is the
+     arithmetic, not a taste decision. It is acceptable here only because every
+     status in this app also carries an icon and the state in words; see
+     `DataState`, whose second rule is that status is never colour alone. */
+  --status-good: #137a13;
+  --status-warning: #8a5f00;
+  --status-serious: #a8481f;
+  --status-critical: #a92626;
 
   /* Delta text: distinct from series green so a trend never impersonates one. */
   --delta-good: #006300;
@@ -77,12 +104,38 @@
   /* Layered, soft elevation — a premium card floats, it doesn't sit in a box. */
   --shadow-card: 0 1px 2px rgba(17, 17, 22, 0.04), 0 6px 20px -8px rgba(17, 17, 22, 0.08);
   --shadow-elevated: 0 2px 4px rgba(17, 17, 22, 0.06), 0 16px 40px -12px rgba(17, 17, 22, 0.16);
+  /*
+   * A dialog sits on a different plane from a card, so it needs its own step —
+   * not `--shadow-elevated` borrowed from a hover state. Deeper and wider, so
+   * the surface behind it is unmistakably out of reach even before the reader
+   * notices the scrim.
+   */
+  --shadow-overlay: 0 8px 16px -6px rgba(17, 17, 22, 0.12), 0 32px 80px -20px rgba(17, 17, 22, 0.3);
+  /* The scrim itself, so light and dark can dim by different amounts. */
+  --overlay-scrim: rgba(17, 17, 22, 0.42);
   /* A hairline top highlight gives the card edge a crafted, lit quality. */
   --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
   --page-glow: rgba(42, 120, 214, 0.05);
   /* Accent glow — the one signature flourish, on the hero tile and the CTA. */
   --accent-glow: 0 10px 30px -10px rgba(42, 120, 214, 0.35);
   --accent: var(--series-1);
+  /*
+   * Text ON --accent. Chosen per theme rather than inverted, because --accent is
+   * a mid blue in light (#2a78d6) and a LIGHTER blue in dark (#3987e5), so the
+   * winner flips: white measures 4.42:1 here but only 3.64:1 on the dark accent,
+   * where near-black measures 5.20:1. See the dark scopes below.
+   *
+   * ⚠️ 4.42:1 clears AA Large but sits just under the 4.5:1 normal-text bar. The
+   * buttons using it are 13px medium. If strict AA is wanted, move those
+   * backgrounds to --seq-550 (#1c5cab, 6.63:1 on white) rather than darkening
+   * --accent, which is also a series colour and must keep its ramp position.
+   */
+  --accent-ink: #ffffff;
+  /*
+   * One step below --shadow-card, for the selected row in an interactive list.
+   * A pressed/active affordance should read as a lift, not as a second card.
+   */
+  --shadow-sm: 0 1px 2px rgba(17, 17, 22, 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -124,14 +177,53 @@
     --seq-550: #6da7ec;
     --seq-600: #86b6ef;
 
-    --delta-good: #0ca30c;
+    /* Status, stepped for the dark ground rather than inherited.
+
+       Only critical actually needed moving: #d03b3b measured 3.30:1 on
+       --surface-2, under the 4.5:1 text floor, and it is the colour that carries
+       "this data is missing, not zero" — the single most consequential sentence
+       this app prints. #ff6b6b is 5.72:1.
+
+       The other three already cleared the floor on dark (good 4.73, warning 8.65,
+       serious 6.01) and are restated verbatim rather than omitted: with the light
+       steps now darkened for their own ground, inheriting would drag brown-amber
+       onto a near-black surface where it reads as mud.
+
+       Critical stays clear of --delta-bad #e66767 for the reason recorded just
+       below on --delta-good — a status alarm and a metric moving the wrong way are
+       different events and must not render as the same colour. */
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+    --status-serious: #ec835a;
+    --status-critical: #ff6b6b;
+
+    /* Lifted off #0ca30c, which was IDENTICAL to --status-good in dark mode — so a
+
+       green delta and a green health dot rendered the same colour, defeating the
+
+       separation the light-mode pair is explicitly designed for (see above).
+
+       #3ecf6b measures 9.69:1 on the dark page ground. */
+
+    --delta-good: #3ecf6b;
     --delta-bad: #e66767;
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 34px -14px rgba(0, 0, 0, 0.78);
     --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.55), 0 28px 60px -18px rgba(0, 0, 0, 0.9);
+    /* Dark needs a deeper scrim: a translucent panel over a near-black page has
+       far less luminance contrast to lean on than it does over white. */
+    --shadow-overlay: 0 10px 24px -8px rgba(0, 0, 0, 0.7), 0 44px 90px -22px rgba(0, 0, 0, 0.95);
+    --overlay-scrim: rgba(0, 0, 0, 0.66);
     --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
     --page-glow: rgba(57, 135, 229, 0.12);
     --accent-glow: 0 12px 40px -10px rgba(57, 135, 229, 0.5);
+    /*
+     * NOT the light value inverted. --accent is lighter here (#3987e5), so white
+     * on it drops to 3.64:1 while near-black reaches 5.20:1 — the accessible
+     * choice is the one that looks counterintuitive.
+     */
+    --accent-ink: #0b0f14;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -171,14 +263,47 @@
   --seq-550: #6da7ec;
   --seq-600: #86b6ef;
 
-  --delta-good: #0ca30c;
+  /* Status, stepped for the dark ground rather than inherited.
+
+     Only critical actually needed moving: #d03b3b measured 3.30:1 on
+     --surface-2, under the 4.5:1 text floor, and it is the colour that carries
+     "this data is missing, not zero" — the single most consequential sentence
+     this app prints. #ff6b6b is 5.72:1.
+
+     The other three already cleared the floor on dark (good 4.73, warning 8.65,
+     serious 6.01) and are restated verbatim rather than omitted: with the light
+     steps now darkened for their own ground, inheriting would drag brown-amber
+     onto a near-black surface where it reads as mud.
+
+     Critical stays clear of --delta-bad #e66767 for the reason recorded just
+     below on --delta-good — a status alarm and a metric moving the wrong way are
+     different events and must not render as the same colour. */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #ff6b6b;
+
+  /* Lifted off #0ca30c, which was IDENTICAL to --status-good in dark mode — so a
+
+     green delta and a green health dot rendered the same colour, defeating the
+
+     separation the light-mode pair is explicitly designed for (see above).
+
+     #3ecf6b measures 9.69:1 on the dark page ground. */
+
+  --delta-good: #3ecf6b;
   --delta-bad: #e66767;
 
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 34px -14px rgba(0, 0, 0, 0.78);
   --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.55), 0 28px 60px -18px rgba(0, 0, 0, 0.9);
+  --shadow-overlay: 0 10px 24px -8px rgba(0, 0, 0, 0.7), 0 44px 90px -22px rgba(0, 0, 0, 0.95);
+  --overlay-scrim: rgba(0, 0, 0, 0.66);
   --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --page-glow: rgba(57, 135, 229, 0.12);
   --accent-glow: 0 12px 40px -10px rgba(57, 135, 229, 0.5);
+  /* Mirrors the media-query block above — see the note there. */
+  --accent-ink: #0b0f14;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 @theme inline {
@@ -338,6 +463,49 @@ body {
   background: var(--surface-2);
 }
 
+/*
+ * Range change in flight.
+ *
+ * Set by DateRangePicker while the new range is being fetched. Everything in
+ * <main> is still showing the PREVIOUS range's numbers, so it must stop reading
+ * as a current answer: recede it, and block interaction so nobody clicks a
+ * figure that is about to be replaced. The header stays at full strength — the
+ * control the user just touched should remain legible.
+ *
+ * Deliberately a recede, not a blank: keeping the old numbers dimly visible
+ * preserves the reader's place, where clearing them would make every range
+ * change feel like a page load.
+ */
+body[data-range-pending="1"] main {
+  opacity: 0.42;
+  pointer-events: none;
+  transition: opacity 140ms ease-out;
+}
+
+/* A determinate-looking sliver at the top edge, so the wait has a shape. */
+body[data-range-pending="1"]::after {
+  content: "";
+  position: fixed;
+  inset: 0 auto auto 0;
+  z-index: 60;
+  height: 2px;
+  width: 100%;
+  background: var(--accent, var(--series-1));
+  transform-origin: 0 50%;
+  animation: range-progress 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes range-progress {
+  0%   { transform: scaleX(0); opacity: 1; }
+  70%  { transform: scaleX(0.85); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-range-pending="1"]::after { animation: none; transform: scaleX(1); }
+  body[data-range-pending="1"] main { transition: none; }
+}
+
 /* Skeletons — a shaped placeholder reads as "loading", a spinner as "stuck". */
 @keyframes shimmer {
   0% { opacity: 0.55; }
@@ -416,4 +584,182 @@ body {
 .table-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
   background-clip: padding-box;
+}
+
+/* ================================================================== *
+ * Print
+ *
+ * Two failures this block exists to prevent, both of which produce a
+ * ruined document rather than a slightly-off one:
+ *
+ * 1. A FULL-BLEED BLACK PAGE. `data-theme` is stamped on <html> before
+ *    first paint (see layout.tsx), and dark is the default — so a reader
+ *    who hits Cmd-P gets `--surface-page: #0a0b0f` across every sheet,
+ *    white text knocked out of it, and a printer that either refuses or
+ *    empties a cartridge. A report is a light-surface document; that is
+ *    not a preference, it is what paper is.
+ *
+ * 2. AN INVISIBLE PAGE. The entrance animation below uses
+ *    `animation-fill-mode: both`, so every direct child of <main> holds
+ *    `opacity: 0` until its delay elapses. Print rasterises whatever the
+ *    animation state is at that instant, so a fast Cmd-P can commit a
+ *    page of blank white. The animation is switched off entirely here.
+ *
+ * ⚠️ What this block CANNOT fix: Chrome stamps the source URL and the
+ * document title into the page margin whenever its "Headers and footers"
+ * checkbox is ticked, and that checkbox is not reachable from CSS or JS.
+ * The only real remedies are a custom domain (so the stamp reads as the
+ * agency) or server-side PDF rendering. Do not paper over it with a
+ * "please untick this box" note — it will not survive a real client.
+ * ================================================================== */
+@media print {
+  /*
+   * Re-declare the LIGHT tokens under every scope that could be dark.
+   *
+   * Specificity, deliberately: `:root[data-theme="dark"]` is (0,2,0) and
+   * matches the non-print dark block exactly, so this wins only because
+   * it is LAST IN THE FILE. Keep it last. The bare `:root` covers the
+   * media-query dark block — `:root:where(:not([data-theme="light"]))`
+   * is (0,1,0) because `:where()` contributes nothing — and the case
+   * where the pre-paint script never ran at all.
+   */
+  :root,
+  :root[data-theme="dark"],
+  :root[data-theme="light"] {
+    color-scheme: light;
+
+    --surface-page: #ffffff;
+    --surface-1: #ffffff;
+    --surface-2: #f3f3f0;
+    --surface-raised: #ffffff;
+    --card-bg: #ffffff;
+
+    --text-primary: #0b0b0b;
+    --text-secondary: #45443f;
+    --text-muted: #5c5b56;
+
+    --border: rgba(11, 11, 11, 0.18);
+    --border-strong: rgba(11, 11, 11, 0.28);
+    --gridline: #dedcd4;
+    --baseline: #b4b3a8;
+
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #4a3aa7;
+    --series-8: #e34948;
+
+    --seq-250: #86b6ef;
+    --seq-300: #6da7ec;
+    --seq-350: #5598e7;
+    --seq-400: #3987e5;
+    --seq-450: #2a78d6;
+    --seq-500: #256abf;
+    --seq-550: #1c5cab;
+    --seq-600: #184f95;
+
+    --status-good: #0ca30c;
+    --status-warning: #b07800;
+    --status-serious: #c25a2c;
+    --status-critical: #c0392b;
+    --delta-good: #006300;
+    --delta-bad: #c0392b;
+
+    /* Elevation is a screen idiom. On paper a border does the job and a
+       grey drop shadow just muddies the edge. */
+    --shadow-card: none;
+    --shadow-elevated: none;
+    --shadow-overlay: none;
+    --shadow-sm: none;
+    /* Print forces a light ground, so the light-theme value is the correct one. */
+    --accent-ink: #ffffff;
+    --overlay-scrim: rgba(17, 17, 22, 0.42);
+    --card-highlight: none;
+    --page-glow: transparent;
+    --accent-glow: none;
+  }
+
+  /* Honour the palette rather than letting the browser "save ink" by
+     dropping every background — the funnel, the heatmap and the delta
+     chips encode meaning in fill. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    /* `fixed` attachment paints once per page box in some engines and not
+       at all in others. Neither is what anyone wants. */
+    background-attachment: initial !important;
+    min-height: 0;
+  }
+
+  /* See failure (2) above. */
+  main > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  /* A sticky header in print either repeats on every sheet or lands on
+     top of the content it was floating over. */
+  .sticky,
+  [style*="position: sticky"] {
+    position: static !important;
+  }
+
+  /* Backdrop blur has no meaning on paper and renders as a grey wash. */
+  header {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Horizontal scroll is a screen affordance; on paper it CLIPS, and the
+     columns past the fold are simply gone with nothing to indicate it. */
+  .table-scroll {
+    overflow: visible !important;
+  }
+
+  /* Controls, navigation and anything that only does something when
+     clicked. Applied by the caller, so the report route stays in charge
+     of its own composition. */
+  .no-print {
+    display: none !important;
+  }
+
+  /* Screen hides these; paper is where they belong (page footers,
+     definitions that live in a popover on screen). */
+  .print-only {
+    display: revert !important;
+  }
+
+  /* Keep a card whole rather than letting a KPI row split across sheets. */
+  .card,
+  .avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    box-shadow: none !important;
+  }
+
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+}
+
+/* The counterpart to `.print-only` above: absent on screen, present on
+   paper. Declared outside the print block so it applies by default. */
+.print-only {
+  display: none;
 }

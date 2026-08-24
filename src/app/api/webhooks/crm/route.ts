@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { clients, webhookEvents } from "@/db/schema";
@@ -11,9 +11,12 @@ import {
 import { getInstallationByLocation, markUninstalled } from "@/lib/ghl/oauth";
 import {
   verifyWebhookSignature,
+  shouldRejectDelivery,
+  mayRevokeOnDelivery,
   webhookEnforcementEnabled,
 } from "@/lib/ghl/signature";
 import { normalizeWebhookPayload } from "@/lib/ghl/normalize";
+import { alertNewLead } from "@/lib/alerts/send";
 
 /**
  * App-level GHL webhook receiver.
@@ -56,25 +59,16 @@ export async function POST(req: NextRequest) {
   // On, the two forgery signals below return 401. See webhookEnforcementEnabled.
   const enforce = webhookEnforcementEnabled();
 
-  // A signature that is present and WRONG always means forgery.
-  const forgedSignature = signature.status === "invalid";
+  // The full truth table — and its reasoning — lives in `shouldRejectDelivery`,
+  // where it can be asserted without standing up this receiver.
+  const verdict = shouldRejectDelivery(signature, {
+    enforce,
+    isProduction: process.env.NODE_ENV === "production",
+  });
 
-  // This receiver routes by `locationId`, a NON-secret identifier — so once a
-  // verification key is configured, an unsigned delivery in production is a
-  // forgery attempt against the append-only ledger. When no key is set we cannot
-  // verify at all (status "not_configured"), so this never trips and the
-  // delivery is preserved — data loss here is permanent (GHL has no history API).
-  const unsignedInProd =
-    signature.status === "skipped" &&
-    signature.code === "no_signature" &&
-    process.env.NODE_ENV === "production";
-
-  if (enforce && (forgedSignature || unsignedInProd)) {
+  if (verdict.reject) {
     return NextResponse.json(
-      {
-        ok: false,
-        error: forgedSignature ? "invalid signature" : "unsigned delivery rejected",
-      },
+      { ok: false, error: verdict.reason },
       { status: 401 },
     );
   }
@@ -82,7 +76,7 @@ export async function POST(req: NextRequest) {
   // Observe mode: a would-be rejection is logged (and captured in
   // `__signature` below) but the delivery is still processed, so the rollout can
   // be watched without dropping funnel history.
-  if (!enforce && (forgedSignature || unsignedInProd)) {
+  if (verdict.reason) {
     console.warn(
       `[webhook] signature ${signature.status} — observe mode, not enforced (set GHL_WEBHOOK_ENFORCE=true once live deliveries read "valid")`,
     );
@@ -158,6 +152,43 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
   if (eventType === "UNINSTALL" || eventType === "AppUninstall") {
+    /*
+     * 🔴 The one event here that DESTROYS state, so it does not ride the
+     * staged signature rollout.
+     *
+     * `GHL_WEBHOOK_ENFORCE` is off by default and observe mode processes a
+     * delivery whose signature is invalid or absent. That is the right trade
+     * for DATA — a rejected opportunity event is funnel history GHL cannot
+     * supply twice, so recording an unverified one and sorting it out later is
+     * strictly better. It is the wrong trade here. `markUninstalled` takes a
+     * client's CRM pipe offline, and this endpoint is necessarily public, so in
+     * observe mode anyone who learns a `locationId` could post four lines of
+     * JSON and disconnect that client. Nothing about that is recoverable by
+     * replay: the leads simply stop arriving until somebody notices.
+     *
+     * The asymmetry is the point. An unverified delivery may ADD information,
+     * because a wrong row can be corrected from the raw payload we kept. It may
+     * not REVOKE anything, because there is no equivalent way back.
+     *
+     * The event is still stored either way, so a genuine uninstall that arrives
+     * unsigned is visible in `webhook_events` with its `__signature` status
+     * rather than lost — it just does not act on its own authority.
+     */
+    if (!mayRevokeOnDelivery(signature)) {
+      console.warn(
+        `[webhook] ignoring UNINSTALL for location ${evt.locationId ?? "(missing)"}: ` +
+          `signature is "${signature.status}", not "valid". Set GHL_WEBHOOK_KEY so ` +
+          `genuine uninstalls can be trusted; until then this is indistinguishable ` +
+          `from a forged request.`,
+      );
+      await finalizeEvent(event.id, {
+        status: "ignored",
+        transitionCreated: false,
+        reason: `uninstall not honoured — signature ${signature.status}`,
+      });
+      return NextResponse.json({ ok: true, ignored: "unverified uninstall" });
+    }
+
     if (evt.locationId) await markUninstalled(evt.locationId);
     await finalizeEvent(event.id, {
       status: "processed",
@@ -184,6 +215,27 @@ export async function POST(req: NextRequest) {
       reason: "client archived",
     });
     return NextResponse.json({ ok: true, ignored: true });
+  }
+
+  /*
+   * 🔴 Real-time new-lead alert, AFTER the response.
+   *
+   * `after()` and not a bare promise: this handler exists to persist the
+   * payload and return 200 fast, because a non-2xx makes GHL retry and a lost
+   * transition is unrecoverable. An awaited outbound request to Slack would put
+   * a third party's latency — and their outage — inside the ingest path.
+   *
+   * Fired for every event carrying a contact id, message events included. Those
+   * are a second chance at a lead whose ContactCreate we never received, and
+   * every guard that decides whether to actually send lives behind the atomic
+   * claim, so an extra call is free.
+   */
+  if (evt.contactId) {
+    const c = client;
+    const contactId = evt.contactId;
+    after(async () => {
+      await alertNewLead(c, contactId);
+    });
   }
 
   // Message events feed speed-to-lead / first-touch, not the stage ledger.

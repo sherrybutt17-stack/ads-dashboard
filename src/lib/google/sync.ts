@@ -39,6 +39,12 @@ export interface GoogleSyncOptions {
    * so the two crons cannot mark each other's work done.
    */
   isReconcile?: boolean;
+  /**
+   * Best-effort current-day refresh from a dashboard load — logged under
+   * `google_intraday` so it never stands in for a reconciliation in the health
+   * checks. See the note on `syncKindEnum`.
+   */
+  intraday?: boolean;
 }
 
 export async function syncClientGoogleMetrics(
@@ -47,7 +53,11 @@ export async function syncClientGoogleMetrics(
 ): Promise<{ rowsWritten: number; runId: string }> {
   const [run] = await db
     .insert(syncRuns)
-    .values({ clientId: client.id, kind: "google_daily", status: "running" })
+    .values({
+      clientId: client.id,
+      kind: opts.intraday ? "google_intraday" : "google_daily",
+      status: "running",
+    })
     .returning({ id: syncRuns.id });
 
   try {
@@ -106,7 +116,7 @@ async function syncAccountGoogleMetrics(
   since: string,
   until: string,
 ): Promise<number> {
-  const google = googleClientForAccount(account);
+  const google = googleClientForAccount(account, client.agencyId);
   const rows = await google.getDailyMetrics(account.customerId, since, until);
 
   let written = 0;
@@ -215,7 +225,11 @@ export async function refreshGoogleIfStale(client: Client): Promise<boolean> {
       )) as unknown as { rows: Array<{ locked: boolean }> };
       if (!rows[0]?.locked) return false;
       const today = todayKey(client.timezone);
-      await syncClientGoogleMetrics(client, { since: today, until: today });
+      await syncClientGoogleMetrics(client, {
+        since: today,
+        until: today,
+        intraday: true,
+      });
       return true;
     });
   } catch (err) {

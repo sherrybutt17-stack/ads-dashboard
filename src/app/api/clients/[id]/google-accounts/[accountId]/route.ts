@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getClientById } from "@/lib/clients";
 import { removeGoogleAccount } from "@/lib/google/accounts";
+import { requireClient } from "@/lib/auth";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -12,16 +12,17 @@ export async function DELETE(
   ctx: { params: Promise<{ id: string; accountId: string }> },
 ) {
   const { id, accountId } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client } = got;
 
   try {
-    await removeGoogleAccount(id, accountId);
+    await removeGoogleAccount(client.id, accountId);
     void audit.record({
       action: "google_account.remove",
       targetType: "google_account",
       targetId: accountId,
-      clientId: id,
+      clientId: client.id,
       ...audit.requestContext(_req),
     });
     return NextResponse.json({ ok: true });

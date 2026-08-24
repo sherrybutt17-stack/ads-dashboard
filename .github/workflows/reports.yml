@@ -1,0 +1,78 @@
+name: Scheduled reports
+
+# Emails clients a link to their report, weekly or monthly.
+#
+# Why hourly, and why here rather than in vercel.json: each schedule carries a
+# send hour in the CLIENT's timezone, so a report lands at their breakfast rather
+# than at whatever UTC hour a daily cron happens to fall on. Covering every
+# timezone needs an hourly trigger, and Vercel's Hobby tier permits one cron run
+# per day — both of its slots already spent on the reconciles.
+#
+# Safe at any cadence, and that is what makes a best-effort free scheduler
+# acceptable. The endpoint decides per schedule whether the period is complete,
+# whether the local send hour has passed, and whether that period already went
+# out; the guarantee is enforced in Postgres by a partial unique index on
+# (client, platform, period), with the row claimed BEFORE the email is sent. So a
+# duplicate run, a retry, or two overlapping invocations all send exactly once.
+#
+# Setup: CRON_SECRET under Settings → Secrets and variables → Actions, matching
+# Vercel. Until RESEND_API_KEY and REPORT_FROM are set on the deployment this
+# returns ok with a "not configured" note and sends nothing.
+
+on:
+  schedule:
+    # Hourly. GitHub's scheduler drifts — observed up to an hour late on this
+    # repo — which is why the endpoint gates on ">= the send hour" rather than
+    # "== the send hour". A late run still sends; a missed hour does not lose a
+    # week's report.
+    - cron: "5 * * * *"
+  workflow_dispatch: # manual run from the Actions tab
+
+# A slow run should delay the next, not race it. Cheap insurance on top of the
+# database constraint rather than a substitute for it.
+concurrency:
+  group: reports
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE_URL: https://ads-dashboard-shaheer4.vercel.app
+    steps:
+      - name: Check secret is configured
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Send due reports
+        run: |
+          # -f fails the step on any HTTP error, so a 401 is loud rather than a
+          # green tick over a run that sent nothing.
+          curl -fsS --max-time 300 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/cron/reports" | tee /tmp/reports.json
+          echo
+
+      - name: Flag deferred schedules
+        run: |
+          # Non-zero "deferred" means the run hit its time budget before
+          # reaching every schedule. Harmless once — the next hour picks them up
+          # — but persistent deferrals mean the book has outgrown one invocation.
+          n=$(python3 -c "import json;print(json.load(open('/tmp/reports.json')).get('deferred',0))" 2>/dev/null || echo 0)
+          if [ "$n" != "0" ]; then
+            echo "::warning::$n schedule(s) deferred — time budget reached."
+          fi
+
+      - name: Flag failed sends
+        run: |
+          # A send that failed is recorded and retried next hour, but it should
+          # not pass silently: a schedule that quietly stopped working is this
+          # feature's version of the spreadsheet block that was empty for months.
+          # `python3 -c`, matching the reconcile workflow. A heredoc would work
+          # here only because YAML block scalars dedent to column 0, which is a
+          # subtlety worth not depending on.
+          python3 -c "import json; d=json.load(open('/tmp/reports.json')); q={'too_early','already_sent','disabled','no recipients','already claimed by another run'}; [print('::warning::%s (%s): %s' % (r['client'], r['platform'], r.get('reason'))) for r in d.get('results',[]) if not r.get('sent') and r.get('reason') not in q]"

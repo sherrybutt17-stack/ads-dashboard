@@ -1,4 +1,4 @@
-import type { CanonicalStage } from "@/db/schema";
+import type { CanonicalStage } from "@/lib/stages";
 
 /**
  * Pure metric computation. No I/O, no database, no dates — everything here is
@@ -19,6 +19,19 @@ export interface FunnelCounts {
   no_show: number;
   closed_won: number;
   lost: number;
+  /** Never a real prospect — wrong number, spam, out of area. Not `lost`. */
+  disqualified: number;
+  /**
+   * Leads that entered in this window and have NEVER been disqualified.
+   *
+   * NOT `new_lead - disqualified`. The two counts describe different
+   * populations: a June lead marked junk in August would subtract from August's
+   * leads without ever having been in them, and on a quiet month can drive the
+   * figure negative. This is its own query — "entered new_lead in the window,
+   * with no disqualification transition ever" — so it is always a subset of
+   * `new_lead` by construction.
+   */
+  new_lead_qualified: number;
 }
 
 export const EMPTY_FUNNEL: FunnelCounts = {
@@ -29,6 +42,8 @@ export const EMPTY_FUNNEL: FunnelCounts = {
   no_show: 0,
   closed_won: 0,
   lost: 0,
+  disqualified: 0,
+  new_lead_qualified: 0,
 };
 
 export interface AdTotals {
@@ -54,8 +69,35 @@ export const EMPTY_ADS: AdTotals = {
   reach: null,
 };
 
+/**
+ * Closed-won value for a period.
+ *
+ * `wonWithValue` is carried alongside the sum rather than derived from it,
+ * because "we closed 6 deals and none of them has a value recorded" and "we
+ * closed 6 deals worth $0" are different facts and must not collapse into the
+ * same $0. Verified live: 43 of 64 closed-won opportunities carry a value, and
+ * none created since March does — so this distinction is load-bearing today,
+ * not hypothetical.
+ */
+export interface RevenueTotals {
+  /** Distinct opportunities that ENTERED closed_won during the window. */
+  wonOpps: number;
+  /** Of those, how many carry a deal value above zero. */
+  wonWithValue: number;
+  /** Sum of monetary_value across those opportunities. */
+  revenue: number;
+}
+
+export const EMPTY_REVENUE: RevenueTotals = {
+  wonOpps: 0,
+  wonWithValue: 0,
+  revenue: 0,
+};
+
 export interface DerivedMetrics {
   cpLead: number | null;
+  /** Spend ÷ leads that were real prospects. Null when nothing was disqualified. */
+  cpLeadQualified: number | null;
   cpAppt: number | null;
   cpShow: number | null;
   cpWon: number | null;
@@ -66,6 +108,10 @@ export interface DerivedMetrics {
   ctr: number | null;
   cpm: number | null;
   cpc: number | null;
+  /** Revenue ÷ spend. Null when unknowable — see `roasFrom`. */
+  roas: number | null;
+  /** Average recorded deal size, over deals that actually carry a value. */
+  avgDeal: number | null;
 }
 
 /** Guarded division. The single most important function in this file. */
@@ -99,12 +145,57 @@ export function costPer(spend: number, conversions: number): number | null {
   return div(spend, conversions);
 }
 
-export function derive(funnel: FunnelCounts, ads: AdTotals): DerivedMetrics {
+/**
+ * Return on ad spend, with the same refusal-to-guess as `costPer`.
+ *
+ * Deals closed but no value recorded against any of them → `null`, not `0`.
+ * A "0.0x ROAS" reads as "these ads made no money", when the truth is that
+ * nobody filled the value field. Reporting the first as though it were the
+ * second is precisely the class of silent wrongness this dashboard replaced —
+ * and it would blame the ads for an operations gap.
+ *
+ * A period where NOTHING closed is different, and deliberately returns a real
+ * `0` rather than a dash: we know the return was zero. Dashes are reserved for
+ * absent knowledge — if a real zero also rendered as a dash, the dash would stop
+ * carrying information. Zero spend still returns null via `div`, since revenue
+ * against no spend is unattributable rather than an infinite return.
+ */
+export function roasFrom(
+  rev: RevenueTotals | null,
+  spend: number,
+): number | null {
+  // null = never queried for this period. Distinct from "queried, found none",
+  // and it must not fall through to div(0, spend) === 0 — that would print a
+  // confident 0.0× for a period whose revenue nobody ever looked up.
+  if (rev === null) return null;
+  if (rev.wonOpps > 0 && rev.wonWithValue === 0) return null;
+  return div(rev.revenue, spend);
+}
+
+export function derive(
+  funnel: FunnelCounts,
+  ads: AdTotals,
+  revenue: RevenueTotals | null = null,
+): DerivedMetrics {
   const { spend, impressions, linkClicks } = ads;
   return {
     // Cost per stage — denominators come from the CRM ledger, which is the
     // source of truth for what actually happened downstream of the click.
     cpLead: costPer(spend, funnel.new_lead),
+    /**
+     * Cost per lead that was actually a prospect.
+     *
+     * Always rendered NEXT TO `cpLead`, never instead of it. Quietly dropping
+     * junk from the denominator is precisely the massaging this product exists
+     * to replace — and showing both also neutralises the incentive split, since
+     * the client has reason to over-mark junk to argue the ads are bad and the
+     * agency has reason to under-mark it. With both on screen neither works.
+     *
+     * Null when nothing has been disqualified, so the second number appears only
+     * where it says something the first does not.
+     */
+    cpLeadQualified:
+      funnel.disqualified > 0 ? costPer(spend, funnel.new_lead_qualified) : null,
     cpAppt: costPer(spend, funnel.appointment_booked),
     cpShow: costPer(spend, funnel.showed),
     cpWon: costPer(spend, funnel.closed_won),
@@ -124,7 +215,24 @@ export function derive(funnel: FunnelCounts, ads: AdTotals): DerivedMetrics {
     ctr: div(linkClicks, impressions),
     cpm: impressions === 0 ? null : div(spend * 1000, impressions),
     cpc: div(spend, linkClicks),
+
+    // Value, not just cost. Until this existed the dashboard could say a lead
+    // cost $34 but never whether it was worth having.
+    roas: roasFrom(revenue, spend),
+    avgDeal: revenue ? div(revenue.revenue, revenue.wonWithValue) : null,
   };
+}
+
+/** Sum closed-won value across periods. All three fields are additive. */
+export function sumRevenue(rows: RevenueTotals[]): RevenueTotals {
+  return rows.reduce<RevenueTotals>(
+    (acc, r) => ({
+      wonOpps: acc.wonOpps + r.wonOpps,
+      wonWithValue: acc.wonWithValue + r.wonWithValue,
+      revenue: acc.revenue + r.revenue,
+    }),
+    { ...EMPTY_REVENUE },
+  );
 }
 
 /** Sum ad totals across days. Reach is deliberately excluded — see AdTotals. */
@@ -152,6 +260,8 @@ export function sumFunnels(rows: FunnelCounts[]): FunnelCounts {
       no_show: acc.no_show + r.no_show,
       closed_won: acc.closed_won + r.closed_won,
       lost: acc.lost + r.lost,
+      disqualified: acc.disqualified + r.disqualified,
+      new_lead_qualified: acc.new_lead_qualified + r.new_lead_qualified,
     }),
     { ...EMPTY_FUNNEL },
   );
@@ -205,14 +315,37 @@ export const METRIC_POLARITY: Record<string, Polarity> = {
   closePct: "higher-better",
   optinPct: "higher-better",
   ctr: "higher-better",
+  revenue: "higher-better",
+  roas: "higher-better",
+  avgDeal: "higher-better",
 };
+
+/**
+ * How large a move must be before it is called good or bad.
+ *
+ * Colouring every non-zero delta means a 0.8% drift in cost-per-lead arrives
+ * with the same red as a 40% blowout. At this product's volumes most small
+ * moves are one extra lead or one day's budget landing on the other side of a
+ * date boundary — noise wearing a verdict. Painting it green or red teaches the
+ * reader that the colours carry no information, and then the 40% move gets
+ * skimmed past too.
+ *
+ * The delta itself is still SHOWN inside the band — we are withholding the
+ * judgement, not the number. Anyone who wants to read 1.2% can read it.
+ *
+ * 5% deliberately matches `insights.ts`'s NOTABLE threshold, so the prose strip
+ * at the top of the page and the tiles below it cannot disagree about whether
+ * something moved.
+ */
+export const SENTIMENT_DEAD_BAND = 0.05;
 
 /** `good` | `bad` | `neutral` for a change, honouring polarity. */
 export function changeSentiment(
   metric: string,
   change: number | null,
 ): "good" | "bad" | "neutral" {
-  if (change === null || change === 0) return "neutral";
+  if (change === null || !Number.isFinite(change)) return "neutral";
+  if (Math.abs(change) < SENTIMENT_DEAD_BAND) return "neutral";
   const polarity = METRIC_POLARITY[metric] ?? "neutral";
   if (polarity === "neutral") return "neutral";
   const improving = polarity === "higher-better" ? change > 0 : change < 0;
@@ -294,6 +427,21 @@ export function formatNumber(v: number | null, opts: { compact?: boolean } = {})
 }
 
 /** Signed percentage for change columns, e.g. "+12.4%" / "−8.1%". */
+/**
+ * `3.4×`. Its own format because ROAS is a ratio of money to money, not money.
+ *
+ * Lives here, in the pure metrics layer, and NOT in `StatTile` where it started.
+ * `StatTile` is a `"use client"` module, so a server component that imported
+ * this function and called it hit React's client/server boundary — "Attempted
+ * to call formatMultiple() from the server" — which threw during render and
+ * dropped the ENTIRE dashboard into its error boundary. A formatter is not a
+ * component; it belongs with the other formatters.
+ */
+export function formatMultiple(v: number | null): string {
+  if (v === null || !Number.isFinite(v)) return DASH;
+  return `${v.toFixed(v >= 10 ? 0 : 1)}×`;
+}
+
 export function formatChange(v: number | null, digits = 1): string {
   if (v === null || !Number.isFinite(v)) return DASH;
   const pct = v * 100;

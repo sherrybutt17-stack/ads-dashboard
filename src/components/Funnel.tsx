@@ -1,7 +1,11 @@
 "use client";
 
-import { STAGE_LABELS, type CanonicalStage } from "@/db/schema";
-import { formatPercent, formatNumber, type FunnelStep } from "@/lib/metrics/compute";
+import { STAGE_LABELS, type CanonicalStage } from "@/lib/stages";
+import {
+  formatPercent,
+  formatNumber,
+  type FunnelStep,
+} from "@/lib/metrics/compute";
 
 /**
  * The pipeline funnel with drop-off annotated between stages.
@@ -39,7 +43,10 @@ export function Funnel({
   return (
     <div className="card p-5">
       <div className="mb-1 flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2
+          className="text-sm font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
           Pipeline funnel
         </h2>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -57,7 +64,9 @@ export function Funnel({
               <div key={step.stage}>
                 <div
                   className="grid items-center gap-3 py-1.5"
-                  style={{ gridTemplateColumns: "minmax(96px, 150px) 1fr auto" }}
+                  style={{
+                    gridTemplateColumns: "minmax(96px, 150px) 1fr auto",
+                  }}
                 >
                   <div
                     className="truncate text-xs sm:text-[13px]"
@@ -107,12 +116,14 @@ export function Funnel({
                       }}
                     >
                       <span className="tnum">
-                        {formatPercent(steps[i + 1].conversionFromPrevious, 1)} continue
+                        {formatPercent(steps[i + 1].conversionFromPrevious, 1)}{" "}
+                        continue
                       </span>
                       {steps[i + 1].droppedFromPrevious !== null &&
                         steps[i + 1].droppedFromPrevious! > 0 && (
                           <span className="tnum">
-                            · {formatNumber(steps[i + 1].droppedFromPrevious)} lost
+                            · {formatNumber(steps[i + 1].droppedFromPrevious)}{" "}
+                            lost
                           </span>
                         )}
                     </div>
@@ -141,7 +152,10 @@ function ExitStat({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-center gap-2">
       <span style={{ color: "var(--text-muted)" }}>{label}</span>
-      <span className="tnum font-semibold" style={{ color: "var(--text-secondary)" }}>
+      <span
+        className="tnum font-semibold"
+        style={{ color: "var(--text-secondary)" }}
+      >
         {formatNumber(value)}
       </span>
     </div>
@@ -161,12 +175,18 @@ function EmptyFunnel() {
       className="mt-4 rounded-[10px] border border-dashed p-6 text-center"
       style={{ borderColor: "var(--border-strong)" }}
     >
-      <p className="text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+      <p
+        className="text-sm font-medium"
+        style={{ color: "var(--text-secondary)" }}
+      >
         No leads entered the pipeline in this period
       </p>
-      <p className="mx-auto mt-1 max-w-md text-xs" style={{ color: "var(--text-muted)" }}>
-        This reflects real recorded activity, not a connection problem. Check the
-        setup page if you expected leads here.
+      <p
+        className="mx-auto mt-1 max-w-md text-xs"
+        style={{ color: "var(--text-muted)" }}
+      >
+        This reflects real recorded activity, not a connection problem. Check
+        the setup page if you expected leads here.
       </p>
     </div>
   );

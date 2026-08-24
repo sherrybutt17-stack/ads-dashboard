@@ -23,7 +23,38 @@ export class GhlApiError extends Error {
     super(message);
     this.name = "GhlApiError";
   }
+
+  /**
+   * Worth trying again, as opposed to worth reporting.
+   *
+   * 429 and 5xx only. A 401 means the token is dead and a 404 means the id is
+   * wrong; retrying either just delays the same answer while holding a sync
+   * open.
+   */
+  get isRetryable(): boolean {
+    return this.status === 429 || this.status >= 500;
+  }
 }
+
+/**
+ * How many times a retryable failure is retried, and how long between.
+ *
+ * 🔴 This client had no retry at all, and it is the one that needs it most.
+ *
+ * `meta/client.ts` reads Meta's throttle headers and backs off; `google/client.
+ * ts` retries 429 and 5xx with exponential backoff. GHL — the only one that
+ * pages through an entire location in a tight loop, up to 500 requests with no
+ * pause — threw on the first 429 and aborted.
+ *
+ * What that costs is specific to this integration. The day-0 backfill is the
+ * one chance to establish the floor of what is knowable, because GoHighLevel
+ * exposes no stage-transition history; a run that dies at page 40 of 200 leaves
+ * a snapshot that is silently partial, and the opportunities it never reached
+ * have no other source. Re-running is possible but nothing prompts it — the
+ * `sync_runs` row says failed and the dashboard just looks quiet.
+ */
+const MAX_RETRIES = 4;
+const RETRY_BASE_MS = 1_000;
 
 export class GhlClient {
   constructor(private readonly token: string) {}
@@ -31,6 +62,7 @@ export class GhlClient {
   private async request<T>(
     path: string,
     init: RequestInit & { query?: Record<string, string | number | undefined> } = {},
+    attempt = 0,
   ): Promise<T> {
     const { query, ...rest } = init;
     const url = new URL(`${BASE_URL}${path}`);
@@ -63,13 +95,31 @@ export class GhlClient {
     }
 
     if (!res.ok) {
-      throw new GhlApiError(
+      const err = new GhlApiError(
         `GHL ${res.status} on ${path}: ${
           typeof body === "string" ? body : JSON.stringify(body)
         }`,
         res.status,
         body,
       );
+
+      if (err.isRetryable && attempt < MAX_RETRIES) {
+        /*
+         * `Retry-After` when the server states one, exponential backoff when it
+         * does not. Honouring the header matters more than the curve: GHL's
+         * burst limit refills on a short window, so a server-supplied wait is
+         * usually shorter than our own guess, and ignoring it in favour of
+         * doubling turns a two-second pause into thirty.
+         */
+        const stated = Number(res.headers.get("retry-after"));
+        const waitMs =
+          Number.isFinite(stated) && stated > 0
+            ? Math.min(stated * 1000, 60_000)
+            : Math.min(2 ** attempt * RETRY_BASE_MS, 30_000);
+        await new Promise((r) => setTimeout(r, waitMs));
+        return this.request<T>(path, init, attempt + 1);
+      }
+      throw err;
     }
     return body as T;
   }
@@ -148,6 +198,21 @@ export class GhlClient {
       if (res.meta && res.meta.nextPageUrl === null) return;
       page += 1;
     }
+
+    /*
+     * 🔴 The cap was reached, so this stopped early — say so.
+     *
+     * Falling off the loop silently is indistinguishable from finishing, and
+     * the caller is the day-0 backfill: it would write `sync_runs.status =
+     * success` over a snapshot missing everything past page 500. Nothing else
+     * would ever mention it, because GoHighLevel has no stage history to
+     * reconcile against later.
+     */
+    console.warn(
+      `[ghl] stopped paging opportunities for location ${locationId} at the ` +
+        `${maxPages}-page cap (~${maxPages * limit} records). The snapshot is ` +
+        `PARTIAL. Raise maxPages if this location is genuinely larger.`,
+    );
   }
 }
 
@@ -182,27 +247,4 @@ export function flattenStages(
     });
   }
   return out;
-}
-
-/**
- * Best-effort guess at which canonical stage a GHL stage name refers to, used
- * only to PRE-SELECT dropdowns in the mapping UI. The operator always confirms.
- * Never used to map silently — a wrong guess would corrupt the funnel.
- */
-export function guessCanonicalStage(name: string | null): string | null {
-  if (!name) return null;
-  const n = name.toLowerCase().trim();
-
-  const rules: Array<[RegExp, string]> = [
-    [/\b(no[\s-]?show|missed|didn'?t show)\b/, "no_show"],
-    [/\b(won|closed[\s-]?won|sold|customer|purchased)\b/, "closed_won"],
-    [/\b(lost|dead|unqualified|not interested|cancel)/, "lost"],
-    [/\b(showed|shown|attended|consult(ation)? complete)/, "showed"],
-    [/\b(appointment|appt|booked|scheduled|consult)/, "appointment_booked"],
-    [/\b(contacted|reached|responded|replied|engaged|follow[\s-]?up)/, "contacted"],
-    [/\b(new|lead|inquiry|enquiry|prospect)/, "new_lead"],
-  ];
-
-  for (const [re, stage] of rules) if (re.test(n)) return stage;
-  return null;
 }

@@ -17,8 +17,25 @@ import { getAccessToken } from "./oauth";
 
 const API_HOST = "https://googleads.googleapis.com";
 
+/**
+ * ⚠️ CONFIRM THIS AGAINST GOOGLE'S RELEASE NOTES BEFORE THE FIRST REAL CALL.
+ *
+ * Google ships roughly three Ads API versions a year and sunsets each after
+ * about thirteen months. Unlike Meta — which silently falls back to an older
+ * version and gives you quietly wrong numbers — Google **hard-errors** on a
+ * sunset version. That is the better failure: loud, immediate, and impossible
+ * to mistake for a data problem.
+ *
+ * The previous default was `v18` (released around Nov 2024), which is long past
+ * sunset and would fail every call. `v22` is the version this release series
+ * lands on by that cadence, but it is a projection, not a checked fact, and
+ * nothing here has yet made a live request. Set `GOOGLE_ADS_API_VERSION`
+ * explicitly once the developer token is approved and the first call is made.
+ */
+const DEFAULT_API_VERSION = "v22";
+
 function apiVersion(): string {
-  return process.env.GOOGLE_ADS_API_VERSION ?? "v18";
+  return process.env.GOOGLE_ADS_API_VERSION ?? DEFAULT_API_VERSION;
 }
 
 /** Strip everything but digits — customer ids carry dashes in the UI. */
@@ -45,6 +62,18 @@ export interface GoogleCustomerInfo {
   descriptiveName: string | null;
   currencyCode: string | null;
   timeZone: string | null;
+}
+
+/** One account in a manager hierarchy, as `customer_client` reports it. */
+export interface GoogleAccountNode {
+  customerId: string;
+  name: string | null;
+  currency: string | null;
+  timezone: string | null;
+  /** An intermediate manager — structure, not something that can run ads. */
+  isManager: boolean;
+  /** Depth beneath the queried manager: 1 = direct child. */
+  level: number;
 }
 
 export interface GoogleDailyRow {
@@ -79,15 +108,63 @@ interface GaqlRow {
     currencyCode?: string;
     timeZone?: string;
   };
+  customerClient?: {
+    /** A resource name — `customers/1234567890`, not a bare id. */
+    clientCustomer?: string;
+    level?: string | number;
+    manager?: boolean;
+    descriptiveName?: string;
+    currencyCode?: string;
+    timeZone?: string;
+    status?: string;
+  };
 }
 
 export class GoogleAdsClient {
-  constructor(private readonly refreshTokenOverride?: string) {}
+  /**
+   * @param refreshTokenOverride  a per-account token, for an account not under
+   *   the agency MCC. Falls back to the agency refresh token.
+   * @param loginCustomerIdOverride  🔴 the manager account this customer is
+   *   reached THROUGH. See below.
+   */
+  constructor(
+    private readonly refreshTokenOverride?: string,
+    private readonly loginCustomerIdOverride?: string | null,
+  ) {}
 
-  private loginCustomerId(): string {
+  /**
+   * The `login-customer-id` header.
+   *
+   * 🔴 Per account, not one global env var, and the distinction only shows up
+   * once a client signs in with their OWN Google account rather than being
+   * linked under the agency MCC. Their accounts sit under THEIR manager, or
+   * under no manager at all, and sending our MCC id then produces a permission
+   * error — or, worse, a successful call that returns nothing for an account
+   * that plainly has spend. The header is syntactically valid either way, so
+   * nothing looks broken.
+   *
+   * Three cases, in order:
+   *
+   *   1. An explicit per-account manager id — the self-serve path.
+   *   2. `""` stored explicitly — the account has no manager above it, so the
+   *      header must be OMITTED rather than defaulted to ours.
+   *   3. Nothing stored — the agency MCC from env, exactly as before.
+   */
+  private loginCustomerId(): string | null {
+    if (this.loginCustomerIdOverride !== undefined && this.loginCustomerIdOverride !== null) {
+      const trimmed = this.loginCustomerIdOverride.trim();
+      // Case 2: a deliberate "no manager", distinct from "not configured".
+      return trimmed === "" ? null : normalizeCustomerId(trimmed);
+    }
     const mcc = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
     if (!mcc) throw new Error("GOOGLE_ADS_LOGIN_CUSTOMER_ID (your MCC id) is not set.");
     return normalizeCustomerId(mcc);
+  }
+
+  /** `{"login-customer-id": …}` or `{}` — never an empty-valued header. */
+  private loginHeader(): Record<string, string> {
+    const id = this.loginCustomerId();
+    return id ? { "login-customer-id": id } : {};
   }
 
   private developerToken(): string {
@@ -114,7 +191,10 @@ export class GoogleAdsClient {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "developer-token": this.developerToken(),
-        "login-customer-id": this.loginCustomerId(),
+        // Omitted entirely when the account has no manager above it — sending
+        // an empty header is not the same as sending none, and Google rejects
+        // the former.
+        ...this.loginHeader(),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ query }),
@@ -151,6 +231,93 @@ export class GoogleAdsClient {
       if (Array.isArray(chunk.results)) rows.push(...chunk.results);
     }
     return rows;
+  }
+
+  /**
+   * Every customer the authorizing Google account can touch directly.
+   *
+   * The entry point for self-serve connect: the user signs in, and this is the
+   * list Google hands back. Two things it is NOT:
+   *
+   *   · It is **not** a hierarchy. If the user authorizes with a manager
+   *     account, this returns that ONE manager, not the accounts beneath it —
+   *     which is why `listClientAccounts` exists.
+   *   · It returns **resource names** (`customers/1234567890`), not ids, so the
+   *     trailing segment has to be taken rather than the string used whole.
+   *
+   * Deliberately does NOT send `login-customer-id`: this call is about the
+   * authorizing identity itself, and scoping it through a manager would be
+   * asking the wrong question.
+   */
+  async listAccessibleCustomers(): Promise<string[]> {
+    const accessToken = await getAccessToken(this.refreshTokenOverride);
+    const url = `${API_HOST}/${apiVersion()}/customers:listAccessibleCustomers`;
+
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "developer-token": this.developerToken(),
+      },
+      cache: "no-store",
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new GoogleAdsError(
+        `Google Ads ${res.status} listing accessible customers: ${text}`,
+        res.status,
+        text,
+      );
+    }
+
+    const body = JSON.parse(text || "{}") as { resourceNames?: string[] };
+    return (body.resourceNames ?? []).map((n) => n.split("/").pop() ?? "").filter(Boolean);
+  }
+
+  /**
+   * Every account beneath a manager account, at any depth.
+   *
+   * `customer_client` is a flattened view of the tree, so one query with
+   * `level > 0` returns children, grandchildren and below — no recursion. The
+   * caller supplies the manager id as BOTH the queried customer and the
+   * `login-customer-id`, which is the shape Google requires for a manager
+   * traversal and the reason this cannot reuse the agency default.
+   *
+   * `status = 'ENABLED'` filters out cancelled and closed accounts, which
+   * otherwise show up in the picker and fail on first sync.
+   */
+  async listClientAccounts(managerId: string): Promise<GoogleAccountNode[]> {
+    const rows = await this.search(
+      managerId,
+      `SELECT customer_client.client_customer,
+              customer_client.level,
+              customer_client.manager,
+              customer_client.descriptive_name,
+              customer_client.currency_code,
+              customer_client.time_zone,
+              customer_client.status
+       FROM customer_client
+       WHERE customer_client.level > 0
+         AND customer_client.status = 'ENABLED'`,
+    );
+
+    return rows.flatMap((r) => {
+      const cc = r.customerClient;
+      const id = cc?.clientCustomer?.split("/").pop();
+      if (!id) return [];
+      return [
+        {
+          customerId: id,
+          name: cc?.descriptiveName ?? null,
+          currency: cc?.currencyCode ?? null,
+          timezone: cc?.timeZone ?? null,
+          // `manager` marks an intermediate manager in the tree. Those cannot
+          // be queried for spend, so the picker shows them as structure rather
+          // than as a choice that would report zero forever.
+          isManager: Boolean(cc?.manager),
+          level: Number(cc?.level ?? 0),
+        },
+      ];
+    });
   }
 
   /**

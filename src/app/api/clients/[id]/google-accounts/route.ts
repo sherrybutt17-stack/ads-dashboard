@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getClientById } from "@/lib/clients";
 import { addGoogleAccount, listGoogleAccounts } from "@/lib/google/accounts";
 import { isGoogleConfigured } from "@/lib/google/oauth";
+import { isSuperadmin, requireClient } from "@/lib/auth";
+import { safeFailure } from "@/lib/api-failure";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -14,10 +15,11 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client } = got;
 
-  const accounts = await listGoogleAccounts(id);
+  const accounts = await listGoogleAccounts(client.id);
   return NextResponse.json({
     configured: isGoogleConfigured(),
     accounts: accounts.map((a) => ({
@@ -46,15 +48,30 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client, session } = got;
+  const superadmin = isSuperadmin(session);
 
   if (!isGoogleConfigured()) {
+    /*
+     * Two registers for the same fact. The setup instructions name our
+     * developer token and our MCC — worth reading if you can act on them, and a
+     * description of shared credentials to anyone who cannot. An agency owner
+     * is in the second group, so they get told it is ours and that they cannot
+     * fix it, which is the part that stops them re-entering a customer id ten
+     * times against a connector that was never switched on.
+     */
     return NextResponse.json(
       {
         ok: false,
-        error:
-          "Google Ads is not configured yet. Add the agency developer token, OAuth client, refresh token and MCC id to the environment (see SETUP.md).",
+        error: superadmin
+          ? "Google Ads is not configured yet. Set GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_CLIENT_ID and GOOGLE_ADS_CLIENT_SECRET (see SETUP.md §2b). The agency refresh token and MCC id are Model A only — client sign-in does not need them."
+          : "Google Ads is not fully set up on our side",
+        hint: superadmin
+          ? undefined
+          : "Nothing you can fix from here. Contact support and we'll sort it.",
+        cause: "not_configured",
       },
       { status: 400 },
     );
@@ -71,7 +88,7 @@ export async function POST(
 
   try {
     const result = await addGoogleAccount(
-      id,
+      client.id,
       parsed.data.customerId,
       parsed.data.refreshToken,
     );
@@ -97,8 +114,21 @@ export async function POST(
       timezoneMismatch: result.timezoneMismatch ?? null,
     });
   } catch (err) {
+    /*
+     * The worst offender of the set: `google/client.ts` interpolates the entire
+     * response body, and a Google Ads error payload carries our MCC id and the
+     * developer token's approval state.
+     */
     return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "Failed" },
+      {
+        ok: false,
+        ...safeFailure(
+          err,
+          "google",
+          { superadmin },
+          "Could not attach that account.",
+        ),
+      },
       { status: 502 },
     );
   }

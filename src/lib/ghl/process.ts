@@ -12,7 +12,8 @@ import {
 import { decryptNullable } from "@/lib/crypto";
 import { GhlClient } from "./client";
 import { normalizeWebhookPayload, normalizeStatus, parseDate } from "./normalize";
-import type { GhlAttributionSource, GhlContact } from "./types";
+import { parseAttribution } from "./attribution";
+import type { GhlContact } from "./types";
 
 export interface ProcessResult {
   status: "processed" | "ignored" | "failed";
@@ -377,7 +378,7 @@ async function upsertContactFromEvent(
     return created ?? existing ?? null;
   }
 
-  const attr = pickAttribution(remote);
+  const attr = parseAttribution(remote);
   const values = {
     clientId: client.id,
     ghlContactId,
@@ -391,10 +392,26 @@ async function upsertContactFromEvent(
     utmCampaign: attr.utmCampaign,
     utmContent: attr.utmContent,
     utmTerm: attr.utmTerm,
+    // Each id lands on exactly ONE platform, decided by `parseAttribution`.
+    // Previously the campaign id went into the Meta column unconditionally,
+    // which made every Google lead count toward the Facebook tab, and `gclid` /
+    // `googleCampaignId` were never written at all — so the Google view
+    // selected on columns that were empty for every row ever created.
     metaCampaignId: attr.metaCampaignId,
     metaAdsetId: attr.metaAdsetId,
     metaAdId: attr.metaAdId,
+    googleCampaignId: attr.googleCampaignId,
+    tiktokCampaignId: attr.tiktokCampaignId,
+    gclid: attr.gclid,
+    ttclid: attr.ttclid,
     fbclid: attr.fbclid,
+    /*
+     * The one attribution a native Instant Form lead carries. Stored raw and
+     * resolved later by `scripts/repair-attribution.ts` — trading it back to
+     * Meta for the ad and campaign is an API call per lead, on a scope this
+     * app may not hold, and neither belongs on the webhook path.
+     */
+    facebookLeadId: attr.facebookLeadId,
     // Lowercased so the paid-lead tag comparison is case-insensitive without
     // needing a functional index or per-query LOWER().
     tags: extractTags(remote),
@@ -430,7 +447,18 @@ async function upsertContactFromEvent(
         metaCampaignId: sql`COALESCE(${values.metaCampaignId}, ${contacts.metaCampaignId})`,
         metaAdsetId: sql`COALESCE(${values.metaAdsetId}, ${contacts.metaAdsetId})`,
         metaAdId: sql`COALESCE(${values.metaAdId}, ${contacts.metaAdId})`,
+        googleCampaignId: sql`COALESCE(${values.googleCampaignId}, ${contacts.googleCampaignId})`,
+        tiktokCampaignId: sql`COALESCE(${values.tiktokCampaignId}, ${contacts.tiktokCampaignId})`,
+        gclid: sql`COALESCE(${values.gclid}, ${contacts.gclid})`,
+        ttclid: sql`COALESCE(${values.ttclid}, ${contacts.ttclid})`,
         fbclid: sql`COALESCE(${values.fbclid}, ${contacts.fbclid})`,
+        /*
+         * Same rule, and it matters more here than for most: this id is the
+         * ONLY attribution an Instant Form lead has, so overwriting it with a
+         * null from a later re-fetch would permanently strip that lead of any
+         * route back to its campaign.
+         */
+        facebookLeadId: sql`COALESCE(${values.facebookLeadId}, ${contacts.facebookLeadId})`,
         ghlCreatedAt: sql`COALESCE(${values.ghlCreatedAt}, ${contacts.ghlCreatedAt})`,
       },
     })
@@ -448,34 +476,9 @@ function extractTags(contact: GhlContact): string[] {
     .filter(Boolean);
 }
 
-/**
- * Merge first-touch and last-touch attribution.
- *
- * `attributionSource` is first touch and static; `lastAttributionSource` is
- * overwritten on each qualifying visit. For cost-per-lead we want the touch
- * that CREATED the lead, so first touch wins and last touch only fills gaps.
- */
-function pickAttribution(contact: GhlContact) {
-  const first = contact.attributionSource ?? {};
-  const last = contact.lastAttributionSource ?? {};
-  const pick = (k: keyof GhlAttributionSource): string | null => {
-    const v = first[k] ?? last[k];
-    return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
-  };
-
-  return {
-    utmSource: pick("utmSource"),
-    utmMedium: pick("utmMedium") ?? pick("medium"),
-    utmCampaign: pick("utmCampaign") ?? pick("campaign"),
-    utmContent: pick("utmContent"),
-    utmTerm: pick("utmTerm"),
-    // Holds the Meta numeric campaign id when UTMs are configured on the ads.
-    metaCampaignId: pick("campaignId"),
-    metaAdsetId: pick("adGroupId"),
-    metaAdId: pick("adId"),
-    fbclid: pick("fbclid"),
-  };
-}
+/* Attribution parsing lives in `./attribution` — see the header there for what
+ * the production payloads actually contain, which is not what this originally
+ * assumed. */
 
 /**
  * Resolve a GHL REST client for this tenant.

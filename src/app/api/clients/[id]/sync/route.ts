@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getClientById } from "@/lib/clients";
 import { backfillClientMetrics, syncClientMetrics } from "@/lib/meta/sync";
 import { backfillClientSnapshot } from "@/lib/ghl/backfill";
 import { trailingWindowInclusive } from "@/lib/dates";
+import { isSuperadmin, requireClient } from "@/lib/auth";
+import { safeFailure } from "@/lib/api-failure";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,8 +23,9 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client, session } = got;
 
   const body = await req.json().catch(() => ({}));
   const parsed = BodySchema.safeParse(body ?? {});
@@ -39,6 +41,9 @@ export async function POST(
           since: window.startKey,
           until: window.endKey,
           includeReach: true,
+          // A manual "Sync now" is the operator asking for everything.
+          includeAdLevel: true,
+          includeBreakdowns: true,
         });
         return NextResponse.json({ ok: true, ...res });
       }
@@ -56,8 +61,23 @@ export async function POST(
       }
     }
   } catch (err) {
+    /*
+     * The action decides whose error this is. A thrown timeout says nothing
+     * about which platform timed out, and reporting a GHL backfill failure as
+     * "Meta did not respond" would send someone to re-check a connection that
+     * was never involved.
+     */
+    const source = parsed.data.action === "ghl_backfill" ? "ghl" : "meta";
     return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "Sync failed" },
+      {
+        ok: false,
+        ...safeFailure(
+          err,
+          source,
+          { superadmin: isSuperadmin(session) },
+          "Sync failed",
+        ),
+      },
       { status: 502 },
     );
   }

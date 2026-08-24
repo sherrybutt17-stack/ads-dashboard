@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes, createHmac } from "node:crypto";
 import { buildAuthorizeUrl, isOauthConfigured } from "@/lib/ghl/oauth";
-import { getSessionUser, isStaff } from "@/lib/auth";
+import { getSessionUser, isAgencyOperator } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
  * installs arrive with no session cookie.
  */
 export async function GET(req: NextRequest) {
-  if (!isStaff(await getSessionUser())) {
+  if (!isAgencyOperator(await getSessionUser())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!isOauthConfigured()) {

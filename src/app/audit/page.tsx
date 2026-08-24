@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { listAuditEntries, type AuditView } from "@/lib/audit";
-import { getSessionUser, isStaff } from "@/lib/auth";
+import { getSessionUser, isAgencyOperator } from "@/lib/auth";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { DASH } from "@/lib/metrics/compute";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,9 @@ const CATEGORIES = [
 ] as const;
 
 /** Map an action to a display label + a severity tone for its pill. */
-function eventTone(action: string): { tone: "neutral" | "warning" | "critical" } {
+function eventTone(action: string): {
+  tone: "neutral" | "warning" | "critical";
+} {
   if (action === "auth.login_failed" || action === "auth.rate_limited") {
     return { tone: "critical" };
   }
@@ -78,11 +81,22 @@ export default async function AuditPage({
 }: {
   searchParams: Promise<{ cat?: string }>;
 }) {
-  if (!isStaff(await getSessionUser())) redirect("/");
+  /*
+   * Open to the agency tier since `audit_log.agency_id` exists (0024).
+   *
+   * The guard here is only the ROLE test — "does this person run an agency" —
+   * and it is deliberately not the whole check. Which rows they see is decided
+   * in `listAuditEntries`, from the session, in SQL. A page that filtered by
+   * tenant itself would be one copy of the rule per page.
+   */
+  const session = await getSessionUser();
+  if (!isAgencyOperator(session)) redirect("/");
 
   const { cat } = await searchParams;
   const category = CATEGORIES.some((c) => c.key === cat) ? (cat ?? "") : "";
-  const entries = await listAuditEntries({ category: category || undefined });
+  const entries = await listAuditEntries(session, {
+    category: category || undefined,
+  });
 
   return (
     <div className="min-h-full">
@@ -118,7 +132,9 @@ export default async function AuditPage({
                 aria-current={active ? "page" : undefined}
                 className="rounded-full border px-3 py-1 text-[13px] font-medium transition-colors"
                 style={{
-                  borderColor: active ? "var(--series-1)" : "var(--border-strong)",
+                  borderColor: active
+                    ? "var(--series-1)"
+                    : "var(--border-strong)",
                   background: active ? "var(--series-1)" : "transparent",
                   color: active ? "#fff" : "var(--text-secondary)",
                 }}
@@ -131,14 +147,18 @@ export default async function AuditPage({
             className="ml-auto text-xs"
             style={{ color: "var(--text-muted)" }}
           >
-            {entries.length} event{entries.length === 1 ? "" : "s"} · newest first
+            {entries.length} event{entries.length === 1 ? "" : "s"} · newest
+            first
           </span>
         </div>
 
         {entries.length === 0 ? (
           <div
             className="rounded-[14px] border border-dashed p-10 text-center text-sm"
-            style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+            style={{
+              borderColor: "var(--border-strong)",
+              color: "var(--text-secondary)",
+            }}
           >
             No events recorded yet in this category.
           </div>
@@ -213,22 +233,25 @@ function Row({ e }: { e: AuditView }) {
           {e.targetType ? (
             <span style={{ color: "var(--text-muted)" }}>{e.targetType}: </span>
           ) : null}
-          {e.targetId ?? "—"}
+          {e.targetId ?? DASH}
         </div>
         {meta && (
-          <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <div
+            className="truncate text-[11px]"
+            style={{ color: "var(--text-muted)" }}
+          >
             {meta}
           </div>
         )}
       </td>
       <td className="px-4 py-2.5" style={{ color: "var(--text-secondary)" }}>
-        {e.clientName ?? "—"}
+        {e.clientName ?? DASH}
       </td>
       <td
         className="px-4 py-2.5 tnum whitespace-nowrap"
         style={{ color: "var(--text-muted)" }}
       >
-        {e.ip ?? "—"}
+        {e.ip ?? DASH}
       </td>
     </tr>
   );

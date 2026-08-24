@@ -1,7 +1,9 @@
 "use client";
 
+import type { UserRole } from "@/db/schema";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { DASH } from "@/lib/metrics/compute";
 
 interface ClientOpt {
   id: string;
@@ -12,7 +14,12 @@ interface ClientOpt {
 export interface UserRow {
   id: string;
   email: string;
-  role: "staff" | "client";
+  /**
+   * Type-only import, which the bundler erases — so this stays tied to the
+   * database enum without dragging the schema into the browser. See
+   * `client-bundle.test.ts`, which enforces exactly that distinction.
+   */
+  role: UserRole;
   name: string | null;
   status: "active" | "disabled";
   lastLoginAt: string | null;
@@ -26,18 +33,40 @@ const inputStyle = {
   color: "var(--text-primary)",
 } as const;
 
+/**
+ * Display order for the role buttons, narrowest first.
+ *
+ * A constant rather than the enum's own order, because the enum is ordered by
+ * when each value was added and the form should read from least to most
+ * privilege. Roles the caller may not assign are filtered out, never disabled —
+ * a greyed button invites a support question about a permission the operator
+ * cannot be granted.
+ */
+const ROLE_ORDER: UserRole[] = ["client", "agency", "staff", "superadmin"];
+
+/** Only a `client` login is scoped to named dashboards; every other role is not. */
+function needsClients(role: UserRole): boolean {
+  return role === "client";
+}
+
 export function UsersManager({
   users,
   clients,
+  assignable,
 }: {
   users: UserRow[];
   clients: ClientOpt[];
+  /** Which roles this operator may hand out — from `assignableRoles`. */
+  assignable: UserRole[];
 }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"staff" | "client">("client");
+  const roleOptions = ROLE_ORDER.filter((r) => assignable.includes(r));
+  // Default to the narrowest role offered, so the safest option is the one a
+  // distracted operator submits.
+  const [role, setRole] = useState<UserRole>(roleOptions[0] ?? "client");
   const [clientIds, setClientIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -52,7 +81,9 @@ export function UsersManager({
     const bytes = new Uint8Array(12);
     crypto.getRandomValues(bytes);
     setPassword(
-      btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, "").slice(0, 14),
+      btoa(String.fromCharCode(...bytes))
+        .replace(/[+/=]/g, "")
+        .slice(0, 14),
     );
   }
 
@@ -68,7 +99,7 @@ export function UsersManager({
           name: name || undefined,
           password,
           role,
-          clientIds: role === "client" ? clientIds : undefined,
+          clientIds: needsClients(role) ? clientIds : undefined,
         }),
       });
       const body = await res.json().catch(() => null);
@@ -110,13 +141,16 @@ export function UsersManager({
     await fetch(`/api/users/${u.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: u.status === "active" ? "disabled" : "active" }),
+      body: JSON.stringify({
+        status: u.status === "active" ? "disabled" : "active",
+      }),
     });
     router.refresh();
   }
 
   async function remove(u: UserRow) {
-    if (!confirm(`Remove ${u.email}? They will lose access immediately.`)) return;
+    if (!confirm(`Remove ${u.email}? They will lose access immediately.`))
+      return;
     await fetch(`/api/users/${u.id}`, { method: "DELETE" });
     router.refresh();
   }
@@ -124,23 +158,40 @@ export function UsersManager({
   const canCreate =
     email.trim() !== "" &&
     password.length >= 8 &&
-    (role === "staff" || clientIds.length > 0);
+    // Only a client login needs dashboards picked. Keying this off `!== "staff"`
+    // made the agency and superadmin roles unsubmittable, because there is no
+    // client list to satisfy for a role that is not scoped to one.
+    (!needsClients(role) || clientIds.length > 0);
 
   return (
     <div className="flex flex-col gap-5">
       {/* Create */}
       <section className="card p-5">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2
+          className="text-sm font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
           Create a login
         </h2>
         <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-          A client login sees only the dashboards you select. A staff login sees
-          everything.
+          A client login sees only the dashboards you select. Every other role
+          sees your whole book.
         </p>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="client@brand.com" />
-          <Field label="Name (optional)" value={name} onChange={setName} placeholder="Jane at Brand" />
+          <Field
+            label="Email"
+            type="email"
+            value={email}
+            onChange={setEmail}
+            placeholder="client@brand.com"
+          />
+          <Field
+            label="Name (optional)"
+            value={name}
+            onChange={setName}
+            placeholder="Jane at Brand"
+          />
         </div>
 
         <div className="mt-3 flex flex-wrap items-end gap-3">
@@ -156,7 +207,10 @@ export function UsersManager({
             type="button"
             onClick={generate}
             className="rounded-[8px] border px-3 py-2 text-[13px] font-medium"
-            style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+            style={{
+              borderColor: "var(--border-strong)",
+              color: "var(--text-secondary)",
+            }}
           >
             Generate
           </button>
@@ -170,14 +224,15 @@ export function UsersManager({
             Role
           </span>
           <div className="mt-1 flex gap-2">
-            {(["client", "staff"] as const).map((r) => (
+            {roleOptions.map((r) => (
               <button
                 key={r}
                 type="button"
                 onClick={() => setRole(r)}
                 className="rounded-[8px] border px-3 py-1.5 text-[13px] font-medium capitalize"
                 style={{
-                  borderColor: role === r ? "var(--series-1)" : "var(--border-strong)",
+                  borderColor:
+                    role === r ? "var(--series-1)" : "var(--border-strong)",
                   background: role === r ? "var(--series-1)" : "transparent",
                   color: role === r ? "#fff" : "var(--text-secondary)",
                 }}
@@ -188,7 +243,7 @@ export function UsersManager({
           </div>
         </div>
 
-        {role === "client" && (
+        {needsClients(role) && (
           <div className="mt-3">
             <span
               className="text-[11px] font-medium tracking-wider uppercase"
@@ -197,7 +252,10 @@ export function UsersManager({
               Dashboards this login can see
             </span>
             {clients.length === 0 ? (
-              <p className="mt-1 text-xs" style={{ color: "var(--status-warning)" }}>
+              <p
+                className="mt-1 text-xs"
+                style={{ color: "var(--status-warning)" }}
+              >
                 No clients yet — add a client first, then create their login.
               </p>
             ) : (
@@ -211,11 +269,15 @@ export function UsersManager({
                       onClick={() => toggleClient(c.id)}
                       className="rounded-full border px-3 py-1 text-[13px]"
                       style={{
-                        borderColor: on ? "var(--series-1)" : "var(--border-strong)",
+                        borderColor: on
+                          ? "var(--series-1)"
+                          : "var(--border-strong)",
                         background: on
                           ? "color-mix(in srgb, var(--series-1) 16%, transparent)"
                           : "transparent",
-                        color: on ? "var(--text-primary)" : "var(--text-secondary)",
+                        color: on
+                          ? "var(--text-primary)"
+                          : "var(--text-secondary)",
                       }}
                     >
                       {on ? "✓ " : ""}
@@ -240,7 +302,9 @@ export function UsersManager({
         {msg && (
           <p
             className="mt-3 text-xs"
-            style={{ color: msg.ok ? "var(--delta-good)" : "var(--status-critical)" }}
+            style={{
+              color: msg.ok ? "var(--delta-good)" : "var(--status-critical)",
+            }}
           >
             {msg.text}
           </p>
@@ -250,14 +314,25 @@ export function UsersManager({
       {/* List */}
       <section className="card overflow-hidden">
         <div className="px-5 py-4">
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2
+            className="text-sm font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
             Logins ({users.length})
           </h2>
         </div>
-        <div className="table-scroll border-t" style={{ borderColor: "var(--border)" }}>
+        <div
+          className="table-scroll border-t"
+          style={{ borderColor: "var(--border)" }}
+        >
           <table className="w-full text-[13px]">
             <thead>
-              <tr style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
+              <tr
+                style={{
+                  background: "var(--surface-2)",
+                  color: "var(--text-muted)",
+                }}
+              >
                 <Th>Email</Th>
                 <Th>Role</Th>
                 <Th>Dashboards</Th>
@@ -267,11 +342,20 @@ export function UsersManager({
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.id} className="border-t" style={{ borderColor: "var(--border)" }}>
+                <tr
+                  key={u.id}
+                  className="border-t"
+                  style={{ borderColor: "var(--border)" }}
+                >
                   <td className="px-4 py-2.5">
-                    <div style={{ color: "var(--text-primary)" }}>{u.email}</div>
+                    <div style={{ color: "var(--text-primary)" }}>
+                      {u.email}
+                    </div>
                     {u.name && (
-                      <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      <div
+                        className="text-[11px]"
+                        style={{ color: "var(--text-muted)" }}
+                      >
                         {u.name}
                       </div>
                     )}
@@ -279,7 +363,8 @@ export function UsersManager({
                       <span
                         className="mt-0.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium"
                         style={{
-                          background: "color-mix(in srgb, var(--status-critical) 16%, transparent)",
+                          background:
+                            "color-mix(in srgb, var(--status-critical) 16%, transparent)",
                           color: "var(--status-critical)",
                         }}
                       >
@@ -287,17 +372,32 @@ export function UsersManager({
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 capitalize" style={{ color: "var(--text-secondary)" }}>
+                  <td
+                    className="px-4 py-2.5 capitalize"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
                     {u.role}
                   </td>
-                  <td className="px-4 py-2.5" style={{ color: "var(--text-secondary)" }}>
-                    {u.role === "staff"
+                  <td
+                    className="px-4 py-2.5"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    {/*
+                      An operator role is not scoped to named dashboards, so it
+                      sees the whole book. Reading `=== "staff"` showed an
+                      agency admin a bare dash here — which renders as "access
+                      to nothing" for someone who in fact sees everything.
+                    */}
+                    {!needsClients(u.role)
                       ? "All"
                       : u.clients.length === 0
-                        ? "—"
+                        ? DASH
                         : u.clients.map((c) => c.name).join(", ")}
                   </td>
-                  <td className="px-4 py-2.5" style={{ color: "var(--text-muted)" }}>
+                  <td
+                    className="px-4 py-2.5"
+                    style={{ color: "var(--text-muted)" }}
+                  >
                     {u.lastLoginAt
                       ? new Date(u.lastLoginAt).toLocaleDateString("en-US", {
                           timeZone: "UTC",

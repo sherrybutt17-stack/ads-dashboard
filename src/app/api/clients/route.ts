@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createClient, listClients, webhookUrlFor } from "@/lib/clients";
+import {
+  createClient,
+  listClientsForSession,
+  webhookUrlFor,
+} from "@/lib/clients";
 import { listAdAccounts } from "@/lib/meta/accounts";
 import { quickHealth } from "@/lib/health";
 import { isValidTimeZone } from "@/lib/dates";
-import { getSessionUser, isStaff } from "@/lib/auth";
+import { getSessionUser, isAgencyOperator } from "@/lib/auth";
+import { assertLocationIdAvailable } from "@/lib/ghl/oauth";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -23,7 +28,12 @@ const CreateSchema = z.object({
 });
 
 export async function GET() {
-  const rows = await listClients();
+  const session = await getSessionUser();
+  if (!isAgencyOperator(session)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const rows = await listClientsForSession(session);
   const withHealth = await Promise.all(
     rows.map(async (c) => {
       const accounts = await listAdAccounts(c.id);
@@ -39,7 +49,10 @@ export async function GET() {
           accounts[0]?.accountName ??
           null,
         ghlLocationName: c.ghlLocationName,
-        webhookUrl: webhookUrlFor(c),
+        // Deliberately NOT webhookUrl. `clients.webhookToken` doubles as the GHL
+        // shared secret, so anyone holding it can forge lead and stage-transition
+        // events into the append-only ledger. Nothing renders it from here; the
+        // per-client GET returns it for the setup page that actually needs it.
         firstWebhookAt: c.firstWebhookAt,
         lastWebhookAt: c.lastWebhookAt,
         lastSyncedAt: c.lastSyncedAt,
@@ -51,7 +64,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isStaff(await getSessionUser())) {
+  const session = await getSessionUser();
+  if (!isAgencyOperator(session)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const body = await req.json().catch(() => null);
@@ -64,7 +78,23 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const client = await createClient(parsed.data);
+    /*
+     * The tenant comes from the SESSION, never from `parsed.data`. The request
+     * body is caller input, and a body that could name its own agency would let
+     * anyone file a client under someone else's — a write across the tenant
+     * boundary, from the one endpoint whose whole job is creating rows.
+     */
+    // A typed location id must not name another tenant's live install.
+    if (parsed.data.ghlLocationId) {
+      await assertLocationIdAvailable(
+        session!.agencyId,
+        parsed.data.ghlLocationId,
+      );
+    }
+    const client = await createClient({
+      ...parsed.data,
+      agencyId: session!.agencyId,
+    });
     void audit.record({
       action: "client.create",
       targetType: "client",

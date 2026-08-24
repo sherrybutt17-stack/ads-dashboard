@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -71,7 +72,10 @@ function LoginForm() {
         </div>
       </div>
 
-      <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h1
+        className="text-base font-semibold"
+        style={{ color: "var(--text-primary)" }}
+      >
         Sign in
       </h1>
       <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -129,7 +133,18 @@ function LoginForm() {
       </button>
 
       <p className="mt-3 text-[11px]" style={{ color: "var(--text-muted)" }}>
-        Agency staff: leave email blank to use the shared admin password.
+        <Link href="/forgot" className="hover:underline">
+          Forgot your password?
+        </Link>
+      </p>
+      <p className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+        <Link href="/signup" className="hover:underline">
+          Create an agency
+        </Link>
+        {" · "}
+        Agency staff: leave email blank to use the shared admin password. It is
+        accepted only while this deployment has no user accounts, or when it is
+        bound to a named one.
       </p>
     </form>
   );

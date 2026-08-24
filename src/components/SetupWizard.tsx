@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CANONICAL_STAGES, STAGE_LABELS, type CanonicalStage } from "@/db/schema";
+import {
+  CANONICAL_STAGES,
+  REQUIRED_CANONICAL_STAGES,
+  STAGE_LABELS,
+  suggestCanonicalStage,
+  type CanonicalStage,
+} from "@/lib/stages";
 
 /**
  * Connection wizard.
@@ -17,6 +23,27 @@ import { CANONICAL_STAGES, STAGE_LABELS, type CanonicalStage } from "@/db/schema
  * webhook URL has been *displayed*, it polls until a real event arrives.
  * Configured and working are different things.
  */
+
+/**
+ * A failed response, rendered as one line.
+ *
+ * Since `api-failure.ts` these routes return `{ error, hint }` rather than a
+ * raw upstream string, and the hint carries the half that changes what somebody
+ * does next — "nothing needs reconnecting, this clears on its own" versus
+ * "re-authorise the account". Reading only `error` would swap a specific
+ * upstream error for a vaguer one of ours and drop the compensation, which is a
+ * strictly worse wizard.
+ */
+function failureText(
+  body: { error?: string; hint?: string } | null | undefined,
+  fallback: string,
+): string {
+  const head = body?.error ?? fallback;
+  if (!body?.hint) return head;
+  // Our redacted messages are written without a full stop; a passed-through
+  // message of ours may have one. Joining blindly gives "valid.. Reconnect".
+  return `${head.replace(/\.$/, "")}. ${body.hint}`;
+}
 
 interface StageRow {
   id: string;
@@ -47,9 +74,20 @@ interface Props {
     firstWebhookAt: string | null;
   };
   metaAccounts: MetaAccountRow[];
+  /** META_APP_ID + META_APP_SECRET are set, so "Continue with Facebook" works. */
+  metaConnectConfigured: boolean;
+  /** Set when the browser has just come back from Facebook's consent screen. */
+  metaStash: string | null;
   googleAccounts: GoogleAccountRow[];
   /** True when the agency Google Ads env vars are all set. */
   googleConfigured: boolean;
+  /** Set when the browser has just come back from Google's consent screen. */
+  googleStash: string | null;
+  tiktokAccounts: TiktokAccountRow[];
+  /** TIKTOK_APP_ID + TIKTOK_APP_SECRET are set, so "Continue with TikTok" works. */
+  tiktokConfigured: boolean;
+  /** Set when the browser has just come back from TikTok's authorization screen. */
+  tiktokStash: string | null;
   stages: StageRow[];
 }
 
@@ -73,6 +111,21 @@ export interface GoogleAccountRow {
   status: "active" | "paused" | "removed";
 }
 
+/**
+ * No `isPrimary`, unlike its two siblings — `tiktok_ad_accounts` has no such
+ * column. Meta's primary account defines the client's display currency and
+ * bucketing timezone; TikTok deliberately never overwrites those, so there is
+ * nothing for a primary to mean here.
+ */
+export interface TiktokAccountRow {
+  id: string;
+  advertiserId: string;
+  advertiserName: string | null;
+  currency: string | null;
+  timezone: string | null;
+  status: "active" | "paused" | "removed";
+}
+
 export function SetupWizard({
   clientId,
   slug,
@@ -81,8 +134,14 @@ export function SetupWizard({
   installation,
   initial,
   metaAccounts,
+  metaConnectConfigured,
+  metaStash,
   googleAccounts,
   googleConfigured,
+  googleStash,
+  tiktokAccounts,
+  tiktokConfigured,
+  tiktokStash,
   stages: initialStages,
 }: Props) {
   const router = useRouter();
@@ -99,18 +158,36 @@ export function SetupWizard({
           webhookAlive={Boolean(initial.firstWebhookAt)}
         />
       ) : (
-        <GhlStep clientId={clientId} initial={initial} onDone={() => router.refresh()} />
+        <GhlStep
+          clientId={clientId}
+          initial={initial}
+          onDone={() => router.refresh()}
+        />
       )}
-      <StageStep clientId={clientId} stages={initialStages} onDone={() => router.refresh()} />
+      <StageStep
+        clientId={clientId}
+        stages={initialStages}
+        onDone={() => router.refresh()}
+      />
       <MetaAccountsStep
         clientId={clientId}
         accounts={metaAccounts}
+        connectConfigured={metaConnectConfigured}
+        stash={metaStash}
         onDone={() => router.refresh()}
       />
       <GoogleAccountsStep
         clientId={clientId}
         accounts={googleAccounts}
         configured={googleConfigured}
+        stash={googleStash}
+        onDone={() => router.refresh()}
+      />
+      <TiktokAccountsStep
+        clientId={clientId}
+        accounts={tiktokAccounts}
+        connectConfigured={tiktokConfigured}
+        stash={tiktokStash}
         onDone={() => router.refresh()}
       />
       {!usingOauth && (
@@ -120,9 +197,9 @@ export function SetupWizard({
           firstWebhookAt={initial.firstWebhookAt}
         />
       )}
-      {/* On the OAuth path WebhookStep (step 5) isn't rendered, so backfill takes
-          its number — otherwise the wizard reads 1,2,3,4,6 with a missing "5". */}
-      <BackfillStep clientId={clientId} slug={slug} step={usingOauth ? 5 : 6} />
+      {/* On the OAuth path WebhookStep (step 6) isn't rendered, so backfill takes
+          its number — otherwise the wizard reads 1,2,3,4,5,7 with a missing "6". */}
+      <BackfillStep clientId={clientId} slug={slug} step={usingOauth ? 6 : 7} />
     </div>
   );
 }
@@ -168,13 +245,14 @@ function InstallStep({
       {!oauthAvailable ? (
         <p className="text-xs" style={{ color: "var(--status-warning)" }}>
           OAuth is not configured on this deployment. Set{" "}
-          <code>GHL_CLIENT_ID</code> and <code>GHL_CLIENT_SECRET</code>, or use a
-          Private Integration Token instead.
+          <code>GHL_CLIENT_ID</code> and <code>GHL_CLIENT_SECRET</code>, or use
+          a Private Integration Token instead.
         </p>
       ) : active ? (
         <>
           <Result ok>
-            Installed on {installation!.locationName ?? installation!.locationId}
+            Installed on{" "}
+            {installation!.locationName ?? installation!.locationId}
           </Result>
           <a
             href={`/api/oauth/authorize?clientId=${clientId}`}
@@ -216,11 +294,13 @@ function InstallStep({
               style={{ color: "var(--status-critical)" }}
             >
               The app was uninstalled on{" "}
-              {new Date(installation.uninstalledAt).toLocaleDateString("en-US", {
-                timeZone: "UTC",
-              })}
-              . Stage
-              changes are not being recorded.
+              {new Date(installation.uninstalledAt).toLocaleDateString(
+                "en-US",
+                {
+                  timeZone: "UTC",
+                },
+              )}
+              . Stage changes are not being recorded.
             </p>
           )}
           <a
@@ -240,6 +320,303 @@ function InstallStep({
 }
 
 /* ------------------------------------------------------------------ */
+
+interface DiscoveredMetaAccount {
+  adAccountId: string;
+  name: string | null;
+  currency: string | null;
+  timezone: string | null;
+  active: boolean;
+}
+
+/**
+ * Pick which of the authorising Facebook user's ad accounts belong to a client.
+ *
+ * 🔴 Selection is a separate step from consent, and it is not a formality: a
+ * media buyer's login can reach every account the agency runs, so attaching
+ * everything the token can see would put another client's spend on this
+ * dashboard. Nothing is pre-ticked for the same reason.
+ *
+ * Inactive accounts are shown and disabled rather than hidden — an operator
+ * hunting for an account they know exists needs to see it greyed out with a
+ * reason, or they conclude the sign-in failed and go round again.
+ */
+function MetaAccountPicker({
+  clientId,
+  stash,
+  onDone,
+}: {
+  clientId: string;
+  stash: string;
+  onDone: () => void;
+}) {
+  const [accounts, setAccounts] = useState<DiscoveredMetaAccount[] | null>(
+    null,
+  );
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/meta-connect?stash=${encodeURIComponent(stash)}`,
+        );
+        const body = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(failureText(body, "Could not read that Facebook sign-in."));
+          return;
+        }
+        setAccounts(body.accounts ?? []);
+        setExpiresAt(body.tokenExpiresAt ?? null);
+      } catch {
+        if (!cancelled) setError("Could not reach the server.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, stash]);
+
+  async function attach() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/meta-connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stash, adAccountIds: [...picked] }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(failureText(body, "Could not attach those accounts."));
+        return;
+      }
+      if (body.failed?.length) {
+        setError(
+          body.failed
+            .map(
+              (f: { adAccountId: string; error: string }) =>
+                `act_${f.adAccountId}: ${f.error}`,
+            )
+            .join(" · "),
+        );
+      }
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error && !accounts) {
+    return (
+      <p
+        className="mb-4 text-[12.5px]"
+        style={{ color: "var(--status-critical)" }}
+      >
+        {error}
+      </p>
+    );
+  }
+  if (!accounts) {
+    return (
+      <p className="mb-4 text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        Reading the ad accounts on that Facebook login…
+      </p>
+    );
+  }
+  if (accounts.length === 0) {
+    return (
+      <p className="mb-4 text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        That Facebook account cannot reach any ad accounts. Sign in with the
+        account that manages these ads, or add the ad account ID below.
+      </p>
+    );
+  }
+
+  return (
+    <div
+      className="mb-4 rounded-[10px] border p-3"
+      style={{
+        borderColor: "var(--border-strong)",
+        background: "var(--surface-2)",
+      }}
+    >
+      <p
+        className="text-[13px] font-medium"
+        style={{ color: "var(--text-primary)" }}
+      >
+        Which of these belong to this client?
+      </p>
+      <p
+        className="mt-0.5 text-[11.5px]"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {accounts.length} ad account{accounts.length === 1 ? "" : "s"} on this
+        Facebook login.
+      </p>
+
+      {/*
+        A search box only once the list stops being scannable. An agency login
+        with partner access to thirty client accounts cannot be picked from by
+        eye, and ticking the wrong row here puts another client's spend on this
+        dashboard.
+
+        Grouping by Business Manager would be the better answer, but that field
+        needs `business_management` — see `meta/client.ts:listAdAccounts`.
+      */}
+      {accounts.length > 8 && (
+        <input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter by account name or ID…"
+          className="mt-2 w-full rounded-[8px] border px-2.5 py-1.5 text-[13px]"
+          style={{
+            borderColor: "var(--border-strong)",
+            background: "var(--surface-1)",
+            color: "var(--text-primary)",
+          }}
+        />
+      )}
+
+      {(() => {
+        const q = filter.trim().toLowerCase();
+        const shown = q
+          ? accounts.filter((a) =>
+              [a.name, a.adAccountId]
+                .filter(Boolean)
+                .some((v) => String(v).toLowerCase().includes(q)),
+            )
+          : accounts;
+
+        if (shown.length === 0) {
+          return (
+            <p
+              className="mt-2 text-[12.5px]"
+              style={{ color: "var(--text-muted)" }}
+            >
+              No ad account on this login matches “{filter.trim()}”.
+            </p>
+          );
+        }
+
+        return (
+          <ul className="mt-1 flex flex-col">
+            {shown.map((a) => (
+              <li
+                key={a.adAccountId}
+                className="flex items-start gap-2.5 py-1.5"
+              >
+                <input
+                  id={`fb-${a.adAccountId}`}
+                  type="checkbox"
+                  className="mt-1"
+                  disabled={!a.active || busy}
+                  checked={picked.has(a.adAccountId)}
+                  onChange={(e) => {
+                    const next = new Set(picked);
+                    if (e.target.checked) next.add(a.adAccountId);
+                    else next.delete(a.adAccountId);
+                    setPicked(next);
+                  }}
+                />
+                <label
+                  htmlFor={`fb-${a.adAccountId}`}
+                  className="min-w-0 flex-1 cursor-pointer"
+                  style={{ opacity: a.active ? 1 : 0.55 }}
+                >
+                  <span
+                    className="block text-[13px] font-medium"
+                    style={{ color: "var(--text-primary)" }}
+                  >
+                    {a.name ?? `act_${a.adAccountId}`}
+                    {!a.active && (
+                      <span
+                        className="ml-1.5 text-[11px] font-normal"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        · not active on Facebook
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className="block text-[11px]"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    act_{a.adAccountId} · {a.currency ?? "?"} ·{" "}
+                    {a.timezone ?? "?"}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        );
+      })()}
+
+      {/*
+        Counted across the whole list, not the filtered view — a selection made
+        before typing a filter is still going to be attached, and hiding it
+        behind a search term is how the wrong account gets connected.
+      */}
+      {picked.size > 0 && filter.trim() !== "" && (
+        <p
+          className="mt-2 text-[11.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {picked.size} selected in total, including accounts hidden by the
+          filter.
+        </p>
+      )}
+
+      {/*
+        🔴 Stated at the moment of connecting, not left to be discovered.
+        A Facebook user token lasts ~60 days; the system user token behind the
+        manual path does not expire at all. Someone choosing between the two
+        deserves to know which one lapses.
+      */}
+      {expiresAt && (
+        <p
+          className="mt-2 text-[11.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          This Facebook sign-in expires on{" "}
+          {new Date(expiresAt).toLocaleDateString(undefined, {
+            day: "numeric",
+            month: "short",
+            year: "numeric",
+          })}
+          . You will be warned two weeks before it does.
+        </p>
+      )}
+
+      {error && (
+        <p
+          className="mt-2 text-[12px]"
+          style={{ color: "var(--status-critical)" }}
+        >
+          {error}
+        </p>
+      )}
+
+      <button
+        onClick={attach}
+        disabled={busy || picked.size === 0}
+        className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
+        style={{ background: "var(--accent)" }}
+      >
+        {busy
+          ? "Attaching…"
+          : `Attach ${picked.size || ""} ${picked.size === 1 ? "account" : "accounts"}`.trim()}
+      </button>
+    </div>
+  );
+}
 
 function Card({
   step,
@@ -268,11 +645,17 @@ function Card({
           {done ? "✓" : step}
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2
+            className="text-sm font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
             {title}
           </h2>
           {description && (
-            <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+            <p
+              className="mt-0.5 text-xs"
+              style={{ color: "var(--text-muted)" }}
+            >
               {description}
             </p>
           )}
@@ -358,7 +741,7 @@ function GhlStep({
       setResult(
         res.ok
           ? { ok: true, msg: `Connected to ${body.locationName ?? locationId}` }
-          : { ok: false, msg: body.error ?? "Verification failed" },
+          : { ok: false, msg: failureText(body, "Verification failed") },
       );
       if (res.ok) {
         setToken("");
@@ -420,28 +803,6 @@ function groupStagesByPipeline(rows: StageRow[]) {
   return Array.from(map, ([pipeline, stages]) => ({ pipeline, stages }));
 }
 
-/**
- * Best-guess canonical stage from a GHL stage name. Conservative and name-driven
- * — it only fills stages a human would map the same way at a glance, and returns
- * null for anything ambiguous (a bare "Closed", "Long Term Nurture") so the
- * operator makes the call. Never overwrites an existing mapping; it is a
- * time-saver over 47 dropdowns, not an authority.
- */
-function suggestCanonical(name: string | null): CanonicalStage | null {
-  const n = (name ?? "").toLowerCase().trim();
-  if (!n) return null;
-  // Order matters: "no show" contains "show"; "sale closed" contains neither
-  // "won" nor "lost", so the closed-won/lost rules must be explicit.
-  if (/no[\s-]?show|did ?n'?o?t? ?show|missed (appt|appointment)/.test(n)) return "no_show";
-  if (/closed[\s/_-]*won|sale[s]?[\s/_-]*closed|deal[\s_-]*won|(^|\W)won(\W|$)|purchased|customer won/.test(n)) return "closed_won";
-  if (/closed[\s/_-]*lost|(^|\W)lost(\W|$)|not interested|dead lead|disqualif|unqualified|(^|\W)dq(\W|$)/.test(n)) return "lost";
-  if (/appointment|appt|booked|scheduled|(consult|meeting)[^.]*\b(book|schedul)/.test(n)) return "appointment_booked";
-  if (/showed|show(ed)? up|attended|consult[^.]*\b(complete|done|attended)/.test(n)) return "showed";
-  if (/new lead|(^|\W)lead in|new inquiry|new enquiry|new opportunity|opt[\s-]?in|(^|\W)fb leads?(\W|$)/.test(n)) return "new_lead";
-  if (/contact|conversation|reached|engaged|follow[\s-]?up|nurtur|texted|replied|responded|call[\s-]?\d|call back|attempt/.test(n)) return "contacted";
-  return null;
-}
-
 function StageStep({
   clientId,
   stages,
@@ -468,7 +829,11 @@ function StageStep({
   }
 
   const mapped = new Set(rows.map((r) => r.canonicalStage).filter(Boolean));
-  const missing = CANONICAL_STAGES.filter((s) => !mapped.has(s));
+  // Gate on the REQUIRED stages only. `disqualified` is offered in the dropdown
+  // below but never blocks setup — a pipeline with no junk stage is a normal
+  // pipeline, and demanding one would strand every client who does not run that
+  // way at a step they cannot complete.
+  const missing = REQUIRED_CANONICAL_STAGES.filter((s) => !mapped.has(s));
   const groups = groupStagesByPipeline(rows);
   const totalMapped = rows.filter((r) => r.canonicalStage).length;
 
@@ -482,7 +847,7 @@ function StageStep({
         setMsg({ ok: true, msg: `Imported ${body.stages.length} stages` });
         onDone();
       } else {
-        setMsg({ ok: false, msg: body.error ?? "Import failed" });
+        setMsg({ ok: false, msg: failureText(body, "Import failed") });
       }
     } finally {
       setBusy(false);
@@ -513,7 +878,7 @@ function StageStep({
                   : ""
               }`,
             }
-          : { ok: false, msg: body.error ?? "Save failed" },
+          : { ok: false, msg: failureText(body, "Save failed") },
       );
       if (res.ok) onDone();
     } finally {
@@ -554,7 +919,7 @@ function StageStep({
       prev.map((r) => {
         if (r.canonicalStage) return r;
         if (pipeline && pipelineOf(r) !== pipeline) return r;
-        const s = suggestCanonical(r.name);
+        const s = suggestCanonicalStage(r.name);
         return s ? { ...r, canonicalStage: s } : r;
       }),
     );
@@ -576,7 +941,7 @@ function StageStep({
   };
 
   const autoMappable = rows.filter(
-    (r) => !r.canonicalStage && suggestCanonical(r.name),
+    (r) => !r.canonicalStage && suggestCanonicalStage(r.name),
   ).length;
 
   return (
@@ -590,9 +955,16 @@ function StageStep({
         onClick={importStages}
         disabled={busy}
         className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
-        style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+        style={{
+          borderColor: "var(--border-strong)",
+          color: "var(--text-secondary)",
+        }}
       >
-        {busy ? "Working…" : rows.length ? "Re-import from GHL" : "Import from GHL"}
+        {busy
+          ? "Working…"
+          : rows.length
+            ? "Re-import from GHL"
+            : "Import from GHL"}
       </button>
 
       {rows.length > 0 && (
@@ -606,7 +978,10 @@ function StageStep({
               <button
                 onClick={() => autoMap()}
                 className="rounded-[8px] border px-2.5 py-1 text-[12px] font-medium"
-                style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+                style={{
+                  borderColor: "var(--border-strong)",
+                  color: "var(--text-secondary)",
+                }}
               >
                 ✨ Auto-map {autoMappable} by name
               </button>
@@ -615,13 +990,15 @@ function StageStep({
 
           <div className="mt-3 flex flex-col gap-2.5">
             {groups.map((group) => {
-              const gMapped = group.stages.filter((s) => s.canonicalStage).length;
+              const gMapped = group.stages.filter(
+                (s) => s.canonicalStage,
+              ).length;
               const total = group.stages.length;
               const full = gMapped === total;
               const none = gMapped === 0;
               const open = expanded.has(group.pipeline);
               const gAutoMappable = group.stages.filter(
-                (s) => !s.canonicalStage && suggestCanonical(s.name),
+                (s) => !s.canonicalStage && suggestCanonicalStage(s.name),
               ).length;
               return (
                 <div
@@ -651,7 +1028,12 @@ function StageStep({
                       >
                         {group.pipeline}
                       </span>
-                      <StageBadge full={full} none={none} mapped={gMapped} total={total} />
+                      <StageBadge
+                        full={full}
+                        none={none}
+                        mapped={gMapped}
+                        total={total}
+                      />
                     </button>
                     <div className="flex shrink-0 items-center gap-1.5">
                       {gAutoMappable > 0 && (
@@ -660,7 +1042,8 @@ function StageStep({
                           className="rounded-[6px] px-2 py-1 text-[11px] font-medium"
                           style={{
                             color: "var(--accent)",
-                            background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+                            background:
+                              "color-mix(in srgb, var(--accent) 12%, transparent)",
                           }}
                         >
                           Auto-map
@@ -670,7 +1053,10 @@ function StageStep({
                         <button
                           onClick={() => ignorePipeline(group.pipeline)}
                           className="rounded-[6px] px-2 py-1 text-[11px] font-medium"
-                          style={{ color: "var(--text-muted)", background: "var(--surface-2)" }}
+                          style={{
+                            color: "var(--text-muted)",
+                            background: "var(--surface-2)",
+                          }}
                         >
                           Ignore
                         </button>
@@ -722,7 +1108,8 @@ function StageStep({
                             onChange={(e) =>
                               setCanonical(
                                 row.id,
-                                (e.target.value || null) as CanonicalStage | null,
+                                (e.target.value ||
+                                  null) as CanonicalStage | null,
                               )
                             }
                             className="min-w-[150px] rounded-[8px] border px-2 py-1.5 text-[13px]"
@@ -745,7 +1132,10 @@ function StageStep({
           </div>
 
           {missing.length > 0 && (
-            <p className="mt-3 text-xs" style={{ color: "var(--status-warning)" }}>
+            <p
+              className="mt-3 text-xs"
+              style={{ color: "var(--status-warning)" }}
+            >
               Unmapped: {missing.map((s) => STAGE_LABELS[s]).join(", ")} — these
               will read as zero in the funnel.
             </p>
@@ -786,7 +1176,10 @@ function StageBadge({
   return (
     <span
       className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums"
-      style={{ color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}
+      style={{
+        color,
+        background: `color-mix(in srgb, ${color} 14%, transparent)`,
+      }}
     >
       {text}
     </span>
@@ -809,18 +1202,26 @@ function MetaAccountsStep({
   clientId,
   accounts,
   onDone,
+  connectConfigured,
+  stash,
 }: {
   clientId: string;
   accounts: MetaAccountRow[];
   onDone: () => void;
+  /** META_APP_ID + META_APP_SECRET are set, so the consent flow can run. */
+  connectConfigured: boolean;
+  /** Present when we have just returned from Facebook — opens the picker. */
+  stash: string | null;
 }) {
   const [accountId, setAccountId] = useState("");
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string; warn?: string } | null>(
-    null,
-  );
+  const [msg, setMsg] = useState<{
+    ok: boolean;
+    text: string;
+    warn?: string;
+  } | null>(null);
 
   const live = accounts.filter((a) => a.status !== "removed");
 
@@ -831,7 +1232,10 @@ function MetaAccountsStep({
       const res = await fetch(`/api/clients/${clientId}/meta-accounts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adAccountId: accountId, token: token || undefined }),
+        body: JSON.stringify({
+          adAccountId: accountId,
+          token: token || undefined,
+        }),
       });
       const body = await res.json();
       if (res.ok) {
@@ -856,7 +1260,7 @@ function MetaAccountsStep({
         setShowToken(false);
         onDone();
       } else {
-        setMsg({ ok: false, text: body.error ?? "Failed to add account" });
+        setMsg({ ok: false, text: failureText(body, "Failed to add account") });
       }
     } finally {
       setBusy(false);
@@ -864,7 +1268,8 @@ function MetaAccountsStep({
   }
 
   async function remove(id: string) {
-    if (!confirm("Remove this ad account? Metrics already pulled are kept.")) return;
+    if (!confirm("Remove this ad account? Metrics already pulled are kept."))
+      return;
     setBusy(true);
     try {
       const res = await fetch(`/api/clients/${clientId}/meta-accounts/${id}`, {
@@ -911,8 +1316,12 @@ function MetaAccountsStep({
                     </span>
                   )}
                 </div>
-                <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                  act_{a.adAccountId} · {a.currency ?? "?"} · {a.timezone ?? "?"}
+                <div
+                  className="text-[11px]"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  act_{a.adAccountId} · {a.currency ?? "?"} ·{" "}
+                  {a.timezone ?? "?"}
                 </div>
               </div>
               <button
@@ -926,6 +1335,43 @@ function MetaAccountsStep({
             </li>
           ))}
         </ul>
+      )}
+
+      {/*
+        The self-serve path, first, because it is the one that should be taken.
+        The ad-account-ID form below stays as the fallback: it is the only route
+        that works before Meta App Review passes for anyone without a role on
+        the app, and the only one that uses the never-expiring system user token.
+      */}
+      {connectConfigured && !stash && (
+        <div className="mb-4">
+          <a
+            href={`/api/oauth/meta/authorize?clientId=${encodeURIComponent(clientId)}`}
+            className="inline-flex items-center gap-2 rounded-[9px] px-3.5 py-2.5 text-[13.5px] font-semibold text-white transition-opacity hover:opacity-90"
+            style={{ background: "#1877F2" }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.25h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z" />
+            </svg>
+            Continue with Facebook
+          </a>
+          <p
+            className="mt-1.5 text-[11.5px]"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Sign in with the Facebook account that holds these ads, then pick
+            which ad accounts belong to this client.
+          </p>
+        </div>
+      )}
+
+      {stash && (
+        <MetaAccountPicker clientId={clientId} stash={stash} onDone={onDone} />
       )}
 
       <div className="flex flex-col gap-3">
@@ -949,7 +1395,8 @@ function MetaAccountsStep({
             className="self-start text-xs hover:underline"
             style={{ color: "var(--text-muted)" }}
           >
-            + Add a token override (only if this account is in another Business Manager)
+            + Add a token override (only if this account is in another Business
+            Manager)
           </button>
         )}
         <button
@@ -965,7 +1412,10 @@ function MetaAccountsStep({
         <>
           <Result ok={msg.ok}>{msg.text}</Result>
           {msg.warn && (
-            <p className="mt-2 text-xs" style={{ color: "var(--status-warning)" }}>
+            <p
+              className="mt-2 text-xs"
+              style={{ color: "var(--status-warning)" }}
+            >
               ⚠ {msg.warn}
             </p>
           )}
@@ -988,24 +1438,311 @@ function MetaAccountsStep({
  * spend. When the agency Google env vars aren't set, the step explains that and
  * stays inert — Google is optional, a client can run Meta only.
  */
+interface DiscoveredGoogleAccount {
+  customerId: string;
+  name: string | null;
+  currency: string | null;
+  timezone: string | null;
+  isManager: boolean;
+  level: number;
+}
+
+/**
+ * Pick which of the authorizing Google account's customers belong to a client.
+ *
+ * Two differences from the Meta picker, both forced by how Google Ads is shaped:
+ *
+ * 🔴 **Manager (MCC) accounts are shown but not selectable.** A manager holds no
+ * campaigns of its own, so attaching one produces an account that reports zero
+ * spend forever — which on the dashboard is indistinguishable from a paused
+ * account. It is listed rather than hidden because it is the thing an operator
+ * recognises by name, and seeing it is how they find the child underneath it.
+ *
+ * The tree is flattened with indentation rather than collapsed, because a media
+ * buyer identifies a client's account by where it sits under the manager at
+ * least as often as by its own name.
+ */
+function GoogleAccountPicker({
+  clientId,
+  stash,
+  onDone,
+}: {
+  clientId: string;
+  stash: string;
+  onDone: () => void;
+}) {
+  const [accounts, setAccounts] = useState<DiscoveredGoogleAccount[] | null>(
+    null,
+  );
+  const [partial, setPartial] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/google-connect?stash=${encodeURIComponent(stash)}`,
+        );
+        const body = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(failureText(body, "Could not read that Google sign-in."));
+          return;
+        }
+        setAccounts(body.accounts ?? []);
+        setPartial(Boolean(body.partial));
+      } catch {
+        if (!cancelled) setError("Could not reach the server.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, stash]);
+
+  async function attach() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/google-connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stash, customerIds: [...picked] }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(failureText(body, "Could not attach those accounts."));
+        return;
+      }
+      if (body.failed?.length) {
+        setError(
+          body.failed
+            .map(
+              (f: { customerId: string; error: string }) =>
+                `${f.customerId}: ${f.error}`,
+            )
+            .join(" · "),
+        );
+      }
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error && !accounts) {
+    return (
+      <p
+        className="mb-4 text-[12.5px]"
+        style={{ color: "var(--status-critical)" }}
+      >
+        {error}
+      </p>
+    );
+  }
+  if (!accounts) {
+    return (
+      <p className="mb-4 text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        Reading the accounts on that Google login…
+      </p>
+    );
+  }
+  if (accounts.length === 0) {
+    return (
+      <p className="mb-4 text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        That Google account cannot reach any Ads accounts. Sign in with the
+        account that manages these ads, or add the Customer ID below.
+      </p>
+    );
+  }
+
+  const q = filter.trim().toLowerCase();
+  const shown = q
+    ? accounts.filter((a) =>
+        [a.name, a.customerId]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(q)),
+      )
+    : accounts;
+  const selectable = accounts.filter((a) => !a.isManager).length;
+
+  return (
+    <div
+      className="mb-4 rounded-[10px] border p-3"
+      style={{
+        borderColor: "var(--border-strong)",
+        background: "var(--surface-2)",
+      }}
+    >
+      <p
+        className="text-[13px] font-medium"
+        style={{ color: "var(--text-primary)" }}
+      >
+        Which of these belong to this client?
+      </p>
+      <p
+        className="mt-0.5 text-[11.5px]"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {selectable} account{selectable === 1 ? "" : "s"} you can attach
+        {accounts.length !== selectable &&
+          `, plus ${accounts.length - selectable} manager account${
+            accounts.length - selectable === 1 ? "" : "s"
+          } shown for context`}
+        .
+      </p>
+
+      {/*
+        Surfaced rather than swallowed. Discovery walks each manager separately
+        and skips branches it cannot read, so a short list looks identical to a
+        complete one — which is how someone concludes an account "isn't there"
+        and goes hunting in the wrong place.
+      */}
+      {partial && (
+        <p
+          className="mt-2 text-[11.5px]"
+          style={{ color: "var(--status-warning)" }}
+        >
+          Some parts of this account tree could not be read, so this list may be
+          incomplete. If an account you expect is missing, add its Customer ID
+          below.
+        </p>
+      )}
+
+      {accounts.length > 8 && (
+        <input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter by name or Customer ID…"
+          className="mt-2 w-full rounded-[8px] border px-2.5 py-1.5 text-[13px]"
+          style={{
+            borderColor: "var(--border-strong)",
+            background: "var(--surface-1)",
+            color: "var(--text-primary)",
+          }}
+        />
+      )}
+
+      {shown.length === 0 ? (
+        <p
+          className="mt-2 text-[12.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          No account on this login matches “{filter.trim()}”.
+        </p>
+      ) : (
+        <ul className="mt-1 flex flex-col">
+          {shown.map((a) => (
+            <li
+              key={a.customerId}
+              className="flex items-start gap-2.5 py-1.5"
+              // Indent by depth so a client's account reads as sitting under
+              // the manager the operator recognises.
+              style={{ paddingLeft: `${Math.min(a.level, 4) * 14}px` }}
+            >
+              <input
+                id={`g-${a.customerId}`}
+                type="checkbox"
+                className="mt-1"
+                disabled={a.isManager || busy}
+                checked={picked.has(a.customerId)}
+                onChange={(e) => {
+                  const next = new Set(picked);
+                  if (e.target.checked) next.add(a.customerId);
+                  else next.delete(a.customerId);
+                  setPicked(next);
+                }}
+              />
+              <label
+                htmlFor={`g-${a.customerId}`}
+                className="min-w-0 flex-1 cursor-pointer"
+                style={{ opacity: a.isManager ? 0.55 : 1 }}
+              >
+                <span
+                  className="block text-[13px] font-medium"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {a.name ?? a.customerId}
+                  {a.isManager && (
+                    <span
+                      className="ml-1.5 text-[11px] font-normal"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      · manager account — holds no campaigns
+                    </span>
+                  )}
+                </span>
+                <span
+                  className="block text-[11px]"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {a.customerId} · {a.currency ?? "?"} · {a.timezone ?? "?"}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {picked.size > 0 && filter.trim() !== "" && (
+        <p
+          className="mt-2 text-[11.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {picked.size} selected in total, including accounts hidden by the
+          filter.
+        </p>
+      )}
+
+      {error && (
+        <p
+          className="mt-2 text-[12px]"
+          style={{ color: "var(--status-critical)" }}
+        >
+          {error}
+        </p>
+      )}
+
+      <button
+        onClick={attach}
+        disabled={busy || picked.size === 0}
+        className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-60"
+      >
+        {busy
+          ? "Attaching…"
+          : `Attach ${picked.size || ""} ${picked.size === 1 ? "account" : "accounts"}`.trim()}
+      </button>
+    </div>
+  );
+}
+
 function GoogleAccountsStep({
   clientId,
   accounts,
   configured,
+  stash,
   onDone,
 }: {
   clientId: string;
   accounts: GoogleAccountRow[];
   configured: boolean;
+  stash: string | null;
   onDone: () => void;
 }) {
   const [customerId, setCustomerId] = useState("");
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string; warn?: string } | null>(
-    null,
-  );
+  const [msg, setMsg] = useState<{
+    ok: boolean;
+    text: string;
+    warn?: string;
+  } | null>(null);
 
   const live = accounts.filter((a) => a.status !== "removed");
 
@@ -1041,7 +1778,7 @@ function GoogleAccountsStep({
         setShowToken(false);
         onDone();
       } else {
-        setMsg({ ok: false, text: body.error ?? "Failed to add account" });
+        setMsg({ ok: false, text: failureText(body, "Failed to add account") });
       }
     } finally {
       setBusy(false);
@@ -1049,12 +1786,20 @@ function GoogleAccountsStep({
   }
 
   async function remove(id: string) {
-    if (!confirm("Remove this Google Ads account? Metrics already pulled are kept.")) return;
+    if (
+      !confirm(
+        "Remove this Google Ads account? Metrics already pulled are kept.",
+      )
+    )
+      return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/clients/${clientId}/google-accounts/${id}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(
+        `/api/clients/${clientId}/google-accounts/${id}`,
+        {
+          method: "DELETE",
+        },
+      );
       if (res.ok) onDone();
     } finally {
       setBusy(false);
@@ -1070,8 +1815,8 @@ function GoogleAccountsStep({
     >
       {!configured && live.length === 0 ? (
         <p className="text-xs" style={{ color: "var(--status-warning)" }}>
-          Google Ads isn&rsquo;t configured on this deployment yet. Add the agency
-          developer token, OAuth client, refresh token and MCC id to the
+          Google Ads isn&rsquo;t configured on this deployment yet. Add the
+          agency developer token, OAuth client, refresh token and MCC id to the
           environment (see <code>SETUP.md</code> §2b), then reload. A client can
           run Meta-only until then.
         </p>
@@ -1105,7 +1850,10 @@ function GoogleAccountsStep({
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    <div
+                      className="text-[11px]"
+                      style={{ color: "var(--text-muted)" }}
+                    >
                       {a.customerId} · {a.currency ?? "?"} · {a.timezone ?? "?"}
                     </div>
                   </div>
@@ -1120,6 +1868,62 @@ function GoogleAccountsStep({
                 </li>
               ))}
             </ul>
+          )}
+
+          {/*
+            The self-serve path, first, because it is the one that should be
+            taken. This route already existed and worked — it was simply linked
+            from nowhere, so the only visible option was pasting a raw refresh
+            token, which is the agency-MCC path and the worst first-run moment
+            in the product. Mirrors the Meta step above.
+          */}
+          {!stash && (
+            <div className="mb-4">
+              <a
+                href={`/api/oauth/google/authorize?clientId=${encodeURIComponent(clientId)}`}
+                className="inline-flex items-center gap-2 rounded-[9px] border px-3.5 py-2.5 text-[13.5px] font-semibold transition-opacity hover:opacity-90"
+                style={{
+                  background: "#ffffff",
+                  color: "#1f1f1f",
+                  borderColor: "#dadce0",
+                }}
+              >
+                <svg viewBox="0 0 48 48" className="h-4 w-4" aria-hidden="true">
+                  <path
+                    fill="#EA4335"
+                    d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                  />
+                  <path
+                    fill="#4285F4"
+                    d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24s.92 7.54 2.56 10.78l7.97-6.19z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                  />
+                </svg>
+                Continue with Google
+              </a>
+              <p
+                className="mt-1.5 text-[11.5px]"
+                style={{ color: "var(--text-muted)" }}
+              >
+                Sign in with the Google account that manages these ads, then
+                pick which accounts belong to this client.
+              </p>
+            </div>
+          )}
+
+          {stash && (
+            <GoogleAccountPicker
+              clientId={clientId}
+              stash={stash}
+              onDone={onDone}
+            />
           )}
 
           <div className="flex flex-col gap-3">
@@ -1143,7 +1947,8 @@ function GoogleAccountsStep({
                 className="self-start text-xs hover:underline"
                 style={{ color: "var(--text-muted)" }}
               >
-                + Add a token override (only if this account is not linked to our MCC)
+                + Add a token override (only if this account is not linked to
+                our MCC)
               </button>
             )}
             <button
@@ -1159,13 +1964,478 @@ function GoogleAccountsStep({
             <>
               <Result ok={msg.ok}>{msg.text}</Result>
               {msg.warn && (
-                <p className="mt-2 text-xs" style={{ color: "var(--status-warning)" }}>
+                <p
+                  className="mt-2 text-xs"
+                  style={{ color: "var(--status-warning)" }}
+                >
                   ⚠ {msg.warn}
                 </p>
               )}
             </>
           )}
         </>
+      )}
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+interface DiscoveredTiktokAdvertiser {
+  advertiserId: string;
+  name: string | null;
+  currency: string | null;
+  timezone: string | null;
+}
+
+/**
+ * Pick which of the authorizing TikTok grant's advertisers belong to a client.
+ *
+ * 🔴 Selection is separate from authorization for the same reason as Meta and
+ * Google, and here the risk is at its most literal: TikTok's token exchange
+ * hands back an `advertiser_ids` **array**. One approval can cover every
+ * advertiser an agency manages, so attaching what the grant can see would put
+ * another client's spend on this dashboard. Nothing is pre-ticked.
+ *
+ * Simpler than the Google picker in one respect — TikTok has no manager
+ * hierarchy, so there is no shown-but-disabled row. Every advertiser listed
+ * holds campaigns.
+ */
+function TiktokAccountPicker({
+  clientId,
+  stash,
+  onDone,
+}: {
+  clientId: string;
+  stash: string;
+  onDone: () => void;
+}) {
+  const [advertisers, setAdvertisers] = useState<
+    DiscoveredTiktokAdvertiser[] | null
+  >(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState("");
+  /*
+   * 🔴 Currency and timezone are unknown, not absent.
+   *
+   * Each row renders `{currency ?? "?"} · {timezone ?? "?"}`, so a failed
+   * `/advertiser/info/` call turns the whole column into `?` and looks
+   * identical to TikTok simply not reporting one — which, for an ad account,
+   * does not happen. This product sums spend across accounts and currencies
+   * cannot be summed, so picking blind here is how a EUR advertiser lands in a
+   * USD total. The attach step still catches it, but by then the choice is
+   * made and the warning is a surprise instead of information.
+   */
+  const [detailUnavailable, setDetailUnavailable] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/tiktok-connect?stash=${encodeURIComponent(stash)}`,
+        );
+        const body = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(
+            failureText(body, "Could not read that TikTok authorization."),
+          );
+          return;
+        }
+        setAdvertisers(body.advertisers ?? []);
+        setDetailUnavailable(Boolean(body.detailUnavailable));
+      } catch {
+        if (!cancelled) setError("Could not reach the server.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, stash]);
+
+  async function attach() {
+    setBusy(true);
+    setError(null);
+    setWarnings([]);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/tiktok-connect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stash, advertiserIds: [...picked] }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setError(failureText(body, "Could not attach those advertisers."));
+        return;
+      }
+      if (body.failed?.length) {
+        setError(
+          body.failed
+            .map(
+              (f: { advertiserId: string; error: string }) =>
+                `${f.advertiserId}: ${f.error}`,
+            )
+            .join(" · "),
+        );
+      }
+      /*
+       * Mixed currencies cannot be summed and mismatched timezones make "a day"
+       * mean two things across platforms. Neither blocks the attach — the
+       * operator may know exactly why — but neither may be silent.
+       */
+      if (body.warnings?.length) {
+        setWarnings(
+          body.warnings.map(
+            (w: { advertiserId: string; message: string }) =>
+              `${w.advertiserId}: ${w.message}`,
+          ),
+        );
+      }
+      onDone();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error && !advertisers) {
+    return (
+      <p
+        className="mb-4 text-[12.5px]"
+        style={{ color: "var(--status-critical)" }}
+      >
+        {error}
+      </p>
+    );
+  }
+  if (!advertisers) {
+    return (
+      <p className="mb-4 text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        Reading the advertisers on that TikTok authorization…
+      </p>
+    );
+  }
+  if (advertisers.length === 0) {
+    return (
+      <p className="mb-4 text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+        That TikTok authorization cannot reach any advertiser accounts.
+        Authorize again with an account that has access to them in Business
+        Center.
+      </p>
+    );
+  }
+
+  const q = filter.trim().toLowerCase();
+  const shown = q
+    ? advertisers.filter((a) =>
+        [a.name, a.advertiserId]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(q)),
+      )
+    : advertisers;
+
+  return (
+    <div
+      className="mb-4 rounded-[10px] border p-3"
+      style={{
+        borderColor: "var(--border-strong)",
+        background: "var(--surface-2)",
+      }}
+    >
+      <p
+        className="text-[13px] font-medium"
+        style={{ color: "var(--text-primary)" }}
+      >
+        Which of these belong to this client?
+      </p>
+      <p
+        className="mt-0.5 text-[11.5px]"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {advertisers.length} advertiser{advertisers.length === 1 ? "" : "s"} on
+        this TikTok authorization.
+      </p>
+
+      {detailUnavailable && (
+        <p
+          role="status"
+          className="mt-1.5 text-[11.5px]"
+          style={{ color: "var(--status-warning)" }}
+        >
+          Currency and timezone could not be read for these advertisers, so both
+          show as “?” below — TikTok answered the list but not the detail. You
+          can still pick, and each account is re-checked on attach; if a currency
+          differs from this client&rsquo;s, you will be told then.
+        </p>
+      )}
+
+      {advertisers.length > 8 && (
+        <input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter by advertiser name or ID…"
+          className="mt-2 w-full rounded-[8px] border px-2.5 py-1.5 text-[13px]"
+          style={{
+            borderColor: "var(--border-strong)",
+            background: "var(--surface-1)",
+            color: "var(--text-primary)",
+          }}
+        />
+      )}
+
+      {shown.length === 0 ? (
+        <p
+          className="mt-2 text-[12.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          No advertiser on this authorization matches “{filter.trim()}”.
+        </p>
+      ) : (
+        <ul className="mt-1 flex flex-col">
+          {shown.map((a) => (
+            <li
+              key={a.advertiserId}
+              className="flex items-start gap-2.5 py-1.5"
+            >
+              <input
+                id={`tt-${a.advertiserId}`}
+                type="checkbox"
+                className="mt-1"
+                disabled={busy}
+                checked={picked.has(a.advertiserId)}
+                onChange={(e) => {
+                  const next = new Set(picked);
+                  if (e.target.checked) next.add(a.advertiserId);
+                  else next.delete(a.advertiserId);
+                  setPicked(next);
+                }}
+              />
+              <label
+                htmlFor={`tt-${a.advertiserId}`}
+                className="min-w-0 flex-1 cursor-pointer"
+              >
+                <span
+                  className="block text-[13px] font-medium"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {a.name ?? a.advertiserId}
+                </span>
+                <span
+                  className="block text-[11px]"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {a.advertiserId} · {a.currency ?? "?"} · {a.timezone ?? "?"}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {picked.size > 0 && filter.trim() !== "" && (
+        <p
+          className="mt-2 text-[11.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {picked.size} selected in total, including advertisers hidden by the
+          filter.
+        </p>
+      )}
+
+      {/*
+        🔴 The opposite of the Facebook picker's expiry line, and stated for the
+        same reason: someone comparing platforms deserves to know which
+        connection lapses. TikTok access tokens do not expire and there is no
+        refresh token — a real "never", not an unknown we are hiding.
+      */}
+      <p className="mt-2 text-[11.5px]" style={{ color: "var(--text-muted)" }}>
+        This authorization does not expire. It ends only if the TikTok account
+        that granted it loses access to the advertiser.
+      </p>
+
+      {error && (
+        <p
+          className="mt-2 text-[12px]"
+          style={{ color: "var(--status-critical)" }}
+        >
+          {error}
+        </p>
+      )}
+      {warnings.map((w) => (
+        <p
+          key={w}
+          className="mt-2 text-[12px]"
+          style={{ color: "var(--status-warning)" }}
+        >
+          ⚠ {w}
+        </p>
+      ))}
+
+      <button
+        onClick={attach}
+        disabled={busy || picked.size === 0}
+        className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
+        style={{ background: "var(--accent)" }}
+      >
+        {busy
+          ? "Attaching…"
+          : `Attach ${picked.size || ""} ${picked.size === 1 ? "advertiser" : "advertisers"}`.trim()}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * TikTok advertisers — the third platform, and the only one with no manual
+ * fallback.
+ *
+ * Meta has the system-user token and Google has the agency MCC refresh token,
+ * so both keep an id-entry form for the case where consent is unavailable.
+ * TikTok has no shared-credential equivalent: a token exists only as the output
+ * of an authorization. So when the app is not configured this step says so and
+ * stays inert rather than offering a form that could never work.
+ */
+function TiktokAccountsStep({
+  clientId,
+  accounts,
+  onDone,
+  connectConfigured,
+  stash,
+}: {
+  clientId: string;
+  accounts: TiktokAccountRow[];
+  onDone: () => void;
+  /** TIKTOK_APP_ID + TIKTOK_APP_SECRET are set, so the flow can run. */
+  connectConfigured: boolean;
+  /** Present when we have just returned from TikTok — opens the picker. */
+  stash: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const live = accounts.filter((a) => a.status !== "removed");
+
+  async function remove(id: string) {
+    if (!confirm("Remove this advertiser? Metrics already pulled are kept."))
+      return;
+    setBusy(true);
+    try {
+      const res = await fetch(
+        `/api/clients/${clientId}/tiktok-accounts/${id}`,
+        {
+          method: "DELETE",
+        },
+      );
+      if (res.ok) onDone();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card
+      step={5}
+      title="Connect TikTok advertisers"
+      description="Optional. Adds TikTok spend alongside Meta and Google so the blended totals are complete."
+      done={live.length > 0}
+    >
+      {live.length > 0 && (
+        <ul className="mb-4 flex flex-col gap-2">
+          {live.map((a) => (
+            <li
+              key={a.id}
+              className="flex flex-wrap items-center gap-2 rounded-[8px] border p-2.5"
+              style={{ borderColor: "var(--border)" }}
+            >
+              <div className="min-w-0 flex-1">
+                <span
+                  className="block truncate text-[13px] font-medium"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {a.advertiserName ?? a.advertiserId}
+                </span>
+                <span
+                  className="text-[11px]"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {a.advertiserId} · {a.currency ?? "?"} · {a.timezone ?? "?"}
+                </span>
+              </div>
+              <button
+                onClick={() => remove(a.id)}
+                disabled={busy}
+                className="shrink-0 text-xs hover:underline disabled:opacity-50"
+                style={{ color: "var(--status-critical)" }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!connectConfigured ? (
+        <p className="text-[12.5px]" style={{ color: "var(--text-muted)" }}>
+          TikTok isn’t configured on this installation. Set{" "}
+          <code>TIKTOK_APP_ID</code> and <code>TIKTOK_APP_SECRET</code> from the
+          app at business-api.tiktok.com. Everything else works without it — a
+          client can run Meta and Google only.
+        </p>
+      ) : (
+        !stash && (
+          <div>
+            <a
+              href={`/api/oauth/tiktok/authorize?clientId=${encodeURIComponent(clientId)}`}
+              className="inline-flex items-center gap-2 rounded-[9px] px-3.5 py-2.5 text-[13.5px] font-semibold text-white transition-opacity hover:opacity-90"
+              style={{ background: "#000000" }}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 0 1 0-5.18c.27 0 .52.04.76.12v-3.2a5.72 5.72 0 0 0-.76-.05A5.79 5.79 0 0 0 4.07 15.4a5.79 5.79 0 0 0 11.58 0V9.01a7.35 7.35 0 0 0 4.29 1.37V7.29a4.29 4.29 0 0 1-3.34-1.47z" />
+              </svg>
+              Continue with TikTok
+            </a>
+
+            {/*
+              🔴 Said BEFORE the click, not discovered mid-flow.
+
+              TikTok emails the advertiser a verification code partway through
+              authorization and will not proceed without it. Someone who does
+              not expect that reads the pause as a broken flow and abandons —
+              which is the single most likely way this connection fails for a
+              reason that is not a fault.
+            */}
+            <p
+              className="mt-2 text-[11.5px]"
+              style={{ color: "var(--status-warning)" }}
+            >
+              TikTok will email a verification code partway through and won’t
+              continue until it’s entered. Have that inbox open before you
+              start.
+            </p>
+            <p
+              className="mt-1 text-[11.5px]"
+              style={{ color: "var(--text-muted)" }}
+            >
+              Then pick which advertisers belong to this client. The
+              authorization does not expire.
+            </p>
+          </div>
+        )
+      )}
+
+      {stash && (
+        <TiktokAccountPicker
+          clientId={clientId}
+          stash={stash}
+          onDone={onDone}
+        />
       )}
     </Card>
   );
@@ -1194,7 +2464,9 @@ function WebhookStep({
   useEffect(() => {
     if (!listening || received) return;
     timer.current = setInterval(async () => {
-      const res = await fetch(`/api/clients/${clientId}`, { cache: "no-store" });
+      const res = await fetch(`/api/clients/${clientId}`, {
+        cache: "no-store",
+      });
       if (res.ok) {
         const body = await res.json();
         if (body.client?.firstWebhookAt) {
@@ -1210,14 +2482,17 @@ function WebhookStep({
 
   return (
     <Card
-      step={5}
+      step={6}
       title="Install the GHL webhook"
       description="In GHL: Automation → Workflows → new workflow → trigger 'Pipeline Stage Changed' → action 'Webhook'."
       done={received}
     >
       <div
         className="flex items-center gap-2 rounded-[8px] border p-2"
-        style={{ borderColor: "var(--border-strong)", background: "var(--surface-2)" }}
+        style={{
+          borderColor: "var(--border-strong)",
+          background: "var(--surface-2)",
+        }}
       >
         <code
           className="min-w-0 flex-1 truncate text-[12px]"
@@ -1232,14 +2507,19 @@ function WebhookStep({
             setTimeout(() => setCopied(false), 1600);
           }}
           className="shrink-0 rounded-[6px] border px-2 py-1 text-[12px]"
-          style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+          style={{
+            borderColor: "var(--border-strong)",
+            color: "var(--text-secondary)",
+          }}
         >
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
 
       {received ? (
-        <Result ok>Webhook events are arriving — funnel history is recording.</Result>
+        <Result ok>
+          Webhook events are arriving — funnel history is recording.
+        </Result>
       ) : (
         <>
           <button
@@ -1293,7 +2573,7 @@ function BackfillStep({
                   ? `Imported ${body.rowsWritten} daily metric rows.`
                   : `Snapshotted ${body.opportunities} opportunities (${body.transitions} arrivals). ${body.note}`,
             }
-          : { ok: false, msg: body.error ?? "Failed" },
+          : { ok: false, msg: failureText(body, "Failed") },
       );
     } finally {
       setBusy(null);
@@ -1311,17 +2591,27 @@ function BackfillStep({
           onClick={() => run("meta_backfill")}
           disabled={busy !== null}
           className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
-          style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+          style={{
+            borderColor: "var(--border-strong)",
+            color: "var(--text-secondary)",
+          }}
         >
-          {busy === "meta_backfill" ? "Importing…" : "Import 90 days of Meta data"}
+          {busy === "meta_backfill"
+            ? "Importing…"
+            : "Import 90 days of Meta data"}
         </button>
         <button
           onClick={() => run("ghl_backfill")}
           disabled={busy !== null}
           className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
-          style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+          style={{
+            borderColor: "var(--border-strong)",
+            color: "var(--text-secondary)",
+          }}
         >
-          {busy === "ghl_backfill" ? "Importing…" : "Snapshot GHL opportunities"}
+          {busy === "ghl_backfill"
+            ? "Importing…"
+            : "Snapshot GHL opportunities"}
         </button>
       </div>
 

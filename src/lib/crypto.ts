@@ -106,13 +106,48 @@ export function hashPassword(password: string): string {
   return `scrypt$${SCRYPT_N}$${salt.toString("hex")}$${hash.toString("hex")}`;
 }
 
-/** Verify a password against a stored hash. Constant-time; never throws. */
+/**
+ * Verify a password against a stored hash. Never throws.
+ *
+ * 🔴 The stored parts are validated as hex BEFORE they are decoded, and that is
+ * a security check rather than tidiness.
+ *
+ * `Buffer.from(str, "hex")` does not reject a malformed string — it stops at
+ * the first character that is not hex and returns however many bytes it managed,
+ * which for anything starting with a non-hex character is ZERO bytes. Feed that
+ * through unchecked and the salt is empty, `expected.length` is 0, scrypt is
+ * asked for a 0-byte key and obligingly returns one, and
+ * `timingSafeEqual(empty, empty)` is true.
+ *
+ * The result: any `scrypt$N$…$…` row whose hex is corrupt — a truncated column,
+ * a botched import, a hand-edited row — authenticates EVERY password. So the
+ * length floor below is not defensive style; without it a damaged row is a
+ * silent authentication bypass rather than a locked-out account.
+ */
+const HEX = /^[0-9a-f]+$/i;
+/** Bytes, matching what `hashPassword` writes: 16-byte salt, 32-byte key. */
+const MIN_SALT_BYTES = 16;
+const MIN_HASH_BYTES = 32;
+
 export function verifyPassword(password: string, stored: string): boolean {
   try {
-    const [scheme, nStr, saltHex, hashHex] = stored.split("$");
+    const parts = stored.split("$");
+    if (parts.length !== 4) return false;
+    const [scheme, nStr, saltHex, hashHex] = parts;
     if (scheme !== "scrypt") return false;
+
+    // Belt-and-braces: scrypt itself throws on a non-power-of-two or absurd
+    // cost, and the catch turns that into `false` — so no test can distinguish
+    // this line from `Number.isFinite`. It states the intent at the boundary
+    // rather than relying on a library's error to enforce it.
     const N = Number(nStr);
-    if (!Number.isFinite(N)) return false;
+    if (!Number.isInteger(N) || N < 2) return false;
+
+    if (!HEX.test(saltHex) || !HEX.test(hashHex)) return false;
+    if (saltHex.length % 2 !== 0 || hashHex.length % 2 !== 0) return false;
+    if (saltHex.length / 2 < MIN_SALT_BYTES) return false;
+    if (hashHex.length / 2 < MIN_HASH_BYTES) return false;
+
     const salt = Buffer.from(saltHex, "hex");
     const expected = Buffer.from(hashHex, "hex");
     const actual = scryptSync(password, salt, expected.length, { N });

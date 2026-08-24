@@ -89,26 +89,53 @@ export interface GhlOpportunity {
   [k: string]: unknown;
 }
 
+/**
+ * One GHL attribution touch.
+ *
+ * Every field is `string | null | undefined`: GHL sends explicit `null` for
+ * fields it did not capture rather than omitting them, and typing these as
+ * `string | undefined` made the compiler reject the exact payloads production
+ * receives.
+ *
+ * Field-level notes below record what these keys CONTAIN in practice, measured
+ * across every attributed contact — several of them are not what their names
+ * suggest. See `./attribution.ts` for the parsing that follows from it.
+ */
 export interface GhlAttributionSource {
-  url?: string;
-  campaign?: string;
-  /** Holds the Meta numeric campaign id when UTMs are configured. */
-  campaignId?: string;
-  utmSource?: string;
-  utmMedium?: string;
-  utmContent?: string;
-  utmTerm?: string;
-  utmCampaign?: string;
-  referrer?: string;
-  fbclid?: string;
-  gclid?: string;
-  sessionSource?: string;
-  medium?: string;
-  mediumId?: string;
-  /** Populated only if `ad_id` / `ad_group_id` URL params are set on the ads —
-   *  the parser appears to be query-parameter-name driven. */
-  adId?: string;
-  adGroupId?: string;
+  /** The landing URL, query string intact. In practice the ONLY place the
+   *  campaign and ad-set ids can be found. */
+  url?: string | null;
+  /** Campaign NAME. */
+  campaign?: string | null;
+  /**
+   * Documented as the numeric campaign id — **empty on every production row
+   * observed**. The ids arrive as `utm_id` inside `url` instead.
+   */
+  campaignId?: string | null;
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  /** Frequently the ad's NAME rather than an id. */
+  utmContent?: string | null;
+  /** This account's ad-set id lands here, not in `adGroupId`. */
+  utmTerm?: string | null;
+  utmKeyword?: string | null;
+  utmCampaign?: string | null;
+  referrer?: string | null;
+  fbclid?: string | null;
+  gclid?: string | null;
+  /** Google's iOS-privacy click ids, which replace `gclid` under ATT. */
+  gbraid?: string | null;
+  wbraid?: string | null;
+  sessionSource?: string | null;
+  medium?: string | null;
+  mediumId?: string | null;
+  /**
+   * **Null on every production row observed**, including on ads whose URLs
+   * carry `ad_id=` / `ad_group_id=` parameters — which settles the long-open
+   * question of whether GHL's parser picks those names up. It does not.
+   */
+  adId?: string | null;
+  adGroupId?: string | null;
   [k: string]: unknown;
 }
 

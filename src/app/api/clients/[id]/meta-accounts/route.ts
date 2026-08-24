@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getClientById } from "@/lib/clients";
 import { addAdAccount, listAdAccounts } from "@/lib/meta/accounts";
+import { isSuperadmin, requireClient } from "@/lib/auth";
+import { safeFailure } from "@/lib/api-failure";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -13,10 +14,14 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client } = got;
 
-  const accounts = await listAdAccounts(id);
+  // `client.id` rather than the raw `id` param: the same value, but taken
+  // from the row `requireClient` actually authorized, so the check and the
+  // use cannot drift apart in a later edit.
+  const accounts = await listAdAccounts(client.id);
   return NextResponse.json({
     accounts: accounts.map((a) => ({
       id: a.id,
@@ -44,8 +49,9 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client, session } = got;
 
   const body = await req.json().catch(() => null);
   const parsed = AddSchema.safeParse(body);
@@ -58,7 +64,7 @@ export async function POST(
 
   try {
     const result = await addAdAccount(
-      id,
+      client.id,
       parsed.data.adAccountId,
       parsed.data.token,
     );
@@ -66,7 +72,7 @@ export async function POST(
       action: "meta_account.add",
       targetType: "meta_account",
       targetId: result.account.adAccountId,
-      clientId: id,
+      clientId: client.id,
       metadata: { hasTokenOverride: Boolean(parsed.data.token) },
       ...audit.requestContext(req),
     });
@@ -84,8 +90,21 @@ export async function POST(
       timezoneMismatch: result.timezoneMismatch ?? null,
     });
   } catch (err) {
+    /*
+     * `addAdAccount` throws both kinds: Meta's own rejection of the id, and our
+     * "already attached to another client". `safeFailure` keeps the second
+     * intact — it is the only message that tells the operator what to do.
+     */
     return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "Failed" },
+      {
+        ok: false,
+        ...safeFailure(
+          err,
+          "meta",
+          { superadmin: isSuperadmin(session) },
+          "Could not attach that ad account.",
+        ),
+      },
       { status: 502 },
     );
   }

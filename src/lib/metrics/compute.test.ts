@@ -6,6 +6,7 @@ import {
   sumAds,
   sumFunnels,
   changeSentiment,
+  SENTIMENT_DEAD_BAND,
   buildFunnelSteps,
   formatCurrency,
   formatPercent,
@@ -13,9 +14,13 @@ import {
   formatNumber,
   EMPTY_FUNNEL,
   EMPTY_ADS,
+  EMPTY_REVENUE,
+  roasFrom,
+  sumRevenue,
   DASH,
   type FunnelCounts,
   type AdTotals,
+  type RevenueTotals,
 } from "./compute";
 import { FUNNEL_PATH } from "@/db/schema";
 
@@ -25,6 +30,10 @@ const funnel = (over: Partial<FunnelCounts> = {}): FunnelCounts => ({
 });
 const ads = (over: Partial<AdTotals> = {}): AdTotals => ({
   ...EMPTY_ADS,
+  ...over,
+});
+const rev = (over: Partial<RevenueTotals> = {}): RevenueTotals => ({
+  ...EMPTY_REVENUE,
   ...over,
 });
 
@@ -154,6 +163,121 @@ describe("regression — real figures from the source spreadsheet", () => {
   });
 });
 
+describe("revenue and ROAS", () => {
+  it("computes ROAS from recorded revenue", () => {
+    const d = derive(
+      funnel({ closed_won: 4 }),
+      ads({ spend: 1000 }),
+      rev({ wonOpps: 4, wonWithValue: 4, revenue: 4000 }),
+    );
+    expect(d.roas).toBe(4);
+    expect(d.avgDeal).toBe(1000);
+  });
+
+  /**
+   * The live failure this guard exists for.
+   *
+   * Verified against production 2026-08-12: 64 closed-won opportunities, 43 with
+   * a deal value, and NONE created since March carries one. Without this rule a
+   * recent period reports "0.0x ROAS" — which reads as "the ads made no money"
+   * when the truth is that nobody filled the value field in GHL. That blames the
+   * ads for an operations gap, and it is the same class of quiet wrongness as
+   * the source sheet's $0.00 cost-per-lead.
+   */
+  it("returns null ROAS when deals closed but no value was recorded", () => {
+    const d = derive(
+      funnel({ closed_won: 6 }),
+      ads({ spend: 900 }),
+      rev({ wonOpps: 6, wonWithValue: 0, revenue: 0 }),
+    );
+    expect(d.roas).toBeNull();
+    expect(formatCurrency(d.roas)).toBe(DASH);
+  });
+
+  /**
+   * Deliberately 0, not a dash — and the distinction from the test above is the
+   * whole point. "Six deals closed and nobody recorded what they were worth" is
+   * unknown. "Nothing closed" is known, and the return really is zero. Dashes
+   * are reserved for absent knowledge; a real zero must be allowed to read as a
+   * real zero or the dash stops meaning anything.
+   */
+  it("reports a genuine zero ROAS when spend produced no closed deals", () => {
+    const d = derive(funnel(), ads({ spend: 900 }), rev());
+    expect(d.roas).toBe(0);
+    expect(d.avgDeal).toBeNull(); // no valued deals to average
+  });
+
+  it("returns null ROAS when revenue exists but spend is zero", () => {
+    // Same refusal as costPer: revenue against no spend is unattributable,
+    // not an infinite return.
+    const d = derive(
+      funnel({ closed_won: 1 }),
+      ads({ spend: 0 }),
+      rev({ wonOpps: 1, wonWithValue: 1, revenue: 500 }),
+    );
+    expect(d.roas).toBeNull();
+  });
+
+  it("averages deal size over deals that carry a value, not all deals", () => {
+    // 4 closed, only 2 valued at $3,000 total → $1,500 each, not $750.
+    const d = derive(
+      funnel({ closed_won: 4 }),
+      ads({ spend: 1000 }),
+      rev({ wonOpps: 4, wonWithValue: 2, revenue: 3000 }),
+    );
+    expect(d.avgDeal).toBe(1500);
+  });
+
+  it("still reports ROAS on partial value coverage, since some is known", () => {
+    const d = derive(
+      funnel({ closed_won: 4 }),
+      ads({ spend: 1000 }),
+      rev({ wonOpps: 4, wonWithValue: 2, revenue: 3000 }),
+    );
+    expect(d.roas).toBe(3);
+  });
+
+  it("treats ROAS as higher-better and revenue growth as good", () => {
+    expect(changeSentiment("roas", 0.4)).toBe("good");
+    expect(changeSentiment("roas", -0.4)).toBe("bad");
+    expect(changeSentiment("revenue", 0.2)).toBe("good");
+  });
+
+  /**
+   * Three distinct states, three distinct outputs. Collapsing any pair of them
+   * is how a dashboard starts lying:
+   *   not queried  → null   (this test)
+   *   queried, nothing closed → 0
+   *   queried, closed but unvalued → null, with the reason surfaced in the UI
+   */
+  it("reports null ROAS when revenue was never queried for the period", () => {
+    // No third argument: the trailing-window and month-on-month rows are built
+    // this way, and must not print a confident 0.0× for a figure nobody fetched.
+    const d = derive(funnel({ closed_won: 3 }), ads({ spend: 900 }));
+    expect(d.roas).toBeNull();
+    expect(d.avgDeal).toBeNull();
+    expect(roasFrom(null, 900)).toBeNull();
+  });
+
+  it("roasFrom is the single decision point", () => {
+    expect(roasFrom(rev({ wonOpps: 2, wonWithValue: 2, revenue: 200 }), 100)).toBe(2);
+    // Closed, but unvalued → unknown.
+    expect(roasFrom(rev({ wonOpps: 2, wonWithValue: 0 }), 100)).toBeNull();
+    // Nothing closed → a real zero return.
+    expect(roasFrom(rev(), 100)).toBe(0);
+    // No spend → unattributable, never Infinity.
+    expect(roasFrom(rev({ wonOpps: 1, wonWithValue: 1, revenue: 50 }), 0)).toBeNull();
+  });
+
+  it("sums all three revenue fields across periods", () => {
+    const t = sumRevenue([
+      rev({ wonOpps: 2, wonWithValue: 1, revenue: 500 }),
+      rev({ wonOpps: 3, wonWithValue: 3, revenue: 1500 }),
+    ]);
+    expect(t).toEqual({ wonOpps: 5, wonWithValue: 4, revenue: 2000 });
+  });
+});
+
 describe("sumAds", () => {
   it("sums additive metrics", () => {
     const total = sumAds([
@@ -230,6 +354,35 @@ describe("changeSentiment — polarity awareness", () => {
   it("returns neutral for null or zero change", () => {
     expect(changeSentiment("cpLead", null)).toBe("neutral");
     expect(changeSentiment("cpLead", 0)).toBe("neutral");
+  });
+
+  /*
+   * The dead band. Small moves at these volumes are one extra lead or a day's
+   * budget landing on the far side of a date boundary; dressing that as a
+   * verdict is how the colours stop meaning anything.
+   */
+  it("refuses to judge a move smaller than the dead band, in either direction", () => {
+    expect(changeSentiment("cpLead", -0.012)).toBe("neutral");
+    expect(changeSentiment("cpLead", 0.012)).toBe("neutral");
+    expect(changeSentiment("new_lead", 0.049)).toBe("neutral");
+    expect(changeSentiment("new_lead", -0.049)).toBe("neutral");
+  });
+
+  it("judges a move at or past the dead band", () => {
+    expect(changeSentiment("new_lead", SENTIMENT_DEAD_BAND)).toBe("good");
+    expect(changeSentiment("new_lead", -SENTIMENT_DEAD_BAND)).toBe("bad");
+  });
+
+  it("agrees with the insight strip's own notability threshold", () => {
+    // Both are expressed as 5%; the strip compares percentage points and this
+    // compares a ratio. If they ever diverge, the prose at the top of the page
+    // and the tiles below it start contradicting each other.
+    expect(SENTIMENT_DEAD_BAND * 100).toBe(5);
+  });
+
+  it("stays neutral on a non-finite change rather than throwing a colour at it", () => {
+    expect(changeSentiment("new_lead", Infinity)).toBe("neutral");
+    expect(changeSentiment("new_lead", NaN)).toBe("neutral");
   });
 });
 

@@ -1,8 +1,10 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { pipelineStages } from "@/db/schema";
-import { getClientBySlug } from "@/lib/clients";
+import { getClientForSession } from "@/lib/clients";
+import { getSessionUser } from "@/lib/auth";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 export const dynamic = "force-dynamic";
@@ -22,11 +24,24 @@ export default async function OAuthResultPage({
     slug?: string;
     location?: string;
     message?: string;
+    provider?: string;
   }>;
 }) {
   const sp = await searchParams;
   const ok = sp.status === "success";
   const slug = sp.slug || null;
+  /*
+   * 🔴 GoHighLevel is the DEFAULT, not one option among four.
+   *
+   * Its callback sets no `provider` at all — this page was written when it was
+   * the only flow that landed here. The ad-platform callbacks each set one, and
+   * they must, because the "What to try" list below is platform-specific advice
+   * and the previous version showed GoHighLevel's to everyone. A failed
+   * Facebook connect told the operator to check they were signed into their GHL
+   * agency account, which is not merely unhelpful — it sends them to fix
+   * something that was never broken.
+   */
+  const provider = providerOf(sp.provider);
   const location = sp.location || null;
   const message =
     sp.message || "The connection didn’t complete. No changes were saved.";
@@ -35,7 +50,21 @@ export default async function OAuthResultPage({
   let stageCount = 0;
   let unmapped = 0;
   if (ok && slug) {
-    const client = await getClientBySlug(slug);
+    /*
+     * 🔴 This page had NO permission check of any kind.
+     *
+     * `?slug=` is raw caller input and it went straight into a client lookup,
+     * then rendered that client's name and its pipeline stage count. Nothing
+     * required a session at all — the page sits outside the `/api` tree the
+     * proxy guards, so anyone who could guess a slug (they are derived from
+     * business names) could confirm a client existed and learn how far its
+     * onboarding had got. It was reachable by URL alone.
+     *
+     * Scoped now, and `null` covers both "no such client" and "not yours": the
+     * page falls back to its generic copy rather than announcing which of the
+     * two it was.
+     */
+    const client = await getClientForSession(await getSessionUser(), slug);
     if (client) {
       clientName = client.name;
       const stages = await db
@@ -50,10 +79,7 @@ export default async function OAuthResultPage({
   const accent = ok ? "var(--status-good)" : "var(--status-critical)";
 
   return (
-    <div
-      className="min-h-screen"
-      style={{ background: "var(--surface-page)" }}
-    >
+    <div className="min-h-screen" style={{ background: "var(--surface-page)" }}>
       <header className="border-b" style={{ borderColor: "var(--border)" }}>
         <div className="mx-auto flex max-w-[900px] items-center justify-end px-4 py-4 sm:px-6">
           <ThemeToggle />
@@ -68,7 +94,13 @@ export default async function OAuthResultPage({
             border: `1px solid color-mix(in srgb, ${accent} 45%, transparent)`,
           }}
         >
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <svg
+            width="30"
+            height="30"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden
+          >
             {ok ? (
               <path
                 d="M5 12.5l4.2 4.2L19 7"
@@ -105,7 +137,10 @@ export default async function OAuthResultPage({
               leads and stage changes will stream in from here.
             </p>
             {location && (
-              <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+              <p
+                className="mt-1 text-sm"
+                style={{ color: "var(--text-muted)" }}
+              >
                 Sub-account: <strong>{location}</strong>
               </p>
             )}
@@ -145,19 +180,9 @@ export default async function OAuthResultPage({
                 What to try
               </p>
               <ul className="flex list-disc flex-col gap-1.5 pl-4">
-                <li>
-                  Make sure you’re logged into your GoHighLevel agency account in
-                  this browser, then start the install again.
-                </li>
-                <li>
-                  Start it from <strong>Setup → Install on a sub-account</strong>{" "}
-                  in this app (not from GHL’s marketplace) so the secure hand-off
-                  matches.
-                </li>
-                <li>
-                  If the app is still in draft, add the sub-account as a test
-                  location in the GHL app settings, then retry.
-                </li>
+                {ADVICE[provider].map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
               </ul>
             </div>
           )}
@@ -219,6 +244,82 @@ export default async function OAuthResultPage({
     </div>
   );
 }
+
+type Provider = "ghl" | "meta" | "google" | "tiktok";
+
+/** Absent or unrecognised → GoHighLevel, which is the flow that sets nothing. */
+function providerOf(raw: string | undefined): Provider {
+  return raw === "meta" || raw === "google" || raw === "tiktok" ? raw : "ghl";
+}
+
+/**
+ * Platform-specific recovery steps.
+ *
+ * Each list names the failure that actually happens on that platform, in the
+ * order it is likely. Generic advice ("check your connection and try again") is
+ * deliberately absent — it is what this page showed for everything before, and
+ * it is indistinguishable from having nothing to say.
+ */
+const ADVICE: Record<Provider, ReactNode[]> = {
+  ghl: [
+    <>
+      Make sure you’re logged into your GoHighLevel agency account in this
+      browser, then start the install again.
+    </>,
+    <>
+      Start it from <strong>Setup → Install on a sub-account</strong> in this
+      app (not from GHL’s marketplace) so the secure hand-off matches.
+    </>,
+    <>
+      If the app is still in draft, add the sub-account as a test location in
+      the GHL app settings, then retry.
+    </>,
+  ],
+  meta: [
+    <>
+      Sign into Facebook with an account that has access to the ad account, then
+      start again.
+    </>,
+    <>
+      The account needs a role on the <strong>ad account</strong> in Business
+      Manager. Being an admin of the Page is not enough.
+    </>,
+    <>
+      Until Meta App Review completes, only people with a role on our Meta app
+      can finish this — everyone else is refused at the consent screen.
+    </>,
+  ],
+  google: [
+    <>
+      Sign in with a Google account that can open the Google Ads account itself,
+      then start again.
+    </>,
+    <>
+      Access to the Analytics property or the Business Profile is not the same
+      grant — it has to be Google Ads.
+    </>,
+    <>
+      If the account sits under a manager (MCC), you still sign in as yourself;
+      the manager’s child accounts appear in the next step.
+    </>,
+  ],
+  tiktok: [
+    <>
+      TikTok emails a verification code partway through authorization. Check
+      that inbox and finish within 48 hours, then start again.
+    </>,
+    <>
+      Authorize with a TikTok account that has access to the advertiser in
+      Business Center.
+    </>,
+    <>
+      If this keeps failing immediately, the app’s registered{" "}
+      <strong>Advertiser redirect URL</strong> no longer matches this
+      installation’s address — that is a setting on the TikTok app, not
+      something a retry can fix.
+    </>,
+  ],
+};
 
 function Row({
   label,

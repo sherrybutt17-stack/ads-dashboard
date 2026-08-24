@@ -4,10 +4,11 @@ import { z } from "zod";
 import { db } from "@/db";
 import { clients } from "@/db/schema";
 import { encrypt } from "@/lib/crypto";
-import { getClientById, webhookUrlFor } from "@/lib/clients";
+import { webhookUrlFor } from "@/lib/clients";
 import { removeClient } from "@/lib/client-removal";
 import { isValidTimeZone } from "@/lib/dates";
-import { getSessionUser, isStaff } from "@/lib/auth";
+import { requireClient } from "@/lib/auth";
+import { assertLocationIdAvailable } from "@/lib/ghl/oauth";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -16,7 +17,10 @@ export const dynamic = "force-dynamic";
 const PatchSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   // Reject "" / garbage — an invalid zone crashes the dashboard on next render.
-  timezone: z.string().refine(isValidTimeZone, "Invalid IANA timezone").optional(),
+  timezone: z
+    .string()
+    .refine(isValidTimeZone, "Invalid IANA timezone")
+    .optional(),
   status: z.enum(["active", "paused", "archived"]).optional(),
   ghlLocationId: z.string().trim().nullish(),
   ghlToken: z.string().trim().optional(),
@@ -29,10 +33,9 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client } = got;
   // Never return the encrypted credentials, even to an authenticated caller.
   const { ghlTokenEncrypted, ...safe } = client;
   return NextResponse.json({
@@ -48,12 +51,20 @@ export async function PATCH(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  // Re-check staff against the DB (not just the edge token) — this route rotates
-  // GHL tokens and flips client status, so a demoted account must not reach it.
-  if (!isStaff(await getSessionUser())) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  /*
+   * 🔴 This handler never loaded the client — it went from a uuid straight to
+   * `UPDATE clients WHERE id = $1`. The staff check was real and the write was
+   * unscoped, so it rotated GHL tokens and flipped status on ANY client, in any
+   * agency, on a guessed uuid. It survived the sweep that fixed its 29 siblings
+   * because that pass keyed on `getClientById`, and this route never called it:
+   * a route with no read to scope looked, to a search, like a route with
+   * nothing wrong.
+   */
   const { id } = await ctx.params;
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client } = got;
+
   const body = await req.json().catch(() => null);
   const parsed = PatchSchema.safeParse(body);
   if (!parsed.success) {
@@ -68,7 +79,17 @@ export async function PATCH(
   if (d.name !== undefined) updates.name = d.name;
   if (d.timezone !== undefined) updates.timezone = d.timezone;
   if (d.status !== undefined) updates.status = d.status;
-  if (d.ghlLocationId !== undefined) updates.ghlLocationId = d.ghlLocationId;
+  if (d.ghlLocationId !== undefined) {
+    // Same rule as creation: an edit is another way to type the field.
+    if (d.ghlLocationId) {
+      await assertLocationIdAvailable(
+        client.agencyId,
+        d.ghlLocationId,
+        client.id,
+      );
+    }
+    updates.ghlLocationId = d.ghlLocationId;
+  }
   if (d.paidLeadFilter !== undefined) updates.paidLeadFilter = d.paidLeadFilter;
   // Lowercased on write so tag matching needs no per-query LOWER().
   if (d.paidLeadTag !== undefined) {
@@ -80,7 +101,7 @@ export async function PATCH(
   const [updated] = await db
     .update(clients)
     .set(updates)
-    .where(eq(clients.id, id))
+    .where(eq(clients.id, client.id))
     .returning();
 
   if (!updated) {
@@ -92,8 +113,8 @@ export async function PATCH(
   void audit.record({
     action: d.ghlToken ? "client.token_change" : "client.update",
     targetType: "client",
-    targetId: id,
-    clientId: id,
+    targetId: client.id,
+    clientId: client.id,
     metadata: {
       fields: Object.keys(updates).filter((k) => k !== "updatedAt"),
       tokenChanged: Boolean(d.ghlToken),
@@ -114,22 +135,21 @@ export async function DELETE(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
 ) {
-  if (!isStaff(await getSessionUser())) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client } = got;
 
-  const result = await removeClient(id);
+  // `client.id` rather than the raw `id` param: the same value, but taken
+  // from the row `requireClient` actually authorized, so the check and the
+  // use cannot drift apart in a later edit.
+  const result = await removeClient(client.id);
 
   void audit.record({
     action: "client.remove",
     targetType: "client",
-    targetId: id,
-    clientId: id,
+    targetId: client.id,
+    clientId: client.id,
     metadata: { ...result },
     ...audit.requestContext(req),
   });

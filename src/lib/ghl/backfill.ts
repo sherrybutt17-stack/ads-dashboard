@@ -98,22 +98,64 @@ export async function backfillClientSnapshot(
           parseDate(remote.createdAt) ??
           new Date();
 
+        /*
+         * 🔴 What we already hold, because a backfill is not always the first
+         * thing to touch this row.
+         *
+         * The header says "run this once, at onboarding" — but nothing enforces
+         * that and it is wired to an operator button on the sync route that
+         * never goes away. By the second press the webhook path has spent
+         * months accumulating exactly the fields a snapshot does NOT carry, and
+         * an unconditional overwrite blanks them.
+         */
+        const [existing] = await db
+          .select()
+          .from(opportunities)
+          .where(
+            and(
+              eq(opportunities.clientId, client.id),
+              eq(opportunities.ghlOpportunityId, remote.id),
+            ),
+          )
+          .limit(1);
+
+        /*
+         * The same ordering guard the webhook path applies, for the same
+         * reason. A snapshot describing an older state must not move the stage
+         * pointer backwards: the NEXT webhook derives its `from` stage by
+         * diffing against whatever we stored, so one stale write also corrupts
+         * the transition after it — and that one is real observed history.
+         */
+        const storedChangedAt = existing?.lastStageChangeAt ?? null;
+        const isNewer =
+          !storedChangedAt || changedAt.getTime() > storedChangedAt.getTime();
+
         const values = {
           clientId: client.id,
           ghlOpportunityId: remote.id,
-          contactId: contactRowId,
-          ghlContactId,
-          name: remote.name ?? null,
-          ghlPipelineId: remote.pipelineId ?? null,
-          currentStageId: stage?.id ?? null,
-          currentStageGhlId: stageGhlId,
-          status: normalizeStatus(remote.status ?? null),
+          /*
+           * Preserved, never nulled. `contact_id` is what joins an opportunity
+           * to its attribution — dropping it removes the lead from paid
+           * cost-per-lead, and nothing errors, so the only symptom is a CPL
+           * that quietly got worse.
+           */
+          contactId: contactRowId ?? existing?.contactId ?? null,
+          ghlContactId: ghlContactId ?? existing?.ghlContactId ?? null,
+          name: remote.name ?? existing?.name ?? null,
+          ghlPipelineId: remote.pipelineId ?? existing?.ghlPipelineId ?? null,
+          currentStageId: isNewer
+            ? (stage?.id ?? null)
+            : (existing?.currentStageId ?? stage?.id ?? null),
+          currentStageGhlId: isNewer
+            ? stageGhlId
+            : (existing?.currentStageGhlId ?? stageGhlId),
+          status: normalizeStatus(remote.status ?? null) ?? existing?.status ?? null,
           monetaryValue:
             typeof remote.monetaryValue === "number"
               ? String(remote.monetaryValue)
-              : null,
-          ghlCreatedAt: parseDate(remote.createdAt),
-          lastStageChangeAt: changedAt,
+              : (existing?.monetaryValue ?? null),
+          ghlCreatedAt: parseDate(remote.createdAt) ?? existing?.ghlCreatedAt ?? null,
+          lastStageChangeAt: isNewer ? changedAt : storedChangedAt,
           updatedAt: new Date(),
         };
 
@@ -128,6 +170,14 @@ export async function backfillClientSnapshot(
         oppCount++;
 
         if (!stageGhlId || !opp) continue;
+
+        /*
+         * And no synthetic arrival off a stale read. The snapshot knows only
+         * the CURRENT stage; when our stored state is already newer, this
+         * response is out of date rather than describing an extra arrival we
+         * had not heard about, and writing it would invent one.
+         */
+        if (!isNewer) continue;
 
         const inserted = await db
           .insert(stageTransitions)

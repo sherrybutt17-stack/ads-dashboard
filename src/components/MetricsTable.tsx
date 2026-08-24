@@ -11,6 +11,12 @@ import {
   type FunnelCounts,
   type AdTotals,
 } from "@/lib/metrics/compute";
+import { definitionFor } from "@/lib/metrics/definitions";
+// COLUMNS / valueFor / changesBetween live in lib/ because SERVER components
+// call them. Importing a plain function out of this "use client" module and
+// invoking it server-side throws at render — it passes typecheck and passes
+// `next build`, and it took out the whole report-tables boundary once already.
+import { COLUMNS, GROUP_STARTS, valueFor } from "@/lib/metrics/table-columns";
 import { Icon } from "./Icon";
 
 /**
@@ -33,36 +39,64 @@ export interface MetricRow {
   emphasis?: boolean;
 }
 
-const COLUMNS = [
-  { key: "spend", label: "Spend", kind: "currency" as const },
-  { key: "new_lead", label: "Leads", kind: "number" as const },
-  { key: "contacted", label: "Contacted", kind: "number" as const },
-  { key: "appointment_booked", label: "Appts", kind: "number" as const },
-  { key: "showed", label: "Shown", kind: "number" as const },
-  { key: "no_show", label: "No Show", kind: "number" as const },
-  { key: "closed_won", label: "Won", kind: "number" as const },
-  { key: "cpLead", label: "CP-Lead", kind: "currency" as const },
-  { key: "cpAppt", label: "CP-Appt", kind: "currency" as const },
-  { key: "cpShow", label: "CP-Show", kind: "currency" as const },
-  { key: "cpWon", label: "CP-Won", kind: "currency" as const },
-  { key: "bookPct", label: "Book %", kind: "percent" as const },
-  { key: "showPct", label: "Show %", kind: "percent" as const },
-  { key: "closePct", label: "Close %", kind: "percent" as const },
-  { key: "optinPct", label: "Optin %", kind: "percent" as const },
-  { key: "ctr", label: "CTR", kind: "percent" as const },
-  { key: "cpm", label: "CPM", kind: "currency" as const },
-  { key: "cpc", label: "CPC", kind: "currency" as const },
-];
-
-// Columns that begin a new conceptual group (cost block, then rate block). A
-// faint left rule here lets the eye find "the cost columns" without counting.
-const GROUP_STARTS = new Set(["cpLead", "bookPct"]);
-
-function valueFor(row: MetricRow, key: string): number | null {
-  if (key === "spend") return row.ads.spend;
-  if (key === "linkClicks") return row.ads.linkClicks;
-  if (key in row.funnel) return row.funnel[key as keyof FunnelCounts];
-  return row.derived[key as keyof DerivedMetrics] ?? null;
+/**
+ * Every column's formula, on demand, in one place.
+ *
+ * A per-header popover is impossible here — the table scrolls inside
+ * `overflow-x: auto`, which clips any absolutely-positioned panel. That
+ * constraint turns out to favour the reader: eighteen columns, of which three
+ * are percentages with three DIFFERENT denominators, are best understood side
+ * by side rather than one hover at a time. Collapsed by default, so it costs
+ * nothing to anyone who already knows.
+ */
+function ColumnDefinitions() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t px-5" style={{ borderColor: "var(--border)" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-1 py-2 text-[11px] font-medium"
+        style={{ color: "var(--text-muted)" }}
+      >
+        <Icon name="help" size={12} />
+        What these columns mean
+      </button>
+      {open && (
+        <dl className="grid gap-x-6 gap-y-2.5 pb-4 sm:grid-cols-2 xl:grid-cols-3">
+          {COLUMNS.map((c) => {
+            const def = definitionFor(c.key);
+            if (!def) return null;
+            return (
+              <div key={c.key}>
+                <dt
+                  className="text-[11px] font-semibold"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {c.label}{" "}
+                  <span
+                    className="font-mono font-normal"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    = {def.formula}
+                  </span>
+                </dt>
+                {def.caveat && (
+                  <dd
+                    className="mt-0.5 text-[11px] leading-relaxed"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    {def.caveat}
+                  </dd>
+                )}
+              </div>
+            );
+          })}
+        </dl>
+      )}
+    </div>
+  );
 }
 
 function render(value: number | null, kind: string, currency: string): string {
@@ -98,11 +132,17 @@ export function MetricsTable({
         aria-expanded={open}
       >
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2
+            className="text-sm font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
             {title}
           </h2>
           {subtitle && (
-            <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
+            <p
+              className="mt-0.5 text-xs"
+              style={{ color: "var(--text-muted)" }}
+            >
               {subtitle}
             </p>
           )}
@@ -119,10 +159,15 @@ export function MetricsTable({
         </span>
       </button>
 
+      {open && <ColumnDefinitions />}
+
       {open && (
         /* Wide table scrolls inside its own container — the page never
            scrolls horizontally. */
-        <div className="table-scroll border-t" style={{ borderColor: "var(--border)" }}>
+        <div
+          className="table-scroll border-t"
+          style={{ borderColor: "var(--border)" }}
+        >
           <table className="w-full text-[13px]">
             <thead>
               <tr style={{ background: "var(--surface-2)" }}>
@@ -135,20 +180,31 @@ export function MetricsTable({
                 >
                   {firstColumnLabel}
                 </th>
-                {COLUMNS.map((c) => (
-                  <th
-                    key={c.key}
-                    className="px-3 py-2.5 text-right text-[11px] font-medium tracking-wider whitespace-nowrap uppercase"
-                    style={{
-                      color: "var(--text-muted)",
-                      borderLeft: GROUP_STARTS.has(c.key)
-                        ? "1px solid var(--border)"
-                        : undefined,
-                    }}
-                  >
-                    {c.label}
-                  </th>
-                ))}
+                {COLUMNS.map((c) => {
+                  const def = definitionFor(c.key);
+                  return (
+                    <th
+                      key={c.key}
+                      // Hover gives the formula immediately; the definitions
+                      // panel above carries the same text for keyboard and
+                      // touch, which a clipped popover could not.
+                      title={
+                        def
+                          ? `${c.label} = ${def.formula}${def.caveat ? `\n\n${def.caveat}` : ""}`
+                          : undefined
+                      }
+                      className="px-3 py-2.5 text-right text-[11px] font-medium tracking-wider whitespace-nowrap uppercase"
+                      style={{
+                        color: "var(--text-muted)",
+                        borderLeft: GROUP_STARTS.has(c.key)
+                          ? "1px solid var(--border)"
+                          : undefined,
+                      }}
+                    >
+                      {c.label}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -180,7 +236,9 @@ export function MetricsTable({
                   </td>
                   {COLUMNS.map((c) => {
                     const v = valueFor(row, c.key);
-                    const change = showChanges ? row.changes?.[c.key] : undefined;
+                    const change = showChanges
+                      ? row.changes?.[c.key]
+                      : undefined;
                     const sentiment =
                       change !== undefined && change !== null
                         ? changeSentiment(c.key, change)

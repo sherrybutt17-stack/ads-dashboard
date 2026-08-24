@@ -4,7 +4,9 @@ import { z } from "zod";
 import { db } from "@/db";
 import { clients } from "@/db/schema";
 import { encrypt, decryptNullable } from "@/lib/crypto";
-import { getClientById, verifyGhl } from "@/lib/clients";
+import { verifyGhl } from "@/lib/clients";
+import { isSuperadmin, requireClient } from "@/lib/auth";
+import { safeFailure } from "@/lib/api-failure";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,8 +33,9 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const client = await getClientById(id);
-  if (!client) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const got = await requireClient(id);
+  if ("denied" in got) return got.denied;
+  const { client, session } = got;
 
   const body = await req.json().catch(() => null);
   const parsed = BodySchema.safeParse(body);
@@ -44,7 +47,8 @@ export async function POST(
   }
 
   try {
-    const token = parsed.data.token || decryptNullable(client.ghlTokenEncrypted);
+    const token =
+      parsed.data.token || decryptNullable(client.ghlTokenEncrypted);
     if (!token) {
       return NextResponse.json(
         { ok: false, error: "No token provided or stored" },
@@ -72,10 +76,22 @@ export async function POST(
       timezone: result.timezone,
     });
   } catch (err) {
+    /*
+     * A bad token is the EXPECTED outcome here, not an exception — this is the
+     * screen where someone pastes one. So the response has to say which of
+     * "wrong token", "token fine but wrong location", and "GHL is down" it was,
+     * without handing over the path GHL echoes back, which contains a location
+     * id. See `api-failure.ts`.
+     */
     return NextResponse.json(
       {
         ok: false,
-        error: err instanceof Error ? err.message : "Verification failed",
+        ...safeFailure(
+          err,
+          "ghl",
+          { superadmin: isSuperadmin(session) },
+          "Verification failed",
+        ),
       },
       { status: 502 },
     );

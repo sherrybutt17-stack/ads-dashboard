@@ -1,0 +1,1 @@
+ALTER TYPE "public"."canonical_stage" ADD VALUE 'disqualified';

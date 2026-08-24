@@ -79,7 +79,10 @@ export function HealthChecklist({
     <section className="card p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2
+            className="text-sm font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
             Connection health
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -104,7 +107,8 @@ export function HealthChecklist({
           className="mb-3 rounded-[8px] px-3 py-2 text-xs"
           style={{
             color: "var(--status-critical)",
-            background: "color-mix(in srgb, var(--status-critical) 10%, transparent)",
+            background:
+              "color-mix(in srgb, var(--status-critical) 10%, transparent)",
           }}
         >
           {error}
@@ -149,13 +153,36 @@ export function HealthChecklist({
                       {check.label}
                     </span>
                     <span className="sr-only">{m.label}: </span>
-                    <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                    <span
+                      className="text-xs"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
                       {check.message}
                     </span>
                   </div>
                   {check.hint && (
-                    <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                    <p
+                      className="mt-1 text-xs"
+                      style={{ color: "var(--text-muted)" }}
+                    >
                       {check.hint}
+                    </p>
+                  )}
+                  {/*
+                    The raw upstream error. Present only for superadmins — the
+                    server drops the field entirely for everyone else, so this
+                    renders nothing rather than relying on a flag passed here.
+
+                    Monospaced and visually subordinate on purpose: it is a
+                    string a third party wrote for a developer, and it sits
+                    below the sentence that actually says what to do.
+                  */}
+                  {check.diagnostic && (
+                    <p
+                      className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      {check.diagnostic}
                     </p>
                   )}
                 </div>

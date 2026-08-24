@@ -404,7 +404,11 @@ suggestion:
 2. **The funnel** — the seven stages as a proportioned visual, with conversion
    rate and drop-off annotated between each pair. This is the view that answers
    "where are we losing people," which the sheet could not show at all.
-3. **Trend chart** — spend vs. leads over the selected range, dual axis.
+3. **Trend chart** — spend and leads over the selected range as **two stacked
+   panels sharing an x-axis, not a dual axis** (see the change note at the top).
+   A dual axis lets two arbitrary scales sit side by side, so any apparent
+   correlation between dollars and lead counts is an artifact of where the axes
+   were placed. Each panel also carries a dashed ghost of the previous period.
 4. **The four report tables** — moving averages, 7-day change, 14-day daily,
    month-on-month. Collapsible, dense but properly typeset: tabular numerals,
    right-aligned figures, `-` for undefined, subdued zero states.

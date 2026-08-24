@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { clients } from "@/db/schema";
+import { safeFailureMessage } from "@/lib/api-failure";
 import { claimInstallation, exchangeCode } from "@/lib/ghl/oauth";
 import { importPipelineStages } from "@/lib/clients";
-import { getClientById } from "@/lib/clients";
+import { getClientUnscoped } from "@/lib/clients";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,50 +50,65 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const installation = await exchangeCode(code);
+    const installation = await exchangeCode(code, clientId);
 
     let slug: string | null = null;
     if (clientId) {
-      const client = await getClientById(clientId);
+      /*
+       * Unscoped on purpose, and named so. The authorization for this lookup is
+       * the HMAC-signed `state` verified above — the client id was minted into
+       * it by the authorize route, which DID check the caller's session, so it
+       * is not caller input by the time it arrives here.
+       */
+      const client = await getClientUnscoped(clientId, "oauth_state");
       if (client) {
-        await claimInstallation(installation.id, client.id);
+        await claimInstallation(installation.id, client);
         slug = client.slug;
 
         // Pull pipelines now so the mapping step is immediately usable.
         try {
-          const refreshed = await getClientById(client.id);
+          const refreshed = await getClientUnscoped(client.id, "oauth_state");
           if (refreshed) await importPipelineStages(refreshed);
         } catch {
           // Non-fatal — the setup page has a manual "Import from GHL" button.
         }
       }
-    } else {
-      // Installed without a target client: try to bind by matching locationId.
-      const [match] = await db
-        .select()
-        .from(clients)
-        .where(eq(clients.ghlLocationId, installation.locationId))
-        .limit(1);
-      if (match) {
-        await claimInstallation(installation.id, match.id);
-        slug = match.slug;
-      }
     }
+    /*
+     * 🔴 An install with no target client is left UNCLAIMED, on purpose.
+     *
+     * This branch used to bind it to whichever client had a matching
+     * `ghlLocationId`. That column is a form field — anyone adding a client can
+     * type any location id they like — so the match was: "somebody claimed this
+     * sub-account in advance, give it to them." Type a competitor's location id
+     * into a client of your own, wait for them to install, and their tokens,
+     * contacts and pipeline bind to you.
+     *
+     * Guessing an owner is not a feature worth having. The install sits
+     * unclaimed until someone connects it from a client's setup page, where
+     * `claimInstallation` can check who is asking.
+     */
 
     const url = req.nextUrl.clone();
     url.pathname = "/oauth/result";
     const params = new URLSearchParams({ status: "success" });
     if (slug) params.set("slug", slug);
-    params.set("location", installation.locationName ?? installation.locationId);
+    params.set(
+      "location",
+      installation.locationName ?? installation.locationId,
+    );
     url.search = `?${params.toString()}`;
 
     const res = NextResponse.redirect(url);
     res.cookies.delete("ghl_oauth_state");
     return res;
   } catch (err) {
+    // Redacted with no superadmin exemption — see the note in the Meta
+    // callback: this rides in a URL. GHL's own errors quote the request path,
+    // which carries a location id.
     return redirectWithError(
       req,
-      err instanceof Error ? err.message : "Install failed",
+      safeFailureMessage(err, "ghl", "Install failed"),
     );
   }
 }

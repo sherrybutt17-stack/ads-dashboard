@@ -1,12 +1,14 @@
 name: Nightly reconcile
 
-# Trues the dashboard up against Ads Manager as Meta and Google restate spend
-# and conversions over the following ~28 days.
+# Trues the dashboard up against each Ads Manager as Meta, Google and TikTok
+# restate spend and conversions over the following ~28 days.
 #
 # Why this lives here and not only in vercel.json: clients are NOT all in one
-# timezone, and each one's day closes at a different instant (both platforms
+# timezone, and each one's day closes at a different instant (all three platforms
 # bucket days in the ad account's timezone). Vercel's Hobby tier permits only one
-# cron run per day, which cannot land near every client's local reconcile hour.
+# cron run per day, which cannot land near every client's local reconcile hour —
+# and only two cron jobs at all, which Meta and Google already occupy, so this
+# schedule is TikTok's only reconciliation rather than a redundant backstop.
 #
 # Cadence is deliberately loose. The endpoints gate each client on "has its local
 # reconcile hour passed without a reconcile since" rather than "is it that hour
@@ -70,13 +72,37 @@ jobs:
             "$BASE_URL/api/cron/google-sync" | tee /tmp/google.json
           echo
 
+      - name: Reconcile TikTok
+        run: |
+          # TikTok has no Vercel cron slot — the Hobby tier allows two and Meta
+          # and Google hold both — so this schedule is its ONLY reconciliation.
+          # Every client with no TikTok advertiser is reported "skipped", making
+          # this a no-op until one is connected.
+          curl -fsS --max-time 300 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/cron/tiktok-sync" | tee /tmp/tiktok.json
+          echo
+
+      - name: Budget pacing alerts
+        run: |
+          # Runs AFTER the three reconciles, deliberately: it alerts on figures,
+          # and alerting on stale ones would report a drift that the same run
+          # just corrected. Safe at this cadence — every suppression rule lives
+          # in `decidePacingAlert`, so a client hears at most one message per
+          # week per direction, and only during their own working hours.
+          # No-op until a client has both a budget and an alert destination.
+          curl -fsS --max-time 300 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/cron/pacing" | tee /tmp/pacing.json
+          echo
+
       - name: Flag deferred clients
         run: |
           # A non-zero "deferred" means the run hit its dispatch budget and did
           # not reach every overdue client. Harmless once (the next run picks
           # them up) but persistent deferrals mean the client count has outgrown
           # a single invocation.
-          for f in /tmp/meta.json /tmp/google.json; do
+          for f in /tmp/meta.json /tmp/google.json /tmp/tiktok.json /tmp/pacing.json; do
             n=$(python3 -c "import json,sys; print(json.load(open('$f')).get('deferred', 0))" 2>/dev/null || echo 0)
             if [ "$n" != "0" ]; then
               echo "::warning::$f reported $n deferred client(s) — dispatch budget reached."
