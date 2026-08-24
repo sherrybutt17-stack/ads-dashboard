@@ -123,6 +123,70 @@ describe("classifying upstream failures", () => {
     }
   });
 
+  it("🔴 calls an unapproved developer token ours, not a lost account", () => {
+    /*
+     * The regression this guards. Google returns DEVELOPER_TOKEN_NOT_APPROVED
+     * as an HTTP 403, and 403 is otherwise `no_access` — which tells the
+     * operator the sign-in can no longer see the account and to reconnect. The
+     * sign-in is fine. The developer token is ours, shared across every tenant,
+     * and no amount of reconnecting touches it.
+     *
+     * Real shape: what `GoogleAdsError` carries when the token is still at Test
+     * Account access and a production account is queried.
+     */
+    const err = Object.assign(
+      new Error(
+        'Google Ads 403 listing accessible customers: {"error":{"code":403,' +
+          '"message":"The developer token is not approved. Non-approved developer' +
+          ' tokens can only access test accounts.","status":"PERMISSION_DENIED",' +
+          '"details":[{"errors":[{"errorCode":{"authorizationError":' +
+          '"DEVELOPER_TOKEN_NOT_APPROVED"}}]}]}}',
+      ),
+      { name: "GoogleAdsError", status: 403 },
+    );
+
+    const f = describeFailure(err, "google");
+    expect(f.cause).toBe("not_configured");
+    expect(f.hint).toMatch(/Nothing you can fix from here/);
+    // The specific wrong advice this test exists to prevent.
+    expect(f.hint).not.toMatch(/Reconnect/i);
+    expect(f.message).not.toMatch(/no longer shows this account/i);
+    assertClean(`${f.message} ${f.hint}`);
+  });
+
+  it("classifies every developer-token failure the same way", () => {
+    for (const code of [
+      "DEVELOPER_TOKEN_NOT_APPROVED",
+      "DEVELOPER_TOKEN_PROHIBITED",
+      "DEVELOPER_TOKEN_INVALID",
+      "DEVELOPER_TOKEN_PARAMETER_MISSING",
+    ]) {
+      const err = Object.assign(new Error(`Google Ads 403: ${code}`), {
+        name: "GoogleAdsError",
+        status: 403,
+      });
+      expect(describeFailure(err, "google").cause).toBe("not_configured");
+      // Also via the stored-text path — `sync_runs.error` is a string by the
+      // time anything reads it, and the two paths must not drift.
+      expect(describeStoredFailure(`Google Ads 403: ${code}`, "google")?.cause).toBe(
+        "not_configured",
+      );
+    }
+  });
+
+  it("🔴 a plain 403 with no developer-token code is still no_access", () => {
+    /*
+     * The other half of the fix. Widening `not_configured` to swallow every 403
+     * would hide a genuinely revoked account behind "contact support" — the
+     * failure this module was written to stop. Only the four named codes move.
+     */
+    const err = Object.assign(new Error("Google Ads 403 on customer 1234567890: denied"), {
+      name: "GoogleAdsError",
+      status: 403,
+    });
+    expect(describeFailure(err, "google").cause).toBe("no_access");
+  });
+
   it("recognises a network fault as one", () => {
     for (const raw of ["fetch failed", "socket hang up", "connect ETIMEDOUT 1.2.3.4:443"]) {
       expect(describeFailure(new Error(raw), "google").cause).toBe("upstream_down");

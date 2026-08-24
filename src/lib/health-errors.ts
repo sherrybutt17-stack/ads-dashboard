@@ -147,7 +147,41 @@ const TIKTOK_RATE_LIMIT = new Set([50002]);
  * actual fault sat in an environment variable only we can set.
  */
 function isNotConfigured(text: string): boolean {
-  return / is not set\.?$/i.test(text) || /\bnot configured\b/i.test(text);
+  return (
+    / is not set\.?$/i.test(text) ||
+    /\bnot configured\b/i.test(text) ||
+    isDeveloperTokenProblem(text)
+  );
+}
+
+/**
+ * Google's developer token is ours, not the customer's — and it fails as a 403.
+ *
+ * 🔴 This is why it needs naming explicitly. `DEVELOPER_TOKEN_NOT_APPROVED`
+ * carries HTTP 403, so without this it lands on the status branch below and is
+ * classified `no_access`, which tells the operator:
+ *
+ *     "Connected, but Google no longer shows this account to that sign-in.
+ *      Reconnect with Continue with Google on this page."
+ *
+ * Every word of that is wrong. The sign-in is fine and reconnecting cannot
+ * help, because the developer token — one credential, shared by every tenant,
+ * settable only by us — has not been approved for production accounts. Someone
+ * following that hint re-authorises until they give up.
+ *
+ * The four codes below are all the same story at different stages: a token
+ * still at Test Account access, one revoked, one rejected outright, or a
+ * request made without one. `not_configured` already says "ours to fix, nothing
+ * you can do from here", which is exactly right, so this feeds that rather than
+ * growing the taxonomy.
+ *
+ * Deliberately not gated on `source === "google"`: these strings appear in no
+ * other platform's errors, and the stored-text path (`sync_runs.error`) is
+ * classified without always knowing which platform threw.
+ */
+function isDeveloperTokenProblem(text: string): boolean {
+  return /\bDEVELOPER_TOKEN_(NOT_APPROVED|PROHIBITED|INVALID)\b/.test(text) ||
+    /\bDEVELOPER_TOKEN_PARAMETER_MISSING\b/.test(text);
 }
 
 function isCredentialText(text: string): boolean {
