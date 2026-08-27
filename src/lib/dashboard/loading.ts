@@ -42,6 +42,7 @@ export const SKIPPABLE: Partial<Record<SectionId, string>> = {
   channels: "channels",
   call_timing: "callTiming",
   lead_quality: "quality",
+  lead_sources: "leadSources",
   forecast: "forecast",
   budget_pacing: "pacing",
   budget_delivery: "budgetHistory",

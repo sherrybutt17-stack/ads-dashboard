@@ -178,6 +178,7 @@ export type SectionId =
   | "duplicates"
   | "call_timing"
   | "lead_quality"
+  | "lead_sources"
   | "aging"
   | "uncalled"
   | "maturation"
@@ -508,6 +509,34 @@ export const SECTIONS: readonly SectionDef[] = [
      */
     cadence: "range",
     dataKeys: ["quality"],
+  },
+  {
+    id: "lead_sources",
+    /*
+     * On the ADS tab, not the leads tab, even though it reads the CRM.
+     *
+     * "Where the money went" directly above it ends on Meta's audience
+     * segments — who saw the ad. The obvious next question is where the people
+     * who answered it actually landed, and that is this table. Filed under
+     * Leads it would answer that question one tab away from where it is asked,
+     * and the two halves of "which page is working" would never be seen
+     * together.
+     */
+    group: "ads",
+    label: "Which pages and forms bring leads",
+    description:
+      "The landing page, form or calendar each lead came through, and how many of them booked.",
+    // Directly beneath the breakdowns card (67), which is where the question
+    // this answers gets asked.
+    defaultOrder: 68,
+    defaultVisible: true,
+    /*
+     * `range` is where the cohort ARRIVES; outcomes are followed forward out of
+     * it, exactly as `lead_quality` above. The badge system cannot express
+     * that, so the panel says it in prose.
+     */
+    cadence: "range",
+    dataKeys: ["leadSources"],
   },
   {
     id: "aging",

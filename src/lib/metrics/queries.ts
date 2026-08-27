@@ -36,6 +36,7 @@ import type { CreativeTotals } from "./creative";
 import type { CreativeDay, FatigueInput } from "./fatigue";
 import type { SpeedOutcomeLead } from "./speed-outcome";
 import type { QualityLead } from "./quality";
+import type { LeadSourceInput } from "./lead-sources";
 import type { DwellObservation, SittingOpportunity } from "./aging";
 import type { CallWeekday, UncalledLead } from "./uncalled";
 import type { MonthChannel } from "./channels";
@@ -4235,6 +4236,70 @@ export async function getQualityCohort(
       reached,
     };
   });
+}
+
+/**
+ * Every lead in the window with its stored attribution object and whether it
+ * ever booked or closed.
+ *
+ * ── 🔴 Deliberately NOT paid-filtered, unlike every cost panel above ───
+ *
+ * `getQualityCohort` right above this one applies `platformLeadPredicate`,
+ * because its job is to compare paid segments against each other. This one
+ * must not. On the live book only 88 contacts carry a Meta campaign id, so the
+ * paid filter would erase the calendar bookings, the manual entries and every
+ * organic landing page — which is most of the answer to "where do our leads
+ * come from". A panel about lead CAPTURE that silently dropped four leads in
+ * five because they were not matched to an ad would be answering a different
+ * question than the one its heading asks.
+ *
+ * The consequence is that this panel's lead total will not equal the KPI row's,
+ * and the component says so in as many words rather than leaving a reader to
+ * find the discrepancy and distrust both numbers.
+ *
+ * Outcomes are followed FORWARD out of the window — a lead that arrived inside
+ * the range and booked a fortnight later counts as booked — with the same
+ * `changed_at >= lead_at` clock-skew guard `getQualityCohort` uses. A
+ * transition stamped before its own contact existed is not an outcome of it.
+ */
+export async function getLeadSourceCohort(
+  clientId: string,
+  window: DateWindow,
+): Promise<LeadSourceInput[]> {
+  type Row = {
+    raw: unknown;
+    appt: boolean | null;
+    won: boolean | null;
+  };
+
+  const res = await db.execute<Row>(sql`
+    WITH cohort AS (
+      SELECT c.id, c.ghl_created_at AS lead_at, c.raw_attribution AS raw
+      FROM contacts c
+      WHERE c.client_id = ${clientId}
+        AND c.ghl_created_at >= ${window.startUtc}
+        AND c.ghl_created_at <  ${window.endUtc}
+    ),
+    reached AS (
+      SELECT st.contact_id,
+             bool_or(st.to_canonical = 'appointment_booked') AS appt,
+             bool_or(st.to_canonical = 'closed_won')         AS won
+      FROM stage_transitions st
+      JOIN cohort ch ON ch.id = st.contact_id
+      WHERE st.client_id = ${clientId}
+        AND st.changed_at >= ch.lead_at
+      GROUP BY st.contact_id
+    )
+    SELECT ch.raw AS raw, r.appt, r.won
+    FROM cohort ch
+    LEFT JOIN reached r ON r.contact_id = ch.id
+  `);
+
+  return resultRows<Row>(res).map((r) => ({
+    raw: r.raw,
+    appt: r.appt === true,
+    won: r.won === true,
+  }));
 }
 
 /**

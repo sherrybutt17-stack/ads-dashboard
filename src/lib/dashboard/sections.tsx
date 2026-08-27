@@ -21,6 +21,7 @@ import { SpeedToLeadWidget } from "@/components/SpeedToLead";
 import { SpeedOutcomePanel } from "@/components/SpeedOutcome";
 import { CallTimingPanel } from "@/components/CallTiming";
 import { LeadQualityPanel } from "@/components/LeadQuality";
+import { LeadSources } from "@/components/LeadSources";
 import { StageAgingPanel } from "@/components/StageAging";
 import { CallListPanel } from "@/components/CallList";
 import { MaturationPanel } from "@/components/Maturation";
@@ -579,6 +580,21 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
         currency={currency}
         emptyState={data.creativesError ? null : adState}
       />
+        </>
+      );
+
+    case "lead_sources":
+      /*
+       * Platform-independent on purpose, unlike the breakdowns card directly
+       * above it. That one reads `fb_breakdown_metrics` and is Meta-only; this
+       * reads `contacts.raw_attribution`, which GHL populates whatever the lead
+       * was clicked from. Returning null on the Google tab would hide the CRM's
+       * own capture points because of which ad platform happened to be selected.
+       */
+      return (
+        <>
+      {/* Which page and which form the leads actually came through */}
+      <LeadSources data={data.leadSources} />
         </>
       );
 

@@ -27,6 +27,7 @@ import { loadForecast } from "./forecast-load";
 import { loadPacing, loadBudgetHistory, type MonthPacing } from "@/lib/budgets";
 import type { BudgetHistory } from "./budget-history";
 import { buildQuality, type QualityReport } from "./quality";
+import { buildLeadSources, type LeadSourceReport } from "./lead-sources";
 import { buildMaturation, type MaturationReport } from "./maturation";
 import { buildChannelMix, type ChannelMix } from "./channels";
 import {
@@ -58,6 +59,7 @@ import {
   getCohortMaturation,
   getCallTiming,
   getQualityCohort,
+  getLeadSourceCohort,
   getDuplicateCandidates,
   getChannelMix,
   getLeadArrivalHeatmap,
@@ -240,6 +242,14 @@ export interface DashboardData {
    * changes the outcome it predicts.
    */
   quality: QualityReport;
+  /**
+   * Which landing page and which form actually bring leads in.
+   *
+   * Read from `contacts.raw_attribution`, which we have stored since the first
+   * webhook — no new pipe. See `lead-sources.ts` for why the unattributed
+   * import is reported as coverage rather than ranked as a row.
+   */
+  leadSources: LeadSourceReport;
   /**
    * How long a month's leads take to become appointments and closes, and
    * whether the two most recent months are even comparable yet.
@@ -468,6 +478,7 @@ export async function loadDashboard(
     channelInput,
     callTimingInput,
     qualityCohort,
+    leadSourceCohort,
     forecastResult,
     duplicateCandidates,
   ] = await Promise.all([
@@ -557,6 +568,22 @@ export async function loadDashboard(
     show("lead_quality")
       ? getQualityCohort(client.id, range, tz, filter, platform).catch((err) => {
           console.error("[dashboard] quality cohort unavailable:", err);
+          return [];
+        })
+      : Promise.resolve([]),
+    /*
+     * Deliberately unfiltered by platform and by the paid-lead filter — see
+     * `getLeadSourceCohort`. This panel answers "where did our leads come
+     * from", and four leads in five on the live book carry no campaign id at
+     * all, so a paid filter would delete the answer rather than narrow it.
+     *
+     * Guarded like its neighbours: this reads `raw_attribution`, a jsonb column
+     * whose shape varies by how old the row is, so a parse surprise costs one
+     * panel rather than the page.
+     */
+    show("lead_sources")
+      ? getLeadSourceCohort(client.id, range).catch((err) => {
+          console.error("[dashboard] lead sources unavailable:", err);
           return [];
         })
       : Promise.resolve([]),
@@ -833,6 +860,8 @@ export async function loadDashboard(
    * Passing the range end would freeze an old cohort as though it were still
    * the day the range closed and withhold leads that converted months ago.
    */
+  const leadSources = buildLeadSources(leadSourceCohort);
+
   const quality = buildQuality(qualityCohort, {
     stage: "appointment_booked",
     asOf: new Date(),
@@ -959,6 +988,7 @@ export async function loadDashboard(
     budgetHistory,
     duplicates,
     quality,
+    leadSources,
     maturation,
     channels,
     channelSplitDefinable: channelInput.splitDefinable,
