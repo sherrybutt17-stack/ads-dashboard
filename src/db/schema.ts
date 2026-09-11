@@ -2543,8 +2543,8 @@ export const connectStash = pgTable("connect_stash", {
    *  is why reads re-check it against the expected client. */
   id: text("id").primaryKey(),
 
-  /** `"meta"` or `"google"`. Part of every read, so a Google stash id can never
-   *  be redeemed down the Meta path. */
+  /** `"meta"`, `"google"` or `"tiktok"`. Part of every read, so a stash id minted
+   *  by one provider can never be redeemed down another's path. */
   provider: text("provider").notNull(),
 
   clientId: uuid("client_id")
@@ -2562,6 +2562,16 @@ export const connectStash = pgTable("connect_stash", {
    * health check warns on it while there is still time to re-authorise.
    */
   tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+
+  /**
+   * Anything else the exchange returned that the picker needs.
+   *
+   * TikTok's token response carries an `advertiser_ids` array, and losing it
+   * would mean the picker could not cross-check what the grant actually
+   * covered. Deliberately shapeless: a column per provider-specific field is
+   * how one table for three providers turns back into three.
+   */
+  payload: jsonb("payload"),
 
   /** 15 minutes out. Pruned on read; not a background job, because a background
    *  job that stops running leaves live credentials behind and says nothing. */

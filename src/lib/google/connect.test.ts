@@ -70,11 +70,15 @@ beforeEach(() => {
 
 describe("the Google side of the shared stash", () => {
   it("stashes under the google provider, with no credential expiry", async () => {
-    // 🔴 Null is a statement, not an omission: Google refresh tokens are
-    // reusable and do not rotate, so there is no date for the health check to
-    // warn on. Meta's do expire, and pass one through.
+    /*
+     * No extras at all, and that is a statement rather than an omission: Google
+     * refresh tokens are reusable and do not rotate, so there is no expiry for
+     * the health check to warn on, and the accessible customers are re-queried
+     * at discovery rather than trusted from the exchange. Meta passes an expiry;
+     * TikTok passes a payload.
+     */
     await mod.stashGoogleConnection(CLIENT, "refresh-abc");
-    expect(putConnectStash).toHaveBeenCalledWith("google", CLIENT, "refresh-abc", null);
+    expect(putConnectStash).toHaveBeenCalledWith("google", CLIENT, "refresh-abc");
   });
 
   it("reads back under the google provider and renames token → refreshToken", async () => {

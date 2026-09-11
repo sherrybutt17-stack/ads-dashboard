@@ -13,6 +13,21 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
  * waits in between.
  */
 
+/**
+ * The stash is shared with the Meta and Google flows and tested against a real
+ * Postgres in `lib/connect-stash.test.ts`. What is left here is the adapter:
+ * which provider this module reaches for, and whether the advertiser ids
+ * survive the trip through a shapeless jsonb payload.
+ */
+const putConnectStash = vi.fn(async () => "stash-id");
+const readConnectStash = vi.fn();
+const dropConnectStash = vi.fn(async () => {});
+vi.mock("@/lib/connect-stash", () => ({
+  putConnectStash: (...args: unknown[]) => putConnectStash(...(args as [])),
+  readConnectStash: (...args: unknown[]) => readConnectStash(...(args as [])),
+  dropConnectStash: (...args: unknown[]) => dropConnectStash(...(args as [])),
+}));
+
 const listAdvertisers = vi.fn();
 const getAdvertisers = vi.fn();
 
@@ -32,6 +47,7 @@ const OTHER = "22222222-2222-2222-2222-222222222222";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  putConnectStash.mockResolvedValue("stash-id");
   vi.stubEnv("TIKTOK_APP_ID", "app-1");
   vi.stubEnv("TIKTOK_APP_SECRET", "secret-1");
   listAdvertisers.mockResolvedValue([
@@ -51,57 +67,66 @@ beforeEach(() => {
  * The stash
  * ------------------------------------------------------------------ */
 
-describe("the connection stash", () => {
-  it("round-trips the grant for the client it was minted for", async () => {
-    const id = await mod.stashTiktokConnection(CLIENT, "grant-abc", ["700"]);
-    expect(mod.readTiktokStash(id, CLIENT)).toEqual({
+describe("the TikTok side of the shared stash", () => {
+  it("stashes under the tiktok provider, carrying the advertiser ids", async () => {
+    await mod.stashTiktokConnection(CLIENT, "grant-abc", ["700", "701"]);
+    expect(putConnectStash).toHaveBeenCalledWith("tiktok", CLIENT, "grant-abc", {
+      payload: { advertiserIds: ["700", "701"] },
+    });
+  });
+
+  it("reads back under the tiktok provider, unpacking the payload", async () => {
+    readConnectStash.mockResolvedValue({
+      ok: true,
+      clientId: CLIENT,
+      token: "grant-abc",
+      tokenExpiresAt: null,
+      payload: { advertiserIds: ["700"] },
+    });
+    expect(await mod.readTiktokStash("stash-id", CLIENT)).toEqual({
       ok: true,
       clientId: CLIENT,
       accessToken: "grant-abc",
       advertiserIds: ["700"],
     });
+    expect(readConnectStash).toHaveBeenCalledWith("tiktok", "stash-id", CLIENT);
   });
 
-  it("🔴 refuses a stash minted for a different client", async () => {
+  it("🔴 checks the payload's shape instead of casting it", async () => {
     /*
-     * The stash id travels through a URL, and one TikTok grant reaches many
-     * advertisers. Without this an operator who can see two clients could take
-     * a stash minted while connecting one and attach that grant's advertisers —
-     * another tenant's spend — to the other.
+     * `payload` is jsonb and shapeless by design, so this adapter is the only
+     * place that knows what belongs in it. A cast would turn a malformed or
+     * legacy row into a crash much further downstream — in the picker, where it
+     * would read as TikTok having returned nothing.
      */
-    const id = await mod.stashTiktokConnection(CLIENT, "grant-abc", ["700"]);
-    expect(mod.readTiktokStash(id, OTHER)).toEqual({
+    for (const payload of [null, "nonsense", {}, { advertiserIds: "700" }, { advertiserIds: [1, "700"] }]) {
+      readConnectStash.mockResolvedValue({
+        ok: true,
+        clientId: CLIENT,
+        token: "grant-abc",
+        tokenExpiresAt: null,
+        payload,
+      });
+      const got = await mod.readTiktokStash("stash-id", CLIENT);
+      expect(got.ok).toBe(true);
+      // Never throws, and never yields a non-string id.
+      expect(got.ok && got.advertiserIds.every((v) => typeof v === "string")).toBe(true);
+    }
+  });
+
+  it("passes a refusal straight through rather than reshaping it", async () => {
+    readConnectStash.mockResolvedValue({ ok: false, reason: "wrong_client" });
+    expect(await mod.readTiktokStash("stash-id", OTHER)).toEqual({
       ok: false,
       reason: "wrong_client",
     });
   });
 
-  it("encrypts the grant rather than parking it in a Map in the clear", async () => {
-    const spy = vi.spyOn(await import("@/lib/crypto"), "encrypt");
-    await mod.stashTiktokConnection(CLIENT, "grant-xyz", []);
-    expect(spy).toHaveBeenCalledWith("grant-xyz");
-    spy.mockRestore();
-  });
-
-  it("reads an unknown id as expired rather than throwing", () => {
-    // On serverless a later request may land on another instance and find
-    // nothing. That has to read as "sign-in expired, try again", not a 500.
-    expect(mod.readTiktokStash("nope", CLIENT)).toEqual({
-      ok: false,
-      reason: "expired",
-    });
-  });
-
-  it("drops a stash once used", async () => {
-    const id = await mod.stashTiktokConnection(CLIENT, "grant-abc", []);
-    mod.dropTiktokStash(id);
-    expect(mod.readTiktokStash(id, CLIENT).ok).toBe(false);
+  it("drops only the tiktok stash of that id", async () => {
+    await mod.dropTiktokStash("stash-id");
+    expect(dropConnectStash).toHaveBeenCalledWith("tiktok", "stash-id");
   });
 });
-
-/* ------------------------------------------------------------------ *
- * Discovery
- * ------------------------------------------------------------------ */
 
 describe("discoverTiktokAdvertisers", () => {
   it("merges the list call with the detail call", async () => {

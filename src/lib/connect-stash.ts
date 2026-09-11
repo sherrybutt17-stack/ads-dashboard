@@ -41,7 +41,7 @@ import { encrypt, decrypt } from "@/lib/crypto";
  * exist in two copies that can drift apart.
  */
 
-export type ConnectProvider = "meta" | "google";
+export type ConnectProvider = "meta" | "google" | "tiktok";
 
 const STASH_TTL_MS = 15 * 60_000;
 
@@ -57,11 +57,20 @@ async function prune(): Promise<void> {
   await db.delete(connectStash).where(lte(connectStash.expiresAt, new Date()));
 }
 
+export interface ConnectStashExtras {
+  /** When the CREDENTIAL dies — null when it does not, or is not known. */
+  tokenExpiresAt?: Date | null;
+  /** Anything else the exchange returned that the picker needs — TikTok's
+   *  advertiser ids. Stored as jsonb; the provider adapter is what knows the
+   *  shape, and is where it must be checked on the way back. */
+  payload?: unknown;
+}
+
 export async function putConnectStash(
   provider: ConnectProvider,
   clientId: string,
   token: string,
-  tokenExpiresAt: Date | null = null,
+  extras: ConnectStashExtras = {},
 ): Promise<string> {
   await prune();
   const id = randomBytes(18).toString("base64url");
@@ -72,14 +81,21 @@ export async function putConnectStash(
     // Encrypted at rest, as every other stored credential is. A row in a
     // database is exactly where a plaintext token must never sit.
     tokenEncrypted: encrypt(token),
-    tokenExpiresAt,
+    tokenExpiresAt: extras.tokenExpiresAt ?? null,
+    payload: extras.payload ?? null,
     expiresAt: new Date(Date.now() + STASH_TTL_MS),
   });
   return id;
 }
 
 export type ConnectStashLookup =
-  | { ok: true; clientId: string; token: string; tokenExpiresAt: Date | null }
+  | {
+      ok: true;
+      clientId: string;
+      token: string;
+      tokenExpiresAt: Date | null;
+      payload: unknown;
+    }
   | { ok: false; reason: "expired" | "wrong_client" };
 
 /**
@@ -118,6 +134,7 @@ export async function readConnectStash(
     clientId: found.clientId,
     token: decrypt(found.tokenEncrypted),
     tokenExpiresAt: found.tokenExpiresAt,
+    payload: found.payload ?? null,
   };
 }
 

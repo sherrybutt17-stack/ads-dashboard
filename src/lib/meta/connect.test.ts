@@ -134,7 +134,9 @@ describe("discoverMetaAccounts", () => {
 describe("the Meta side of the shared stash", () => {
   it("stashes under the meta provider", async () => {
     await stashMetaConnection("client-a", "TOKEN", null);
-    expect(putConnectStash).toHaveBeenCalledWith("meta", "client-a", "TOKEN", null);
+    expect(putConnectStash).toHaveBeenCalledWith("meta", "client-a", "TOKEN", {
+      tokenExpiresAt: null,
+    });
   });
 
   it("🔴 carries the token expiry into the stash", async () => {
@@ -147,7 +149,9 @@ describe("the Meta side of the shared stash", () => {
      */
     const exp = new Date("2026-10-16T00:00:00Z");
     await stashMetaConnection("client-a", "T", exp);
-    expect(putConnectStash).toHaveBeenCalledWith("meta", "client-a", "T", exp);
+    expect(putConnectStash).toHaveBeenCalledWith("meta", "client-a", "T", {
+      tokenExpiresAt: exp,
+    });
   });
 
   it("reads back under the meta provider, keeping the expiry with the token", async () => {

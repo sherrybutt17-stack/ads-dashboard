@@ -434,6 +434,7 @@ CREATE TABLE connect_stash (
   client_id uuid NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   token_encrypted text NOT NULL,
   token_expires_at timestamptz,
+  payload jsonb,
   expires_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );

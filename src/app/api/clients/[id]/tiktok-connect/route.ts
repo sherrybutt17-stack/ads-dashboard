@@ -52,7 +52,7 @@ export async function GET(
   const stashId = req.nextUrl.searchParams.get("stash") ?? "";
 
   // Checked against THIS client — the stash id travels through a URL.
-  const found = readTiktokStash(stashId, id);
+  const found = await readTiktokStash(stashId, id);
   if (!found.ok) {
     return NextResponse.json({ error: stashError(found.reason) }, { status: 400 });
   }
@@ -108,7 +108,7 @@ export async function POST(
     return NextResponse.json({ error: "Invalid selection" }, { status: 400 });
   }
 
-  const found = readTiktokStash(parsed.data.stash, id);
+  const found = await readTiktokStash(parsed.data.stash, id);
   if (!found.ok) {
     return NextResponse.json({ error: stashError(found.reason) }, { status: 400 });
   }
@@ -168,7 +168,7 @@ export async function POST(
   }
 
   // The credential now lives, encrypted, on the accounts themselves.
-  if (attached.length > 0) dropTiktokStash(parsed.data.stash);
+  if (attached.length > 0) await dropTiktokStash(parsed.data.stash);
 
   await record({
     action: "tiktok.accounts_attached",

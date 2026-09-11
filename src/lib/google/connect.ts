@@ -26,8 +26,10 @@ export async function stashGoogleConnection(
   clientId: string,
   refreshToken: string,
 ): Promise<string> {
-  // No expiry: Google refresh tokens are reusable and do not rotate.
-  return await putConnectStash("google", clientId, refreshToken, null);
+  // No expiry and no extras: Google refresh tokens are reusable, do not rotate,
+  // and the accessible customers are re-queried at discovery rather than
+  // trusted from the exchange.
+  return await putConnectStash("google", clientId, refreshToken);
 }
 
 export async function readGoogleStash(

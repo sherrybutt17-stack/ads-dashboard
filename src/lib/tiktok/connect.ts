@@ -1,5 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { encrypt, decrypt } from "@/lib/crypto";
+import {
+  putConnectStash,
+  readConnectStash,
+  dropConnectStash,
+} from "@/lib/connect-stash";
 import { TiktokClient, type TiktokAdvertiser } from "./client";
 
 /**
@@ -12,83 +15,62 @@ import { TiktokClient, type TiktokAdvertiser } from "./client";
  * this dashboard. Consent and selection stay two steps, and the token waits here
  * in between.
  *
- * 🔴 **In-process, deliberately, with a short life.** Identical reasoning to
- * `lib/meta/connect.ts` and `lib/google/connect.ts`: parking a live ad-account
- * credential in a table for a flow somebody abandoned two minutes in leaves a
- * row nobody cleans up. If the pick is abandoned this evaporates with the
- * process, and starting again is one click.
- *
- * The honest cost: on serverless, a later request may land on another instance
- * and find nothing. That reads as "your sign-in expired, try again" — a
- * recoverable inconvenience, where the durable alternative's failure mode is a
- * leaked credential nobody knows exists.
+ * The stash itself lives in `lib/connect-stash.ts`, shared with the Meta and
+ * Google flows: see there for why it is a table rather than the in-process Map
+ * it started as, and why the tenant check must not exist in three copies.
  */
 
-interface Stash {
-  clientId: string;
-  tokenEncrypted: string;
-  /**
-   * The advertiser ids the exchange reported. Held only as a cross-check —
-   * discovery re-queries TikTok and that answer wins.
-   */
-  advertiserIds: string[];
-  expiresAt: number;
-}
-
-const STASH_TTL_MS = 15 * 60_000;
-const stash = new Map<string, Stash>();
-
-function prune(now = Date.now()) {
-  for (const [k, v] of stash) if (v.expiresAt <= now) stash.delete(k);
-}
+export type TiktokStashLookup =
+  | { ok: true; clientId: string; accessToken: string; advertiserIds: string[] }
+  | { ok: false; reason: "expired" | "wrong_client" };
 
 export async function stashTiktokConnection(
   clientId: string,
   accessToken: string,
   advertiserIds: string[],
 ): Promise<string> {
-  prune();
-  const id = randomBytes(18).toString("base64url");
-  stash.set(id, {
-    clientId,
-    // Encrypted even in memory: a heap dump or a serialised error should not
-    // print a live credential.
-    tokenEncrypted: encrypt(accessToken),
-    advertiserIds,
-    expiresAt: Date.now() + STASH_TTL_MS,
+  /*
+   * The advertiser ids ride along as the stash payload. They are a CROSS-CHECK
+   * and not the answer: discovery re-queries TikTok, and that result wins. A
+   * grant can be widened or narrowed between consent and the pick, and the list
+   * captured at exchange time would quietly be the stale one.
+   */
+  return await putConnectStash("tiktok", clientId, accessToken, {
+    payload: { advertiserIds },
   });
-  return id;
 }
 
-export type TiktokStashLookup =
-  | { ok: true; clientId: string; accessToken: string; advertiserIds: string[] }
-  | { ok: false; reason: "expired" | "wrong_client" };
-
 /**
- * Retrieve a stashed connection.
+ * The advertiser ids as they come back out of jsonb.
  *
- * `expectedClientId` is checked rather than trusted: the stash id travels
- * through a URL, and one minted for one client must not attach advertisers to
- * another.
+ * 🔴 Checked rather than cast. `payload` is shapeless by design, so the adapter
+ * is the only place that knows what should be in it — and a cast here would
+ * turn a malformed row into a crash much further downstream, in the picker,
+ * where it would read as TikTok returning nothing.
  */
-export function readTiktokStash(
+function advertiserIdsFrom(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") return [];
+  const ids = (payload as { advertiserIds?: unknown }).advertiserIds;
+  if (!Array.isArray(ids)) return [];
+  return ids.filter((v): v is string => typeof v === "string");
+}
+
+export async function readTiktokStash(
   id: string,
   expectedClientId: string,
-): TiktokStashLookup {
-  prune();
-  const found = stash.get(id);
-  if (!found) return { ok: false, reason: "expired" };
-  if (found.clientId !== expectedClientId) return { ok: false, reason: "wrong_client" };
+): Promise<TiktokStashLookup> {
+  const found = await readConnectStash("tiktok", id, expectedClientId);
+  if (!found.ok) return found;
   return {
     ok: true,
     clientId: found.clientId,
-    accessToken: decrypt(found.tokenEncrypted),
-    advertiserIds: found.advertiserIds,
+    accessToken: found.token,
+    advertiserIds: advertiserIdsFrom(found.payload),
   };
 }
 
-export function dropTiktokStash(id: string) {
-  stash.delete(id);
+export async function dropTiktokStash(id: string): Promise<void> {
+  await dropConnectStash("tiktok", id);
 }
 
 /* ------------------------------------------------------------------ *

@@ -35,7 +35,7 @@ export async function stashMetaConnection(
    * Dropped here, the connection would simply stop working two months after a
    * setup that looked perfect.
    */
-  return await putConnectStash("meta", clientId, accessToken, tokenExpiresAt);
+  return await putConnectStash("meta", clientId, accessToken, { tokenExpiresAt });
 }
 
 export async function readMetaStash(

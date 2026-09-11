@@ -1,8 +1,7 @@
 -- The half-finished connect flow, moved out of process memory.
 --
 -- The credential handed back by an OAuth callback was parked in a module-scope
--- Map while the operator chose which ad accounts to attach -- one Map for Meta,
--- one for Google. On Vercel the callback and the picker are different route
+-- Map while the operator chose which ad accounts to attach -- one Map per provider. On Vercel the callback and the picker are different route
 -- handlers: different serverless functions, each scaling to its own instances.
 -- The Map that was written was never the Map that got read, so BOTH self-serve
 -- flows reported "that sign-in has expired" on every single attempt, at any
@@ -25,6 +24,10 @@ CREATE TABLE IF NOT EXISTS "connect_stash" (
   -- When the CREDENTIAL dies, not when the stash does. Null for a Google
   -- refresh token and for a Meta token Facebook declared non-expiring.
   "token_expires_at" timestamp with time zone,
+  -- Anything else the exchange returned that the picker needs -- TikTok's
+  -- advertiser_ids array. Shapeless on purpose: a column per provider-specific
+  -- field is how one table for three providers turns back into three.
+  "payload" jsonb,
   "expires_at" timestamp with time zone NOT NULL,
   "created_at" timestamp with time zone NOT NULL DEFAULT now()
 );

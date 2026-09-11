@@ -61,12 +61,15 @@ describe("the connect stash", () => {
       clientId: CLIENT_A,
       token: "refresh-abc",
       tokenExpiresAt: null,
+      payload: null,
     });
   });
 
   it("carries a credential expiry through, for the providers that have one", async () => {
     const exp = new Date("2026-10-16T00:00:00.000Z");
-    const id = await mod.putConnectStash("meta", CLIENT_A, "TOKEN", exp);
+    const id = await mod.putConnectStash("meta", CLIENT_A, "TOKEN", {
+      tokenExpiresAt: exp,
+    });
     const found = await mod.readConnectStash("meta", id, CLIENT_A);
     expect(found.ok && found.tokenExpiresAt?.toISOString()).toBe(exp.toISOString());
   });
@@ -110,6 +113,26 @@ describe("the connect stash", () => {
     expect(await mod.readConnectStash("meta", id, CLIENT_A)).toMatchObject({
       token: "SECRET-TOKEN",
     });
+  });
+
+  it("carries a provider-specific payload through untouched", async () => {
+    /*
+     * TikTok's exchange hands back the advertiser ids the grant covers. They
+     * are a cross-check rather than the answer — discovery re-queries and wins —
+     * but losing them means the picker cannot tell that a grant was narrowed
+     * between consent and the pick.
+     */
+    const id = await mod.putConnectStash("tiktok", CLIENT_A, "grant", {
+      payload: { advertiserIds: ["700", "701"] },
+    });
+    const found = await mod.readConnectStash("tiktok", id, CLIENT_A);
+    expect(found.ok && found.payload).toEqual({ advertiserIds: ["700", "701"] });
+  });
+
+  it("reads a missing payload as null rather than undefined", async () => {
+    const id = await mod.putConnectStash("google", CLIENT_A, "refresh-abc");
+    const found = await mod.readConnectStash("google", id, CLIENT_A);
+    expect(found.ok && found.payload).toBeNull();
   });
 
   it("reports an unknown id as expired rather than throwing", async () => {
@@ -193,6 +216,7 @@ describe("the connect stash", () => {
       clientId: CLIENT_A,
       token: "refresh-across",
       tokenExpiresAt: null,
+      payload: null,
     });
   });
 });
