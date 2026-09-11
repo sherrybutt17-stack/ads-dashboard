@@ -109,9 +109,24 @@ export async function discoverGoogleAccounts(
         currency: info.currencyCode,
         timezone: info.timeZone,
       };
-    } catch {
-      // A manager account can refuse a plain `customer` query. Keep the id —
-      // it is still the route to the children below.
+    } catch (err) {
+      /*
+       * A manager account can legitimately refuse a plain `customer` query, so
+       * the id is kept — it is still the route to the children below.
+       *
+       * 🔴 But it is LOGGED now. This used to be a bare `catch {}`, and when
+       * every account failed the operator saw a list of bare ten-digit ids,
+       * "some parts of this account tree could not be read", and no way to
+       * find out why — not in the UI, not in the server logs, not anywhere.
+       * The two real causes need completely different actions: a developer
+       * token still at Test Account access, where every query fails until
+       * Basic is granted, versus one manager in the tree declining.
+       * Indistinguishable without this line.
+       */
+      console.error(
+        `[google-connect] customer ${customerId} details unreadable:`,
+        err,
+      );
       partial = true;
     }
     byId.set(customerId, self);
@@ -132,7 +147,10 @@ export async function discoverGoogleAccounts(
         const parent = byId.get(customerId);
         if (parent) byId.set(customerId, { ...parent, isManager: true });
       }
-    } catch {
+    } catch (err) {
+      // Same reasoning as above: swallowed so one suspended manager does not
+      // cost the other four, logged so "incomplete" is explicable.
+      console.error(`[google-connect] could not expand ${customerId}:`, err);
       partial = true;
     }
   }
