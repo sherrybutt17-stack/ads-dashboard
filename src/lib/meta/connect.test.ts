@@ -16,6 +16,21 @@ vi.mock("@/lib/crypto", () => ({
   decrypt: (s: string) => s.replace(/^enc:/, ""),
 }));
 
+/**
+ * The stash is shared with the Google flow and tested against a real Postgres
+ * in `lib/connect-stash.test.ts`. What is left here is the adapter: which
+ * provider this module reaches for, and whether the token EXPIRY survives the
+ * round trip — the one field Meta has and Google does not.
+ */
+const putConnectStash = vi.fn(async () => "stash-id");
+const readConnectStash = vi.fn();
+const dropConnectStash = vi.fn(async () => {});
+vi.mock("@/lib/connect-stash", () => ({
+  putConnectStash: (...args: unknown[]) => putConnectStash(...(args as [])),
+  readConnectStash: (...args: unknown[]) => readConnectStash(...(args as [])),
+  dropConnectStash: (...args: unknown[]) => dropConnectStash(...(args as [])),
+}));
+
 const { discoverMetaAccounts, stashMetaConnection, readMetaStash, dropMetaStash } =
   await import("./connect");
 
@@ -28,7 +43,11 @@ const account = (over: Partial<MetaAdAccountSummary> = {}): MetaAdAccountSummary
   ...over,
 });
 
-beforeEach(() => listAdAccounts.mockReset());
+beforeEach(() => {
+  listAdAccounts.mockReset();
+  vi.clearAllMocks();
+  putConnectStash.mockResolvedValue("stash-id");
+});
 
 describe("🔴 account discovery must not request permission-gated fields", () => {
   /*
@@ -112,29 +131,52 @@ describe("discoverMetaAccounts", () => {
   });
 });
 
-describe("🔴 stash is scoped to the client that opened it", () => {
-  it("refuses a stash minted for a different client", async () => {
-    const id = await stashMetaConnection("client-a", "TOKEN", null);
-    expect(readMetaStash(id, "client-b")).toEqual({ ok: false, reason: "wrong_client" });
-    // The rightful client still gets it — the guard is on identity, not use.
-    expect(readMetaStash(id, "client-a")).toMatchObject({ ok: true, accessToken: "TOKEN" });
+describe("the Meta side of the shared stash", () => {
+  it("stashes under the meta provider", async () => {
+    await stashMetaConnection("client-a", "TOKEN", null);
+    expect(putConnectStash).toHaveBeenCalledWith("meta", "client-a", "TOKEN", null);
   });
 
-  it("reports an unknown id as expired rather than throwing", async () => {
-    expect(readMetaStash("nope", "client-a")).toEqual({ ok: false, reason: "expired" });
-  });
-
-  it("forgets a dropped stash", async () => {
-    const id = await stashMetaConnection("c", "SECRET", null);
-    expect(readMetaStash(id, "c")).toMatchObject({ ok: true, accessToken: "SECRET" });
-    dropMetaStash(id);
-    expect(readMetaStash(id, "c")).toEqual({ ok: false, reason: "expired" });
-  });
-
-  it("carries the token expiry through the stash", async () => {
+  it("🔴 carries the token expiry into the stash", async () => {
+    /*
+     * A Meta user token lasts ~60 days. That date has to survive the picker to
+     * reach `meta_ad_accounts`, where the health check warns on it while there
+     * is still time to re-authorise. Dropped here, the connection works
+     * perfectly through setup and dies two months later with no warning — which
+     * is the exact failure this application was built to stop shipping.
+     */
     const exp = new Date("2026-10-16T00:00:00Z");
-    const id = await stashMetaConnection("c", "T", exp);
-    const got = readMetaStash(id, "c");
-    expect(got.ok && got.tokenExpiresAt?.toISOString()).toBe(exp.toISOString());
+    await stashMetaConnection("client-a", "T", exp);
+    expect(putConnectStash).toHaveBeenCalledWith("meta", "client-a", "T", exp);
+  });
+
+  it("reads back under the meta provider, keeping the expiry with the token", async () => {
+    const exp = new Date("2026-10-16T00:00:00Z");
+    readConnectStash.mockResolvedValue({
+      ok: true,
+      clientId: "client-a",
+      token: "TOKEN",
+      tokenExpiresAt: exp,
+    });
+    expect(await readMetaStash("stash-id", "client-a")).toEqual({
+      ok: true,
+      clientId: "client-a",
+      accessToken: "TOKEN",
+      tokenExpiresAt: exp,
+    });
+    expect(readConnectStash).toHaveBeenCalledWith("meta", "stash-id", "client-a");
+  });
+
+  it("passes a refusal straight through rather than reshaping it", async () => {
+    readConnectStash.mockResolvedValue({ ok: false, reason: "wrong_client" });
+    expect(await readMetaStash("stash-id", "client-b")).toEqual({
+      ok: false,
+      reason: "wrong_client",
+    });
+  });
+
+  it("drops only the meta stash of that id", async () => {
+    await dropMetaStash("stash-id");
+    expect(dropConnectStash).toHaveBeenCalledWith("meta", "stash-id");
   });
 });

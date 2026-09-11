@@ -15,6 +15,22 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
  *     valid and returns nothing for an account with obvious spend.
  */
 
+/**
+ * The stash is shared with the Meta flow and tested against a real Postgres in
+ * `lib/connect-stash.test.ts`. What is left here is the adapter: which provider
+ * this module reaches for, and whether the shape it hands back is the one the
+ * connect route reads. Both are wrong-by-one-word kinds of mistake that a type
+ * checker cannot see — `"meta"` for `"google"` reads another provider's stash.
+ */
+const putConnectStash = vi.fn(async () => "stash-id");
+const readConnectStash = vi.fn();
+const dropConnectStash = vi.fn(async () => {});
+vi.mock("@/lib/connect-stash", () => ({
+  putConnectStash: (...args: unknown[]) => putConnectStash(...(args as [])),
+  readConnectStash: (...args: unknown[]) => readConnectStash(...(args as [])),
+  dropConnectStash: (...args: unknown[]) => dropConnectStash(...(args as [])),
+}));
+
 const listAccessibleCustomers = vi.fn();
 const getCustomer = vi.fn();
 const listClientAccounts = vi.fn();
@@ -39,6 +55,7 @@ const OTHER = "22222222-2222-2222-2222-222222222222";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  putConnectStash.mockResolvedValue("stash-id");
   getCustomer.mockResolvedValue({
     descriptiveName: "Acme",
     currencyCode: "USD",
@@ -51,57 +68,43 @@ beforeEach(() => {
  * The stash
  * ------------------------------------------------------------------ */
 
-describe("the connection stash", () => {
-  it("round-trips the refresh token for the client it was minted for", async () => {
-    const id = await mod.stashGoogleConnection(CLIENT, "refresh-abc");
-    const found = mod.readGoogleStash(id, CLIENT);
-    expect(found).toEqual({ ok: true, clientId: CLIENT, refreshToken: "refresh-abc" });
+describe("the Google side of the shared stash", () => {
+  it("stashes under the google provider, with no credential expiry", async () => {
+    // 🔴 Null is a statement, not an omission: Google refresh tokens are
+    // reusable and do not rotate, so there is no date for the health check to
+    // warn on. Meta's do expire, and pass one through.
+    await mod.stashGoogleConnection(CLIENT, "refresh-abc");
+    expect(putConnectStash).toHaveBeenCalledWith("google", CLIENT, "refresh-abc", null);
   });
 
-  it("🔴 refuses a stash minted for a different client", async () => {
-    /*
-     * The stash id travels through a URL. Without this check, an operator who
-     * can reach two clients could take a stash minted while connecting one and
-     * attach that client's Google accounts — with their live credential — to
-     * the other.
-     */
-    const id = await mod.stashGoogleConnection(CLIENT, "refresh-abc");
-    expect(mod.readGoogleStash(id, OTHER)).toEqual({
+  it("reads back under the google provider and renames token → refreshToken", async () => {
+    readConnectStash.mockResolvedValue({
+      ok: true,
+      clientId: CLIENT,
+      token: "refresh-abc",
+      tokenExpiresAt: null,
+    });
+    expect(await mod.readGoogleStash("stash-id", CLIENT)).toEqual({
+      ok: true,
+      clientId: CLIENT,
+      refreshToken: "refresh-abc",
+    });
+    expect(readConnectStash).toHaveBeenCalledWith("google", "stash-id", CLIENT);
+  });
+
+  it("passes a refusal straight through rather than reshaping it", async () => {
+    // The route renders `wrong_client` and `expired` differently — one is
+    // "start again", the other is "you are on the wrong client's page".
+    readConnectStash.mockResolvedValue({ ok: false, reason: "wrong_client" });
+    expect(await mod.readGoogleStash("stash-id", OTHER)).toEqual({
       ok: false,
       reason: "wrong_client",
     });
   });
 
-  it("🔴 encrypts the token rather than parking it in a Map in the clear", async () => {
-    /*
-     * A heap dump, or an error that serialises this map, should not print a
-     * live credential. There is no way to look inside the module's private Map
-     * from here, and an assertion that pretends to is worse than none — so this
-     * asserts the WRITE path calls `encrypt`, and the round-trip test above
-     * covers that the value is still usable afterwards.
-     */
-    const { encrypt } = await import("@/lib/crypto");
-    const spy = vi.spyOn(await import("@/lib/crypto"), "encrypt");
-    void encrypt;
-
-    await mod.stashGoogleConnection(CLIENT, "refresh-xyz");
-    expect(spy).toHaveBeenCalledWith("refresh-xyz");
-    spy.mockRestore();
-  });
-
-  it("reports an unknown id as expired rather than throwing", async () => {
-    // On serverless a later request may land on a different instance and find
-    // nothing. That has to read as "sign-in expired, try again", not a 500.
-    expect(mod.readGoogleStash("no-such-stash", CLIENT)).toEqual({
-      ok: false,
-      reason: "expired",
-    });
-  });
-
-  it("drops a stash once it has been used", async () => {
-    const id = await mod.stashGoogleConnection(CLIENT, "refresh-abc");
-    mod.dropGoogleStash(id);
-    expect(mod.readGoogleStash(id, CLIENT).ok).toBe(false);
+  it("drops only the google stash of that id", async () => {
+    await mod.dropGoogleStash("stash-id");
+    expect(dropConnectStash).toHaveBeenCalledWith("google", "stash-id");
   });
 });
 

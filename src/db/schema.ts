@@ -2502,3 +2502,74 @@ export const tiktokDailyMetrics = pgTable(
 );
 
 export type TiktokDailyMetric = typeof tiktokDailyMetrics.$inferSelect;
+
+/**
+ * A half-finished connect flow: a credential waiting for someone to say which
+ * accounts it belongs to.
+ *
+ * ── Why this is a table and not a Map ─────────────────────────────────
+ *
+ * It WAS a `Map` in module scope — one per provider — with a comment arguing
+ * that an in-process stash cannot leak a credential into a row nobody cleans
+ * up. The argument is good and the consequence was fatal: on Vercel the OAuth
+ * callback and the account picker are different route handlers, so they are
+ * different serverless functions, and even one function scales to several
+ * instances. The Map written by the callback is never the Map read by the
+ * picker. Both self-serve flows — "Continue with Facebook" and Google's
+ * Model B — therefore reported "that sign-in has expired" on every attempt,
+ * which reads as a timeout the operator caused rather than as a design that
+ * cannot work on this platform.
+ *
+ * 🔴 So the original concern has to be answered by this table's RULES instead
+ * of by its absence:
+ *
+ *   - the credential is encrypted at rest, as it is everywhere else;
+ *   - `expires_at` is set 15 minutes out and every read prunes what has passed,
+ *     so an abandoned flow disappears without a sweeper to forget to schedule;
+ *   - the row is deleted the moment the accounts are attached;
+ *   - `ON DELETE CASCADE` takes it with the client.
+ *
+ * What remains is a row holding live access for at most fifteen minutes after
+ * someone consented. That is the same window the Map had, and it is now the
+ * same window in every instance.
+ *
+ * One table for both providers, deliberately. Two would be two prune rules, two
+ * expiry windows and two tenant checks that start identical and drift — and the
+ * tenant check here is the one that stops a stash minted for one client being
+ * used to attach another client's ad accounts.
+ */
+export const connectStash = pgTable("connect_stash", {
+  /** Random base64url, minted by `putConnectStash` and carried in a URL — which
+   *  is why reads re-check it against the expected client. */
+  id: text("id").primaryKey(),
+
+  /** `"meta"` or `"google"`. Part of every read, so a Google stash id can never
+   *  be redeemed down the Meta path. */
+  provider: text("provider").notNull(),
+
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id, { onDelete: "cascade" }),
+
+  tokenEncrypted: text("token_encrypted").notNull(),
+
+  /**
+   * When the CREDENTIAL dies — not when the stash does.
+   *
+   * Null for a Google refresh token, which does not expire, and for a Meta
+   * token Facebook declared non-expiring. Meta's user tokens last ~60 days and
+   * that date has to survive the picker to reach `meta_ad_accounts`, where the
+   * health check warns on it while there is still time to re-authorise.
+   */
+  tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+
+  /** 15 minutes out. Pruned on read; not a background job, because a background
+   *  job that stops running leaves live credentials behind and says nothing. */
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type ConnectStash = typeof connectStash.$inferSelect;

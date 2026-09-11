@@ -428,6 +428,16 @@ CREATE TABLE google_ad_accounts (
  * overwrites the client's display currency or bucketing timezone, so nothing
  * here needs to be nominated as the one that defines them.
  */
+CREATE TABLE connect_stash (
+  id text PRIMARY KEY,
+  provider text NOT NULL,
+  client_id uuid NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  token_encrypted text NOT NULL,
+  token_expires_at timestamptz,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE tiktok_daily_metrics (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id uuid NOT NULL,

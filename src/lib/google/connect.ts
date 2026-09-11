@@ -1,5 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { encrypt, decrypt } from "@/lib/crypto";
+import {
+  putConnectStash,
+  readConnectStash,
+  dropConnectStash,
+} from "@/lib/connect-stash";
 import { GoogleAdsClient, type GoogleAccountNode } from "./client";
 
 /**
@@ -7,81 +10,37 @@ import { GoogleAdsClient, type GoogleAccountNode } from "./client";
  *
  * Authorizing with a Google account that can see forty customers must not
  * silently attach forty customers — which is the whole reason this step exists
- * rather than the callback wiring things up directly. The refresh token is held
- * here, encrypted, while the operator picks.
+ * rather than the callback wiring things up directly. The refresh token waits,
+ * encrypted, while the operator picks.
  *
- * 🔴 **In-process, deliberately, with a short life.** A refresh token is a
- * long-lived credential; parking it in a database table for an unfinished flow
- * means a row that nobody ever cleans up, holding live access to a client's ad
- * account, for a decision that was abandoned two minutes after it started. If
- * the pick is abandoned the token evaporates with the process — and starting
- * again is one click.
- *
- * The cost is honest: on a serverless platform a later request may land on a
- * different instance and find nothing. That reads as "your sign-in expired,
- * please try again", which is a recoverable inconvenience, where the durable
- * alternative's failure mode is a leaked credential nobody knows exists.
+ * The stash itself lives in `lib/connect-stash.ts`, shared with the Meta flow:
+ * see there for why it is a table rather than the in-process Map it started as,
+ * and why the tenant check must not exist in two copies.
  */
-
-interface Stash {
-  clientId: string;
-  refreshTokenEncrypted: string;
-  expiresAt: number;
-}
-
-const STASH_TTL_MS = 15 * 60_000;
-const stash = new Map<string, Stash>();
-
-function prune(now = Date.now()) {
-  for (const [k, v] of stash) if (v.expiresAt <= now) stash.delete(k);
-}
-
-export async function stashGoogleConnection(
-  clientId: string,
-  refreshToken: string,
-): Promise<string> {
-  prune();
-  const id = randomBytes(18).toString("base64url");
-  stash.set(id, {
-    clientId,
-    // Encrypted even in memory: a heap dump or an error serialising this map
-    // should not print a live credential.
-    refreshTokenEncrypted: encrypt(refreshToken),
-    expiresAt: Date.now() + STASH_TTL_MS,
-  });
-  return id;
-}
 
 export type StashLookup =
   | { ok: true; clientId: string; refreshToken: string }
   | { ok: false; reason: "expired" | "wrong_client" };
 
-/**
- * Retrieve a stashed connection.
- *
- * `expectedClientId` is checked rather than trusted from the caller: the stash
- * id travels through a URL, and a stash minted for one client must not be
- * usable to attach accounts to another.
- */
-export function readGoogleStash(
-  id: string,
-  expectedClientId: string,
-): StashLookup {
-  prune();
-  const found = stash.get(id);
-  if (!found) return { ok: false, reason: "expired" };
-  if (found.clientId !== expectedClientId) {
-    return { ok: false, reason: "wrong_client" };
-  }
-  return {
-    ok: true,
-    clientId: found.clientId,
-    refreshToken: decrypt(found.refreshTokenEncrypted),
-  };
+export async function stashGoogleConnection(
+  clientId: string,
+  refreshToken: string,
+): Promise<string> {
+  // No expiry: Google refresh tokens are reusable and do not rotate.
+  return await putConnectStash("google", clientId, refreshToken, null);
 }
 
-export function dropGoogleStash(id: string) {
-  stash.delete(id);
+export async function readGoogleStash(
+  id: string,
+  expectedClientId: string,
+): Promise<StashLookup> {
+  const found = await readConnectStash("google", id, expectedClientId);
+  if (!found.ok) return found;
+  return { ok: true, clientId: found.clientId, refreshToken: found.token };
+}
+
+export async function dropGoogleStash(id: string): Promise<void> {
+  await dropConnectStash("google", id);
 }
 
 /* ------------------------------------------------------------------ *

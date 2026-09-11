@@ -1,5 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { encrypt, decrypt } from "@/lib/crypto";
+import {
+  putConnectStash,
+  readConnectStash,
+  dropConnectStash,
+} from "@/lib/connect-stash";
 import { MetaClient, type MetaAdAccountSummary } from "./client";
 
 /**
@@ -11,76 +14,46 @@ import { MetaClient, type MetaAdAccountSummary } from "./client";
  * tenant's spend on this dashboard — so consent and selection are two steps, and
  * the token waits here in between.
  *
- * 🔴 **In-process, deliberately, with a short life.** Parking a live ad-account
- * credential in a table for a flow somebody abandoned two minutes in leaves a
- * row nobody cleans up. If the pick is abandoned this evaporates with the
- * process, and starting again is one click.
- *
- * The honest cost: on serverless, a later request may land on another instance
- * and find nothing. That reads as "your sign-in expired, try again" — a
- * recoverable inconvenience, where the durable alternative's failure mode is a
- * leaked credential nobody knows exists. Mirrors `lib/google/connect.ts`.
+ * The stash itself lives in `lib/connect-stash.ts`, shared with the Google
+ * flow: see there for why it is a table rather than the in-process Map it
+ * started as, and why the tenant check must not exist in two copies.
  */
 
-interface Stash {
-  clientId: string;
-  tokenEncrypted: string;
-  /** Token expiry, not stash expiry. Null when the token does not expire. */
-  tokenExpiresAt: Date | null;
-  expiresAt: number;
-}
-
-const STASH_TTL_MS = 15 * 60_000;
-const stash = new Map<string, Stash>();
-
-function prune(now = Date.now()) {
-  for (const [k, v] of stash) if (v.expiresAt <= now) stash.delete(k);
-}
+export type MetaStashLookup =
+  | { ok: true; clientId: string; accessToken: string; tokenExpiresAt: Date | null }
+  | { ok: false; reason: "expired" | "wrong_client" };
 
 export async function stashMetaConnection(
   clientId: string,
   accessToken: string,
   tokenExpiresAt: Date | null,
 ): Promise<string> {
-  prune();
-  const id = randomBytes(18).toString("base64url");
-  stash.set(id, {
-    clientId,
-    // Encrypted even in memory: a heap dump or a serialised error should not
-    // print a live credential.
-    tokenEncrypted: encrypt(accessToken),
-    tokenExpiresAt,
-    expiresAt: Date.now() + STASH_TTL_MS,
-  });
-  return id;
+  /*
+   * 🔴 The expiry travels WITH the token. A Meta user token lasts ~60 days,
+   * and that date has to survive the picker to reach `meta_ad_accounts`, where
+   * the health check warns on it while there is still time to re-authorise.
+   * Dropped here, the connection would simply stop working two months after a
+   * setup that looked perfect.
+   */
+  return await putConnectStash("meta", clientId, accessToken, tokenExpiresAt);
 }
 
-export type MetaStashLookup =
-  | { ok: true; clientId: string; accessToken: string; tokenExpiresAt: Date | null }
-  | { ok: false; reason: "expired" | "wrong_client" };
-
-/**
- * Retrieve a stashed connection.
- *
- * `expectedClientId` is checked rather than trusted: the stash id travels
- * through a URL, and one minted for one client must not attach accounts to
- * another.
- */
-export function readMetaStash(id: string, expectedClientId: string): MetaStashLookup {
-  prune();
-  const found = stash.get(id);
-  if (!found) return { ok: false, reason: "expired" };
-  if (found.clientId !== expectedClientId) return { ok: false, reason: "wrong_client" };
+export async function readMetaStash(
+  id: string,
+  expectedClientId: string,
+): Promise<MetaStashLookup> {
+  const found = await readConnectStash("meta", id, expectedClientId);
+  if (!found.ok) return found;
   return {
     ok: true,
     clientId: found.clientId,
-    accessToken: decrypt(found.tokenEncrypted),
+    accessToken: found.token,
     tokenExpiresAt: found.tokenExpiresAt,
   };
 }
 
-export function dropMetaStash(id: string) {
-  stash.delete(id);
+export async function dropMetaStash(id: string): Promise<void> {
+  await dropConnectStash("meta", id);
 }
 
 /* ------------------------------------------------------------------ *

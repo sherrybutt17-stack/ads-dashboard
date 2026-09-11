@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySessionToken, SESSION_COOKIE } from "@/lib/session";
-import { clientApiCarveOut } from "@/lib/proxy-rules";
+import { clientApiCarveOut, canonicalHostRedirect } from "@/lib/proxy-rules";
+import { appBaseUrl } from "@/lib/app-url";
 
 /**
  * Auth + authorization gate.
@@ -147,6 +148,21 @@ function to(req: NextRequest, pathname: string) {
 
 export default async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  /*
+   * One address, before anything else looks at a cookie.
+   *
+   * A session set on the `*.vercel.app` name does not exist on the custom
+   * domain, so an OAuth flow started on one and returned to the other dies at
+   * the session check below with `unauthorized` — see `canonicalHostRedirect`
+   * for why this is narrow, and why `/api/` and previews are exempt.
+   */
+  const canonical = canonicalHostRedirect({
+    url: req.url,
+    canonicalOrigin: appBaseUrl(),
+    isPreview: process.env.VERCEL_ENV === "preview",
+  });
+  if (canonical) return NextResponse.redirect(canonical, 308);
 
   if (isPublicPath(pathname)) {
     return NextResponse.next();

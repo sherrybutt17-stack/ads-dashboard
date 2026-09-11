@@ -108,6 +108,15 @@ sequence:
   `.last_pacing_alert_status`, the suppression state for pacing alerts (§5e).
   Both NULL means "never alerted", which correctly reads as nothing to
   suppress.
+- **`0028_connect_stash.sql`** — the `connect_stash` table, which holds the
+  credential between "they signed in" and "these accounts are theirs" for both
+  self-serve connect flows. 🔴 **Apply this BEFORE deploying the code that
+  reads it.** Deployed the other way round, both *Continue with Facebook* and
+  Google's client sign-in fail on a missing table — a 500 where the old code
+  merely said "expired". It replaces a per-provider in-process `Map` that could
+  never work on Vercel: the OAuth callback and the account picker are different
+  serverless functions, so the Map written by one was never the Map read by the
+  other, and both flows reported "that sign-in has expired" on every attempt.
 
 The ordered three are guarded and safe to re-run, deliberately with no wrapping
 transaction: a half-applied migration you can simply run again is worth more
@@ -147,6 +156,40 @@ Verification to serve ad accounts you do not manage.
 **If a client's ad account is in a different Business Manager**, you cannot
 reach it with your system user token. Enter a per-client token override in the
 setup wizard (step 3) instead.
+
+### "Continue with Facebook" — extra app settings
+
+The wizard's **Continue with Facebook** button (step 3) sends the browser to
+Meta's OAuth dialog. That dialog refuses to render unless the app itself is
+told which domain is allowed to receive the callback — the failure is a Meta
+page reading *"Can't load URL: The domain of this URL isn't included in the
+app's domains."* Nothing in this repo can cause or fix it; it is app config.
+
+In <https://developers.facebook.com/apps> → your app:
+
+1. **App settings → Basic**
+   - **App Domains:** `dash.growthguild.us` (host only, no scheme, no path)
+   - **+ Add Platform → Website → Site URL:** `https://dash.growthguild.us/`
+   - Save changes.
+2. **Products → + Add Product → Facebook Login → Settings**
+   - **Client OAuth Login:** Yes
+   - **Web OAuth Login:** Yes
+   - **Valid OAuth Redirect URIs** — exactly, one per line:
+     - `https://dash.growthguild.us/api/oauth/meta/callback`
+     - `http://localhost:3000/api/oauth/meta/callback` (for local dev)
+   - Save changes.
+
+The redirect URI the app sends is always `{base}/api/oauth/meta/callback`,
+where `{base}` is `NEXT_PUBLIC_APP_URL` if set, otherwise the Vercel production
+domain (see `src/lib/app-url.ts`). 🔴 So a `NEXT_PUBLIC_APP_URL` left at
+`http://localhost:3000` in Vercel's env produces this same Meta error on the
+deployed site, with the app settings perfectly correct. Check that variable
+first.
+
+**While the app is in Development mode**, only Facebook users holding a role on
+it (admin / developer / tester) can complete the flow — everyone else gets an
+error even with the domains set. `ads_read` for arbitrary users needs App
+Review; see above.
 
 > ⚠️ **Pin the API version.** Expired Marketing API versions do **not** error —
 > Meta silently falls back to an older one, changing behaviour with no signal.
@@ -241,7 +284,9 @@ and apply for Basic in parallel with shipping rather than ahead of it.
    parallel.
 9. **Submit OAuth verification:** a written justification plus a demo video
    showing your branding, the full consent flow, the exact scopes, and the
-   client ID visible in the address bar. Allow up to 10 days.
+   client ID visible in the address bar. Allow up to 10 days. The justification
+   text, the video shot list and a pre-submission checklist are written out in
+   **`GOOGLE-VERIFICATION.md`**.
 
 > **No CASA.** The annual third-party security assessment applies to
 > *restricted* scopes. `adwords` is *sensitive* (reclassified October 2020), so
@@ -567,7 +612,7 @@ the **source URL** and the page number into every printed page whenever its
 "Headers and footers" checkbox is ticked — which is the default, and which is
 deliberately unreachable from CSS and JavaScript. So the first report a client
 forwards to their board carries
-`ads-dashboard-shaheer4.vercel.app/c/<slug>/report` down the side of it. A
+`dash.growthguild.us/c/<slug>/report` down the side of it. A
 "please untick that box" instruction is not a fix; it will not survive one real
 client. Rendering server-side removes the chrome because there is no browser
 window and no print dialog.

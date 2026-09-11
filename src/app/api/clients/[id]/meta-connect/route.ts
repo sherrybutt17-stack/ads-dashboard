@@ -51,7 +51,7 @@ export async function GET(
   const stashId = req.nextUrl.searchParams.get("stash") ?? "";
 
   // Checked against THIS client — the stash id travels through a URL.
-  const found = readMetaStash(stashId, id);
+  const found = await readMetaStash(stashId, id);
   if (!found.ok) {
     return NextResponse.json({ error: stashError(found.reason) }, { status: 400 });
   }
@@ -94,7 +94,7 @@ export async function POST(
     return NextResponse.json({ error: "Invalid selection" }, { status: 400 });
   }
 
-  const found = readMetaStash(parsed.data.stash, id);
+  const found = await readMetaStash(parsed.data.stash, id);
   if (!found.ok) {
     return NextResponse.json({ error: stashError(found.reason) }, { status: 400 });
   }
@@ -138,7 +138,7 @@ export async function POST(
   }
 
   // The credential now lives, encrypted, on the accounts themselves.
-  if (attached.length > 0) dropMetaStash(parsed.data.stash);
+  if (attached.length > 0) await dropMetaStash(parsed.data.stash);
 
   await record({
     action: "meta.accounts_attached",

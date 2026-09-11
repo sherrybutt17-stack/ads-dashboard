@@ -51,7 +51,7 @@ export async function GET(
 
   // Checked against THIS client — the stash id travels through a URL, and one
   // minted for another client must not be usable here.
-  const found = readGoogleStash(stashId, id);
+  const found = await readGoogleStash(stashId, id);
   if (!found.ok) {
     return NextResponse.json({ error: stashError(found.reason) }, { status: 400 });
   }
@@ -98,7 +98,7 @@ export async function POST(
     return NextResponse.json({ error: "Invalid selection" }, { status: 400 });
   }
 
-  const found = readGoogleStash(parsed.data.stash, id);
+  const found = await readGoogleStash(parsed.data.stash, id);
   if (!found.ok) {
     return NextResponse.json({ error: stashError(found.reason) }, { status: 400 });
   }
@@ -169,7 +169,7 @@ export async function POST(
   }
 
   // The credential now lives, encrypted, on the accounts themselves.
-  if (attached.length > 0) dropGoogleStash(parsed.data.stash);
+  if (attached.length > 0) await dropGoogleStash(parsed.data.stash);
 
   await record({
     action: "google.accounts_attached",
