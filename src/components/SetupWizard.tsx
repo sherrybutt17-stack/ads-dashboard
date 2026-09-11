@@ -341,6 +341,50 @@ interface DiscoveredMetaAccount {
  * hunting for an account they know exists needs to see it greyed out with a
  * reason, or they conclude the sign-in failed and go round again.
  */
+/**
+ * A stash that cannot be read, and the way out of it.
+ *
+ * 🔴 Without the link, this screen is a dead end. The step renders the connect
+ * button only while there is NO stash in the URL — reasonably, since a stash
+ * means "you are mid-flow, here is the picker". But when the stash cannot be
+ * read, the picker has nothing to show, so the operator gets a red sentence,
+ * no button, and no indication that reloading the page without the query
+ * parameter is what unsticks it. Every one of the three platforms had its own
+ * copy of that dead end.
+ *
+ * The message itself comes from the server, which knows whether this was an
+ * expiry or a stash minted for a different client — two situations that need
+ * different actions and must not be flattened into one string here.
+ */
+function StashDeadEnd({
+  error,
+  authorizeHref,
+  label,
+}: {
+  error: string;
+  authorizeHref: string;
+  label: string;
+}) {
+  return (
+    <div className="mb-4 flex flex-col items-start gap-2.5">
+      <p className="text-[12.5px]" style={{ color: "var(--status-critical)" }}>
+        {error}
+      </p>
+      <a
+        href={authorizeHref}
+        className="inline-flex items-center rounded-[9px] border px-3.5 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90"
+        style={{
+          background: "var(--surface-2)",
+          color: "var(--text-primary)",
+          borderColor: "var(--border)",
+        }}
+      >
+        {label}
+      </a>
+    </div>
+  );
+}
+
 function MetaAccountPicker({
   clientId,
   stash,
@@ -415,12 +459,11 @@ function MetaAccountPicker({
 
   if (error && !accounts) {
     return (
-      <p
-        className="mb-4 text-[12.5px]"
-        style={{ color: "var(--status-critical)" }}
-      >
-        {error}
-      </p>
+      <StashDeadEnd
+        error={error}
+        authorizeHref={`/api/oauth/meta/authorize?clientId=${encodeURIComponent(clientId)}`}
+        label="Sign in with Facebook again"
+      />
     );
   }
   if (!accounts) {
@@ -1536,12 +1579,11 @@ function GoogleAccountPicker({
 
   if (error && !accounts) {
     return (
-      <p
-        className="mb-4 text-[12.5px]"
-        style={{ color: "var(--status-critical)" }}
-      >
-        {error}
-      </p>
+      <StashDeadEnd
+        error={error}
+        authorizeHref={`/api/oauth/google/authorize?clientId=${encodeURIComponent(clientId)}`}
+        label="Sign in with Google again"
+      />
     );
   }
   if (!accounts) {
@@ -2103,12 +2145,11 @@ function TiktokAccountPicker({
 
   if (error && !advertisers) {
     return (
-      <p
-        className="mb-4 text-[12.5px]"
-        style={{ color: "var(--status-critical)" }}
-      >
-        {error}
-      </p>
+      <StashDeadEnd
+        error={error}
+        authorizeHref={`/api/oauth/tiktok/authorize?clientId=${encodeURIComponent(clientId)}`}
+        label="Authorize TikTok again"
+      />
     );
   }
   if (!advertisers) {
