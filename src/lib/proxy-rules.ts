@@ -128,7 +128,15 @@ export function canonicalHostRedirect(opts: {
     return null;
   }
 
+  /*
+   * Only navigations move. `/api/` is machine traffic (above), and `/_next/` is
+   * the page's own chunks and data: a page that has already been served from
+   * the platform host will ask for those before its own redirect has taken
+   * effect, and bouncing an in-flight chunk to another origin turns a cosmetic
+   * problem into a half-loaded page.
+   */
   if (req.pathname.startsWith("/api/")) return null;
+  if (req.pathname.startsWith("/_next/")) return null;
 
   const isVercelAlias = (host: string) =>
     host === "vercel.app" || host.endsWith(".vercel.app");

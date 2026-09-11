@@ -55,6 +55,18 @@ describe("canonicalHostRedirect", () => {
     ).toBeNull();
   });
 
+  it("leaves the page's own chunks and data alone", () => {
+    // A page served from the platform host requests these before its own
+    // redirect has taken effect. Bouncing an in-flight chunk to another origin
+    // turns a cosmetic problem into a half-loaded page.
+    expect(
+      redirect("https://ads-dashboard-shaheer4.vercel.app/_next/static/chunks/main.js"),
+    ).toBeNull();
+    expect(
+      redirect("https://ads-dashboard-shaheer4.vercel.app/_next/data/build/c/acme.json"),
+    ).toBeNull();
+  });
+
   it("🔴 never redirects a preview deployment", () => {
     // A preview's only address IS a vercel.app name. Bouncing it to production
     // would make previews untestable — a slower failure than the one fixed.
