@@ -66,12 +66,46 @@ export function metaRedirectUri(): string {
   return `${base}/api/oauth/meta/callback`;
 }
 
+/**
+ * The configuration id for **Facebook Login for Business**, when the app uses it.
+ *
+ * 🔴 Two products, two mutually exclusive dialogs.
+ *
+ * Classic Facebook Login takes `scope`. Facebook Login for Business — which is
+ * what a Business-type app gets, and what this app is configured with — takes a
+ * `config_id` naming a permission set built in the app dashboard, and does NOT
+ * accept `scope`. Meta's own documentation is blunt about the consequence:
+ * invoke the wrong one and "the login dialog might fail to load".
+ *
+ * It fails in the least helpful way possible. The dialog reports "Can't load
+ * URL: the domain of this URL isn't included in the app's domains", which sends
+ * you to check App Domains — a field that is already correct, and that you will
+ * then re-enter, re-save and re-verify several times before doubting the
+ * message. That cost an afternoon.
+ *
+ * Unset means the classic flow, unchanged, so nothing breaks for an app that
+ * never moved to Login for Business.
+ */
+function metaLoginConfigId(): string | null {
+  const v = process.env.META_LOGIN_CONFIG_ID?.trim();
+  return v ? v : null;
+}
+
 export function buildMetaAuthorizeUrl(state: string): string {
   const url = new URL(`${DIALOG}/${apiVersion()}/dialog/oauth`);
   url.searchParams.set("client_id", process.env.META_APP_ID ?? "");
   url.searchParams.set("redirect_uri", metaRedirectUri());
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", META_SCOPE);
+
+  const configId = metaLoginConfigId();
+  if (configId) {
+    // Login for Business: the configuration carries the permissions, and
+    // sending `scope` alongside it is what breaks the dialog.
+    url.searchParams.set("config_id", configId);
+  } else {
+    url.searchParams.set("scope", META_SCOPE);
+  }
+
   url.searchParams.set("state", state);
   return url.toString();
 }

@@ -186,3 +186,51 @@ describe("🔴 tokenExpiryState — the silent-death guard", () => {
     }
   });
 });
+
+describe("🔴 Facebook Login for Business vs classic Facebook Login", () => {
+  /*
+   * Two products, two mutually exclusive dialogs. Classic Login takes `scope`;
+   * Login for Business takes a `config_id` naming a permission set and does not
+   * accept `scope` at all. Meta's docs say the dialog "might fail to load" if
+   * you mix them — and what it actually reports is "Can't load URL: the domain
+   * of this URL isn't included in the app's domains", which points at a field
+   * that is already correct. That misdirection cost an afternoon.
+   */
+  const state = "state-123";
+
+  it("sends scope, and no config_id, when no configuration is set", () => {
+    vi.stubEnv("META_APP_ID", "111");
+    vi.stubEnv("META_LOGIN_CONFIG_ID", "");
+    const url = new URL(buildMetaAuthorizeUrl(state));
+    expect(url.searchParams.get("scope")).toBe("ads_read");
+    expect(url.searchParams.get("config_id")).toBeNull();
+  });
+
+  it("sends config_id, and NOT scope, when a configuration is set", () => {
+    vi.stubEnv("META_APP_ID", "111");
+    vi.stubEnv("META_LOGIN_CONFIG_ID", "cfg-999");
+    const url = new URL(buildMetaAuthorizeUrl(state));
+    expect(url.searchParams.get("config_id")).toBe("cfg-999");
+    // 🔴 The assertion that matters: sending both is what breaks the dialog.
+    expect(url.searchParams.get("scope")).toBeNull();
+  });
+
+  it("treats a whitespace-only configuration id as unset", () => {
+    vi.stubEnv("META_APP_ID", "111");
+    vi.stubEnv("META_LOGIN_CONFIG_ID", "   ");
+    const url = new URL(buildMetaAuthorizeUrl(state));
+    expect(url.searchParams.get("scope")).toBe("ads_read");
+    expect(url.searchParams.get("config_id")).toBeNull();
+  });
+
+  it("carries the state and redirect either way", () => {
+    for (const cfg of ["", "cfg-999"]) {
+      vi.stubEnv("META_APP_ID", "111");
+      vi.stubEnv("META_LOGIN_CONFIG_ID", cfg);
+      const url = new URL(buildMetaAuthorizeUrl(state));
+      expect(url.searchParams.get("state")).toBe(state);
+      expect(url.searchParams.get("response_type")).toBe("code");
+      expect(url.searchParams.get("redirect_uri")).toContain("/api/oauth/meta/callback");
+    }
+  });
+});

@@ -76,11 +76,12 @@ async function main() {
   );
   console.log(`${ids.length} accessible: ${ids.join(", ")}\n`);
 
-  // 2 — the call that fails, with each header the app tries.
-  const target = ids[0];
-  const candidates = ["", target, ...ids.filter((i) => i !== target)];
-
-  for (const login of candidates) {
+  // 2 — every account, against every header, so one run answers it all.
+  for (const target of ids) {
+    console.log(`\n──── customer ${target} ────`);
+    const candidates = ["", target, ...ids.filter((i) => i !== target)];
+    let solved = false;
+    for (const login of candidates) {
     const res = await fetch(
       `${HOST}/${VERSION}/customers/${target}/googleAds:searchStream`,
       {
@@ -96,15 +97,25 @@ async function main() {
         }),
       },
     );
-    const body = await res.text();
-    console.log(`customer ${target} · login-customer-id=${login || "(none)"} → ${res.status}`);
-    console.log(`  ${body.replace(/\s+/g, " ").slice(0, 400)}`);
-    if (res.ok) {
-      console.log("\n✅ That header works. This is the fix.");
-      return;
+      const body = await res.text();
+      const code =
+        /"(?:authorizationError|authenticationError|internalError|quotaError)"\s*:\s*"([A-Z_]+)"/.exec(
+          body,
+        )?.[1] ??
+        /"message"\s*:\s*"([^"]{0,140})"/.exec(body)?.[1];
+      console.log(
+        `  login-customer-id=${(login || "(none)").padEnd(12)} → ${res.status} ${
+          res.ok ? "✅ WORKS" : (code ?? body.replace(/\s+/g, " ").slice(0, 120))
+        }`,
+      );
+      if (res.ok) {
+        console.log(`  ✅ ${target} is readable through ${login || "no manager"}`);
+        solved = true;
+        break;
+      }
     }
+    if (!solved) console.log(`  ❌ ${target} unreadable through any header`);
   }
-  console.log("\n❌ Every header refused. The error text above is the real cause.");
 }
 
 main().catch((err) => {

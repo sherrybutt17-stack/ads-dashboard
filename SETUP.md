@@ -157,6 +157,30 @@ Verification to serve ad accounts you do not manage.
 reach it with your system user token. Enter a per-client token override in the
 setup wizard (step 3) instead.
 
+### 🔴 If the app uses "Facebook Login for Business"
+
+Check the app's **Use cases** in the Meta dashboard. If it says *Facebook Login
+for Business* rather than plain *Facebook Login*, the two products take
+different — mutually exclusive — dialog parameters:
+
+| Product | Dialog parameter |
+|---|---|
+| Facebook Login | `scope=ads_read` |
+| **Facebook Login for Business** | `config_id=<configuration id>`, and **no** `scope` |
+
+Set **`META_LOGIN_CONFIG_ID`** and the app sends the right one. Unset, it sends
+`scope`, which is correct for the classic product.
+
+To get the id: app dashboard → **Use cases → Facebook Login for Business →
+Customise → Configurations → Create configuration**, choose **`ads_read`** as
+the permission, save, and copy the configuration ID.
+
+> ⚠️ **The failure is actively misleading.** Invoking the Login-for-Business
+> dialog with `scope` reports *"Can't load URL: The domain of this URL isn't
+> included in the app's domains"* — pointing at a field that is already
+> correct. Expect to re-enter, re-save and re-verify App Domains several times
+> before doubting the message. Check the use case FIRST.
+
 ### "Continue with Facebook" — extra app settings
 
 The wizard's **Continue with Facebook** button (step 3) sends the browser to
