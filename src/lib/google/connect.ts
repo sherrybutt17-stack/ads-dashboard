@@ -101,34 +101,69 @@ export async function discoverGoogleAccounts(
       loginCustomerId: "",
     };
 
-    try {
-      const info = await new GoogleAdsClient(refreshToken, "").getCustomer(customerId);
-      self = {
-        ...self,
-        name: info.descriptiveName,
-        currency: info.currencyCode,
-        timezone: info.timeZone,
-      };
-    } catch (err) {
+    /*
+     * 🔴 Twice, the second time naming the account as its own manager.
+     *
+     * `listAccessibleCustomers` hands back every customer the sign-in can
+     * reach, INCLUDING manager accounts and accounts that sit under one. Google
+     * will not answer a `FROM customer` query for those without a
+     * `login-customer-id` header saying which authorised customer the request
+     * is being made through — it answers 403 USER_PERMISSION_DENIED instead.
+     *
+     * This asked once, with no header, and treated the refusal as "cannot read
+     * this branch". The visible cost was a picker listing seven bare ten-digit
+     * ids with no name, currency or timezone — and, worse, `loginCustomerId`
+     * left as "" on every one of them, so ATTACHING an account then failed the
+     * same way and reported "Connected, but Google no longer shows this account
+     * to that sign-in". Nothing was wrong with the sign-in.
+     *
+     * The plain attempt stays first: it is correct for a directly-owned account
+     * and one round trip cheaper. The retry is what rescues everything under a
+     * manager, and when it is the one that works, the header it used is the
+     * header every later query for that account must carry — so it is recorded
+     * rather than rediscovered.
+     */
+    const attempts: Array<{ loginCustomerId: string }> = [
+      { loginCustomerId: "" },
+      { loginCustomerId: customerId },
+    ];
+    let read = false;
+    let lastErr: unknown = null;
+
+    for (const attempt of attempts) {
+      try {
+        const info = await new GoogleAdsClient(
+          refreshToken,
+          attempt.loginCustomerId,
+        ).getCustomer(customerId);
+        self = {
+          ...self,
+          name: info.descriptiveName,
+          currency: info.currencyCode,
+          timezone: info.timeZone,
+          loginCustomerId: attempt.loginCustomerId,
+        };
+        read = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    if (!read) {
       /*
-       * A manager account can legitimately refuse a plain `customer` query, so
-       * the id is kept — it is still the route to the children below.
-       *
-       * 🔴 But it is LOGGED now. This used to be a bare `catch {}`, and when
-       * every account failed the operator saw a list of bare ten-digit ids,
-       * "some parts of this account tree could not be read", and no way to
-       * find out why — not in the UI, not in the server logs, not anywhere.
-       * The two real causes need completely different actions: a developer
-       * token still at Test Account access, where every query fails until
-       * Basic is granted, versus one manager in the tree declining.
-       * Indistinguishable without this line.
+       * Both attempts refused. The id is kept — it is still the route to the
+       * children below — but this is LOGGED, because the alternative was a
+       * picker full of nameless ids with the reason discarded: not in the UI,
+       * not in the server logs, nowhere.
        */
       console.error(
         `[google-connect] customer ${customerId} details unreadable:`,
-        err,
+        lastErr,
       );
       partial = true;
     }
+
     byId.set(customerId, self);
 
     // Expand beneath it. If this customer is not a manager the query simply

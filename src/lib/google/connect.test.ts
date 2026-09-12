@@ -41,9 +41,14 @@ vi.mock("./client", () => ({
       readonly refreshToken: string,
       readonly loginCustomerId: string,
     ) {}
-    listAccessibleCustomers = listAccessibleCustomers;
-    getCustomer = getCustomer;
-    listClientAccounts = listClientAccounts;
+    listAccessibleCustomers = () => listAccessibleCustomers();
+    // The header is forwarded into the mock so a test can assert WHICH manager
+    // a read was made through — the difference between a nameless account and a
+    // readable one.
+    getCustomer = (customerId: string) =>
+      getCustomer(customerId, this.loginCustomerId);
+    listClientAccounts = (customerId: string) =>
+      listClientAccounts(customerId, this.loginCustomerId);
   },
 }));
 
@@ -115,6 +120,70 @@ describe("the Google side of the shared stash", () => {
 /* ------------------------------------------------------------------ *
  * Discovery
  * ------------------------------------------------------------------ */
+
+describe("🔴 accounts that need a login-customer-id header", () => {
+  /*
+   * `listAccessibleCustomers` returns manager accounts and accounts that sit
+   * under one. Google refuses a `FROM customer` query for those unless the
+   * request names an authorised customer in `login-customer-id` — so asking
+   * once, with no header, produced a picker full of bare ten-digit ids and, far
+   * worse, left `loginCustomerId` empty on every row. Attaching one then failed
+   * with "Connected, but Google no longer shows this account to that sign-in",
+   * which is a sentence about the sign-in and had nothing to do with it.
+   */
+  it("retries through the account itself and keeps the header that worked", async () => {
+    listAccessibleCustomers.mockResolvedValue(["7778889990"]);
+    listClientAccounts.mockResolvedValue([]);
+    getCustomer.mockImplementation(async (_id: string, loginCustomerId: string) => {
+      if (!loginCustomerId) throw new Error("USER_PERMISSION_DENIED");
+      return { descriptiveName: "Under A Manager", currencyCode: "USD", timeZone: "UTC" };
+    });
+
+    const { accounts, partial } = await mod.discoverGoogleAccounts("refresh");
+
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({
+      customerId: "7778889990",
+      name: "Under A Manager",
+      // 🔴 The header that worked is recorded, because every later query for
+      // this account — the attach, and every nightly sync — must carry it too.
+      loginCustomerId: "7778889990",
+    });
+    // It was read, so nothing about this tree is incomplete.
+    expect(partial).toBe(false);
+  });
+
+  it("does not add a header to an account that answers without one", async () => {
+    listAccessibleCustomers.mockResolvedValue(["1112223330"]);
+    listClientAccounts.mockResolvedValue([]);
+    getCustomer.mockResolvedValue({
+      descriptiveName: "Directly Owned",
+      currencyCode: "USD",
+      timeZone: "UTC",
+    });
+
+    const { accounts } = await mod.discoverGoogleAccounts("refresh");
+    expect(accounts[0]).toMatchObject({
+      customerId: "1112223330",
+      name: "Directly Owned",
+      loginCustomerId: "",
+    });
+    // One call, not two: the plain attempt succeeded and the retry never ran.
+    expect(getCustomer).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports the tree as incomplete when both attempts are refused", async () => {
+    listAccessibleCustomers.mockResolvedValue(["4445556660"]);
+    listClientAccounts.mockResolvedValue([]);
+    getCustomer.mockRejectedValue(new Error("USER_PERMISSION_DENIED"));
+
+    const { accounts, partial } = await mod.discoverGoogleAccounts("refresh");
+    // The id is kept — it is still the route to any children beneath it.
+    expect(accounts[0]).toMatchObject({ customerId: "4445556660", name: null });
+    expect(partial).toBe(true);
+    expect(getCustomer).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("discoverGoogleAccounts", () => {
   it("🔴 records no manager as \"\" for a directly-accessible account", async () => {
