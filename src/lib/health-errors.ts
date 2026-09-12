@@ -180,8 +180,33 @@ function isNotConfigured(text: string): boolean {
  * classified without always knowing which platform threw.
  */
 function isDeveloperTokenProblem(text: string): boolean {
-  return /\bDEVELOPER_TOKEN_(NOT_APPROVED|PROHIBITED|INVALID)\b/.test(text) ||
-    /\bDEVELOPER_TOKEN_PARAMETER_MISSING\b/.test(text);
+  return (
+    /\bDEVELOPER_TOKEN_(NOT_APPROVED|PROHIBITED|INVALID)\b/.test(text) ||
+    /\bDEVELOPER_TOKEN_PARAMETER_MISSING\b/.test(text) ||
+    /*
+     * 🔴 The one Google actually sends, and the one this missed.
+     *
+     * A token still at Test Account access does NOT come back as
+     * `DEVELOPER_TOKEN_NOT_APPROVED`. Production traffic returns
+     * `ACTION_NOT_PERMITTED` with "The Google Cloud project is only approved
+     * for use with test accounts", which matched none of the patterns above,
+     * fell through to the HTTP-403 branch, and was reported as:
+     *
+     *     "Connected, but Google no longer shows this account to that sign-in.
+     *      Reconnect with Continue with Google on this page."
+     *
+     * Every account in the picker therefore appeared as a bare id under an
+     * amber "could not be read", and attaching one failed with a sentence
+     * blaming a sign-in that was working perfectly. Three fixes were shipped
+     * against that wrong reading before the raw error was ever looked at.
+     *
+     * Matched on the message rather than on `ACTION_NOT_PERMITTED` alone: that
+     * code is generic and covers genuinely different refusals, but this
+     * sentence is unambiguous and is what distinguishes "ours to fix" from
+     * "yours to fix".
+     */
+    /only approved for use with test accounts/i.test(text)
+  );
 }
 
 function isCredentialText(text: string): boolean {

@@ -154,6 +154,63 @@ describe("classifying upstream failures", () => {
     assertClean(`${f.message} ${f.hint}`);
   });
 
+  it("🔴 classifies the test-access refusal Google ACTUALLY sends", () => {
+    /*
+     * Verbatim from production, 2026-09-12. A developer token still at Test
+     * Account access does NOT return DEVELOPER_TOKEN_NOT_APPROVED for
+     * production traffic — it returns ACTION_NOT_PERMITTED with this sentence,
+     * which matched nothing, fell through to the HTTP-403 branch and was
+     * reported as "Connected, but Google no longer shows this account to that
+     * sign-in. Reconnect…".
+     *
+     * Every word of that was wrong, and three fixes were shipped against it
+     * before anyone read the raw error. The account picker showed seven bare
+     * ten-digit ids for an hour because of this one classification.
+     */
+    const err = Object.assign(
+      new Error(
+        'Google Ads 403 on customer 5283654713: [{"error":{"code":403,' +
+          '"message":"The caller does not have permission","status":' +
+          '"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/' +
+          'google.ads.googleads.v22.errors.GoogleAdsFailure","errors":' +
+          '[{"errorCode":{"authorizationError":"ACTION_NOT_PERMITTED"},' +
+          '"message":"The Google Cloud project is only approved for use with ' +
+          'test accounts. To access non-test accounts, apply for Explorer, ' +
+          'Basic or Standard access."}]}]}}]',
+      ),
+      { name: "GoogleAdsError", status: 403 },
+    );
+
+    const f = describeFailure(err, "google");
+    expect(f.cause).toBe("not_configured");
+    // The three sentences that sent an operator re-authorising in a loop.
+    expect(f.message).not.toMatch(/no longer shows this account/i);
+    expect(f.hint).not.toMatch(/Reconnect/i);
+    expect(f.hint).toMatch(/Nothing you can fix from here/);
+    assertClean(`${f.message} ${f.hint}`);
+  });
+
+  it("does not swallow an ordinary USER_PERMISSION_DENIED as ours", () => {
+    /*
+     * The other half of the same log line, and it must stay THEIRS: a client
+     * customer queried without the manager's id in `login-customer-id`. If the
+     * new pattern above were written against `ACTION_NOT_PERMITTED` alone, or
+     * against "permission" generally, this would be misreported as a setup
+     * problem on our side and nobody would ever fix the header.
+     */
+    const err = Object.assign(
+      new Error(
+        'Google Ads 403 on customer 4566941601: [{"error":{"code":403,' +
+          '"status":"PERMISSION_DENIED","details":[{"errors":[{"errorCode":' +
+          '{"authorizationError":"USER_PERMISSION_DENIED"},"message":"User ' +
+          "doesn't have permission to access customer.\"}]}]}}]",
+      ),
+      { name: "GoogleAdsError", status: 403 },
+    );
+
+    expect(describeFailure(err, "google").cause).toBe("no_access");
+  });
+
   it("classifies every developer-token failure the same way", () => {
     for (const code of [
       "DEVELOPER_TOKEN_NOT_APPROVED",
