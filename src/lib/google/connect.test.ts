@@ -172,6 +172,38 @@ describe("🔴 accounts that need a login-customer-id header", () => {
     expect(getCustomer).toHaveBeenCalledTimes(1);
   });
 
+  it("🔴 finds the manager it is actually reached through", async () => {
+    /*
+     * The case the first fix missed. An agency login usually reaches a client
+     * account THROUGH a manager, so the correct header is neither empty nor the
+     * account's own id — it is another entry in the same accessible list.
+     * Google reports that as USER_PERMISSION_DENIED, the same error it uses for
+     * "you have no access", so the two cannot be told apart from the response.
+     */
+    listAccessibleCustomers.mockResolvedValue(["1112223330", "9998887770"]);
+    listClientAccounts.mockResolvedValue([]);
+    getCustomer.mockImplementation(async (id: string, loginCustomerId: string) => {
+      // 111… is the manager and answers for itself; 999… answers only when the
+      // request is made through 111…
+      if (id === "1112223330" && loginCustomerId === "1112223330") {
+        return { descriptiveName: "The Manager", currencyCode: "USD", timeZone: "UTC" };
+      }
+      if (id === "9998887770" && loginCustomerId === "1112223330") {
+        return { descriptiveName: "Client Under It", currencyCode: "USD", timeZone: "UTC" };
+      }
+      throw new Error("USER_PERMISSION_DENIED");
+    });
+
+    const { accounts, partial } = await mod.discoverGoogleAccounts("refresh");
+
+    expect(partial).toBe(false);
+    const child = accounts.find((a) => a.customerId === "9998887770");
+    expect(child).toMatchObject({
+      name: "Client Under It",
+      loginCustomerId: "1112223330",
+    });
+  });
+
   it("still reports the tree as incomplete when both attempts are refused", async () => {
     listAccessibleCustomers.mockResolvedValue(["4445556660"]);
     listClientAccounts.mockResolvedValue([]);
@@ -181,6 +213,8 @@ describe("🔴 accounts that need a login-customer-id header", () => {
     // The id is kept — it is still the route to any children beneath it.
     expect(accounts[0]).toMatchObject({ customerId: "4445556660", name: null });
     expect(partial).toBe(true);
+    // No header, then itself. With one accessible customer there is no third
+    // candidate to try.
     expect(getCustomer).toHaveBeenCalledTimes(2);
   });
 });

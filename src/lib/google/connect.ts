@@ -141,9 +141,29 @@ export async function discoverGoogleAccounts(
      * header every later query for that account must carry — so it is recorded
      * rather than rediscovered.
      */
+    /*
+     * 🔴 Every manager it could be reached through, not just "none" and
+     * "itself".
+     *
+     * Google documents USER_PERMISSION_DENIED as *either* "the user has no
+     * access to this customer" *or* "`login-customer-id` is not set correctly",
+     * and the two are indistinguishable in the response. An agency login
+     * usually reaches a client account THROUGH a manager, so the correct header
+     * is that manager's id — which is neither empty nor the account's own id,
+     * and is very often another entry in this same accessible list.
+     *
+     * So the candidates are: no header (a directly-owned account, and one round
+     * trip cheaper), the account itself (a manager being read directly), then
+     * every other accessible customer as a possible parent. It stops at the
+     * first that answers, so the common cases still cost one call, and the
+     * whole list is bounded by what `listAccessibleCustomers` returned.
+     */
     const attempts: Array<{ loginCustomerId: string }> = [
       { loginCustomerId: "" },
       { loginCustomerId: customerId },
+      ...accessible
+        .filter((other) => other !== customerId)
+        .map((other) => ({ loginCustomerId: other })),
     ];
     let read = false;
     let lastErr: unknown = null;
