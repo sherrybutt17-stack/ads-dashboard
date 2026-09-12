@@ -57,9 +57,31 @@ export async function GET(
   }
 
   try {
-    const { accounts, partial } = await discoverGoogleAccounts(found.refreshToken);
+    const { accounts, partial, partialError } = await discoverGoogleAccounts(
+      found.refreshToken,
+    );
     return NextResponse.json({
       accounts,
+      /*
+       * 🔴 WHY the list is incomplete, not merely that it is.
+       *
+       * "Some parts of this account tree could not be read" cannot distinguish
+       * one suspended manager, which is ignorable, from every account being
+       * refused, which is a connection that will never sync. Both render as the
+       * same amber sentence, and the operator's only next move is to guess.
+       *
+       * Redacted through the same taxonomy as every other tenant-visible
+       * failure — a superadmin additionally gets the raw text, which is what
+       * actually names the cause.
+       */
+      partialReason: partialError
+        ? safeFailure(
+            partialError,
+            "google",
+            { superadmin: isSuperadmin(got.session) },
+            "Google refused part of this account tree.",
+          )
+        : undefined,
       /*
        * Surfaced rather than swallowed. A user with access to five managers, one
        * of them suspended, gets the other four — but silently returning a short

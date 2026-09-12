@@ -3,12 +3,29 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+/**
+ * Let a client go.
+ *
+ * Two shapes, one implementation. `panel` is the block at the foot of the setup
+ * page; `row` is the small control on the client list, added because the only
+ * way to remove a client was to open that client's setup page and scroll to the
+ * bottom of it — so in practice dead clients simply stayed, reading red on the
+ * list forever and training everyone to ignore a red badge.
+ *
+ * 🔴 It archives, and the copy says so. `stage_transitions` is the append-only
+ * system of record and GoHighLevel has no stage-history API, so a hard delete
+ * would destroy funnel history nothing can rebuild. Everything that touches the
+ * client's systems IS disconnected: the GHL install, every ad account on every
+ * platform with its stored credential, and any login left with no dashboard.
+ */
 export function RemoveClient({
   clientId,
   clientName,
+  variant = "panel",
 }: {
   clientId: string;
   clientName: string;
+  variant?: "panel" | "row";
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -28,7 +45,9 @@ export function RemoveClient({
       const res = await fetch(`/api/clients/${clientId}`, { method: "DELETE" });
       const body = await res.json().catch(() => null);
       if (res.ok) {
-        router.push("/");
+        // From the list we are already where we want to be; pushing "/" again
+        // would leave the removed row on screen until something else refreshed.
+        if (variant === "panel") router.push("/");
         router.refresh();
       } else {
         setMsg(body?.error ?? "Failed to remove client");
@@ -38,6 +57,27 @@ export function RemoveClient({
       setMsg("Failed to remove client");
       setBusy(false);
     }
+  }
+
+  if (variant === "row") {
+    return (
+      <div className="flex items-center gap-2">
+        {msg && (
+          <span className="text-xs" style={{ color: "var(--status-critical)" }}>
+            {msg}
+          </span>
+        )}
+        <button
+          onClick={remove}
+          disabled={busy}
+          aria-label={`Remove ${clientName}`}
+          className="rounded-[7px] border px-2 py-1 text-[12px] font-medium transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50"
+          style={{ color: "var(--status-critical)", borderColor: "var(--border)" }}
+        >
+          {busy ? "Removing…" : "Remove"}
+        </button>
+      </div>
+    );
   }
 
   return (

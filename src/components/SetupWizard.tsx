@@ -1518,6 +1518,11 @@ function GoogleAccountPicker({
     null,
   );
   const [partial, setPartial] = useState(false);
+  const [partialReason, setPartialReason] = useState<{
+    error?: string;
+    hint?: string;
+    diagnostic?: string;
+  } | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -1538,6 +1543,7 @@ function GoogleAccountPicker({
         }
         setAccounts(body.accounts ?? []);
         setPartial(Boolean(body.partial));
+        setPartialReason(body.partialReason ?? null);
       } catch {
         if (!cancelled) setError("Could not reach the server.");
       }
@@ -1652,6 +1658,32 @@ function GoogleAccountPicker({
           Some parts of this account tree could not be read, so this list may be
           incomplete. If an account you expect is missing, add its Customer ID
           below.
+          {/*
+            🔴 And WHY. Without this the sentence above cannot distinguish one
+            suspended manager — ignorable — from every account being refused,
+            which is a connection that will never sync. The two look identical
+            and the only next move is to guess, which is how an afternoon goes.
+          */}
+          {partialReason?.error && (
+            <>
+              {" "}
+              <span style={{ color: "var(--text-secondary)" }}>
+                {partialReason.error}
+                {partialReason.hint ? ` ${partialReason.hint}` : ""}
+              </span>
+            </>
+          )}
+        </p>
+      )}
+      {/* Superadmin only, and deliberately verbatim: the redacted sentence
+          above is what a tenant may read, and this is what actually names the
+          cause when it has to be diagnosed. */}
+      {partialReason?.diagnostic && (
+        <p
+          className="mt-1 font-mono text-[10.5px] break-words"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {partialReason.diagnostic}
         </p>
       )}
 

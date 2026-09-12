@@ -6,6 +6,7 @@ import { getSessionUser, isAgencyOperator } from "@/lib/auth";
 import { HealthBadge } from "@/components/HealthChecklist";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AddClientButton } from "@/components/AddClientButton";
+import { RemoveClient } from "@/components/RemoveClient";
 import { SignOut } from "@/components/SignOut";
 import { BookRollupPanel } from "@/components/BookRollup";
 import { BookPacingPanel } from "@/components/BookPacing";
@@ -168,10 +169,18 @@ export default async function ClientsPage() {
             )}
             <ul className="flex flex-col gap-3">
               {clients.map((c) => (
-                <li key={c.id}>
+                /*
+                  🔴 The remove control is a SIBLING of the link, not a child.
+                  A button inside an anchor is invalid HTML and, worse, clicking
+                  it would follow the link — so a destructive action would open
+                  the dashboard instead of asking anything.
+                */
+                <li key={c.id} className="relative">
                   <Link
                     href={`/c/${c.slug}`}
-                    className="card card-interactive flex flex-wrap items-center gap-4 p-4"
+                    className={`card card-interactive flex flex-wrap items-center gap-4 p-4${
+                      staff ? " pr-24" : ""
+                    }`}
                   >
                     <div className="min-w-0 flex-1">
                       <div
@@ -205,6 +214,15 @@ export default async function ClientsPage() {
                       <HealthBadge level={c.health} />
                     </div>
                   </Link>
+                  {staff && (
+                    <div className="absolute top-1/2 right-4 -translate-y-1/2">
+                      <RemoveClient
+                        variant="row"
+                        clientId={c.id}
+                        clientName={c.name}
+                      />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

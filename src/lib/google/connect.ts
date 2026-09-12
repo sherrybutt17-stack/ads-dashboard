@@ -77,12 +77,30 @@ export interface DiscoveredAccount extends GoogleAccountNode {
  */
 export async function discoverGoogleAccounts(
   refreshToken: string,
-): Promise<{ accounts: DiscoveredAccount[]; partial: boolean }> {
+): Promise<{
+  accounts: DiscoveredAccount[];
+  partial: boolean;
+  /**
+   * 🔴 The first refusal, kept rather than dropped.
+   *
+   * "Some parts of this account tree could not be read" is true and useless on
+   * its own: it cannot distinguish one suspended manager — ignorable — from
+   * every account failing, which is a setup that will never sync. The operator
+   * could not tell which, and neither could we, because the only copy of the
+   * reason was a `catch` that discarded it.
+   *
+   * Handed back raw. The route redacts it, because the same taxonomy that
+   * decides what a tenant may read already exists and must not be reimplemented
+   * here.
+   */
+  partialError?: unknown;
+}> {
   const root = new GoogleAdsClient(refreshToken, "");
   const accessible = await root.listAccessibleCustomers();
 
   const byId = new Map<string, DiscoveredAccount>();
   let partial = false;
+  let partialError: unknown = null;
 
   for (const customerId of accessible) {
     /*
@@ -162,6 +180,7 @@ export async function discoverGoogleAccounts(
         lastErr,
       );
       partial = true;
+      partialError ??= lastErr;
     }
 
     byId.set(customerId, self);
@@ -187,6 +206,7 @@ export async function discoverGoogleAccounts(
       // cost the other four, logged so "incomplete" is explicable.
       console.error(`[google-connect] could not expand ${customerId}:`, err);
       partial = true;
+      partialError ??= err;
     }
   }
 
@@ -197,5 +217,5 @@ export async function discoverGoogleAccounts(
     return (a.name ?? a.customerId).localeCompare(b.name ?? b.customerId);
   });
 
-  return { accounts, partial };
+  return { accounts, partial, partialError: partialError ?? undefined };
 }

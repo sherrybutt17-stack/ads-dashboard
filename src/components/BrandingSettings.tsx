@@ -236,18 +236,41 @@ export function BrandingSettings({
                 style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
               />
             )}
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              disabled={busy}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadLogo(f);
+            {/*
+              🔴 The native control, driven by a label styled as a button.
+              `<input type="file">` renders as the browser's own grey "Choose
+              file / No file chosen" — a different shape, font and colour from
+              every other control on the page, which reads as an unstyled
+              fragment of a half-built form rather than something to click.
+
+              The input itself stays in the DOM and keeps its ref, its accept
+              list and its change handler: it is what the OS picker is attached
+              to, and replacing it with a div and a click handler would lose
+              keyboard access and the file dialog with it. `sr-only` hides it
+              visually while leaving it focusable, and the label's
+              `focus-within` ring is what makes that focus visible.
+            */}
+            <label
+              className="inline-flex cursor-pointer items-center rounded-[8px] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)] focus-within:ring-2 focus-within:ring-[var(--accent)]"
+              style={{
+                color: busy ? "var(--text-muted)" : "var(--text-primary)",
+                borderColor: "var(--border)",
+                cursor: busy ? "not-allowed" : "pointer",
               }}
-              className="text-xs"
-              style={{ color: "var(--text-secondary)" }}
-            />
+            >
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={busy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadLogo(f);
+                }}
+                className="sr-only"
+              />
+              {busy ? "Uploading…" : hasLogo ? "Replace logo" : "Choose a logo"}
+            </label>
             {hasLogo && (
               <button
                 type="button"
