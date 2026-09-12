@@ -195,9 +195,22 @@ export async function discoverGoogleAccounts(
        * picker full of nameless ids with the reason discarded: not in the UI,
        * not in the server logs, nowhere.
        */
+      /*
+       * 🔴 The MESSAGE, not the error object.
+       *
+       * `console.error(err)` hands the object to Node's inspector, which stops
+       * at depth 2 and prints `body: [ { error: [Object] } ]` — collapsing the
+       * one field that says what Google actually objected to. `GoogleAdsError`
+       * already interpolates the whole response body into its message, so the
+       * string carries everything the object does and nothing truncates it.
+       *
+       * This mattered: the first real log line from production named a 403 and
+       * then hid the reason behind `[Object]`, which is how three plausible
+       * fixes got shipped for a cause nobody had actually read.
+       */
       console.error(
         `[google-connect] customer ${customerId} details unreadable:`,
-        lastErr,
+        lastErr instanceof Error ? lastErr.message : String(lastErr),
       );
       partial = true;
       partialError ??= lastErr;
@@ -224,7 +237,10 @@ export async function discoverGoogleAccounts(
     } catch (err) {
       // Same reasoning as above: swallowed so one suspended manager does not
       // cost the other four, logged so "incomplete" is explicable.
-      console.error(`[google-connect] could not expand ${customerId}:`, err);
+      console.error(
+        `[google-connect] could not expand ${customerId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
       partial = true;
       partialError ??= err;
     }
