@@ -171,7 +171,14 @@ export function StatTile({
 
   return (
     <div
-      className={`card card-interactive flex flex-col gap-2.5 p-4 sm:p-5${
+      /*
+       * 🔴 `min-w-0`. A grid item defaults to `min-width: auto`, meaning it
+       * refuses to shrink below its content's intrinsic width — and the value
+       * line below is `whitespace-nowrap` at 33px. A long figure therefore
+       * widens its own track, four wide tracks outgrow the row, and the last
+       * tile is cut off by the edge of the page rather than wrapping.
+       */
+      className={`card card-interactive flex min-w-0 flex-col gap-2.5 p-4 sm:p-5${
         emphasis ? " card-accent" : ""
       }`}
     >

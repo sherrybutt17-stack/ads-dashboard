@@ -799,11 +799,31 @@ function UnresolvedRow({
           {cpl === null ? DASH : formatCurrency(cpl, currency)} CP-Lead
         </p>
       </div>
+      {/*
+        🔴 Name the ad. This used to read "1 ad using Dynamic Creative,
+        carousels, or a creative we could not read" — three causes, one of which
+        is our own parser failing, and no way for the operator to tell which
+        applied or which ad it was. An opaque line holding 11% of spend reads as
+        a defect in the dashboard rather than a fact about Meta's reporting, and
+        the first question it prompts is the one it should have answered.
+
+        The ad name is already on the row; `creativeType` already says whether
+        this is a carousel. Both were being thrown away here.
+      */}
       <p className="mt-1 text-[11.5px] leading-snug" style={{ color: "var(--text-muted)" }}>
-        {row.adCount === 1 ? "1 ad" : `${row.adCount} ads`} using Dynamic Creative,
-        carousels, or a creative we could not read. Meta recombines those assets per
-        impression, so no single image or video served this spend — attributing it to
-        one would be a guess. Shown here so the totals still add up.
+        {row.adName ? (
+          <>
+            <span style={{ color: "var(--text-secondary)" }}>{row.adName}</span>
+            {row.adCount > 1 && ` and ${row.adCount - 1} other${row.adCount > 2 ? "s" : ""}`}
+            {". "}
+          </>
+        ) : (
+          `${row.adCount === 1 ? "1 ad" : `${row.adCount} ads`}. `
+        )}
+        {row.creativeType === "carousel"
+          ? "Meta reports spend for the ad as a whole, never per carousel card or per Dynamic Creative combination, so no single image or video served this spend — attributing it to one would be a guess."
+          : "Meta recombines these assets per impression, so no single image or video served this spend — attributing it to one would be a guess."}
+        {" Shown here so the totals still add up."}
       </p>
     </div>
   );

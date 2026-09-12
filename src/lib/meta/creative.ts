@@ -79,11 +79,27 @@ export function resolveCreative(creative: unknown): ResolvedCreative {
   const linkData = obj(story.link_data);
   const feed = obj(c.asset_feed_spec);
 
+  /*
+   * 🔴 Full-size sources FIRST, `thumbnail_url` only as a last resort.
+   *
+   * Meta's `thumbnail_url` is **64×64 by default**. The creative cards render
+   * it at roughly 350px wide, so preferring it — which this used to do — meant
+   * every card upscaled a postage stamp five-fold and showed a blurred smear
+   * where the ad should be. On a panel whose entire job is "look at the
+   * creative and judge it", that is the one thing it must not do.
+   *
+   * `image_url` is the full-resolution asset for an image ad;
+   * `video_data.image_url` is the video's cover frame at full size; and
+   * `link_data.picture` is the link preview. Each is the real image rather than
+   * a proxy for it. `thumbnail_url` stays last because for some dynamic and
+   * asset-feed creatives it is genuinely the only thing Meta returns — a soft
+   * image beats an empty card.
+   */
   const thumbnailUrl =
-    str(c.thumbnail_url) ??
     str(c.image_url) ??
     str(videoData?.image_url) ??
     str(linkData?.picture) ??
+    str(c.thumbnail_url) ??
     null;
 
   const cta =

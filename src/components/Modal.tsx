@@ -183,7 +183,20 @@ export function Modal({
 
   const overlay = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4"
+      /*
+       * 🔴 `items-start` with an auto margin, not `items-center`.
+       *
+       * A centred flex item that is TALLER than its scrolling container has its
+       * overflow pushed out of both ends, and the part above the top edge is
+       * unreachable — no scrollbar can get to it. The sections dialog is long
+       * enough to hit exactly that: its first rows were cut off above the
+       * viewport and its Save button sat below it, so a long list was a dialog
+       * you could neither read from the top nor submit.
+       *
+       * `items-start` + `m-auto` still centres a short dialog, and lets a tall
+       * one start at the top where it can be scrolled through.
+       */
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4"
       style={{ background: "var(--overlay-scrim)" }}
       onMouseDown={(e) => {
         // mousedown, not click: a click that STARTED inside the panel (drag-
@@ -198,26 +211,32 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={labelledBy ?? titleId}
         aria-describedby={description ? descId : undefined}
-        className="w-full max-w-sm rounded-[14px] p-5"
+        className="m-auto flex w-full max-w-sm flex-col rounded-[14px]"
         style={{
           background: "var(--surface-raised)",
           border: "1px solid var(--border-strong)",
           boxShadow: "var(--shadow-overlay)",
+          // Never taller than the viewport it sits in. `dvh` rather than `vh`
+          // so a phone's collapsing address bar does not crop the footer.
+          maxHeight: "calc(100dvh - 2rem)",
         }}
       >
-        <h2
-          id={titleId}
-          className="text-base font-semibold"
-          style={{ color: "var(--text-primary)" }}
-        >
-          {title}
-        </h2>
-        {description && (
-          <p id={descId} className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-            {description}
-          </p>
-        )}
-        {children}
+        {/* The heading stays put; only the body below it scrolls. */}
+        <div className="shrink-0 px-5 pt-5">
+          <h2
+            id={titleId}
+            className="text-base font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {title}
+          </h2>
+          {description && (
+            <p id={descId} className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+              {description}
+            </p>
+          )}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-3">{children}</div>
       </div>
     </div>
   );
