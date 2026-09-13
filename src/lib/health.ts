@@ -1,4 +1,5 @@
 import type { AdPlatform } from "@/lib/metrics/queries";
+import { getFunnelCounts } from "@/lib/metrics/queries";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -160,6 +161,7 @@ export async function runHealthChecks(
   }
 
   checks.push(await checkSpendLeadCoherence(client));
+  checks.push(await checkFunnelShape(client));
   checks.push(await checkAttribution(client));
   // Ad-level attribution is a Meta-only capability — see the note on the check.
   if (metaAccounts.length > 0) {
@@ -1000,6 +1002,70 @@ async function checkSpendLeadCoherence(client: Client): Promise<HealthCheck> {
     ...base,
     level: "green",
     message: `${describeSpend(parts)} spend, ${leads} leads`,
+  };
+}
+
+/**
+ * Do more leads reach a later stage than ever entered the first one?
+ *
+ * 🔴 The number this exists to stop the dashboard printing with a straight
+ * face. Measured on the live gg-ads book, the default 30-day view rendered:
+ *
+ *     New Leads 2 · Appointments 16 · Book % 800.0% · CP-LEAD $1,365.10
+ *
+ * while Meta reported 15 leads for the same window. Nothing was broken and
+ * nothing was miscalculated — `appointment_booked / new_lead` is exactly 8.0.
+ * The denominator is simply not the population the numerator came from: this
+ * client's ads drive to a calendar, so a paid lead lands in GoHighLevel already
+ * sitting in "Appointment Booked" and never passes through a stage mapped to
+ * `new_lead`. Of the paid leads first seen in that window, 18 entered at
+ * `appointment_booked` and 0 at `new_lead`.
+ *
+ * A booking rate above 100% is not a good month. It is the funnel telling us
+ * its own top is missing, and every lead-denominated figure — cost per lead,
+ * booking rate, opt-in rate — is unusable while it holds. Amber rather than
+ * red, because the ad and CRM pipes are both healthy; what is wrong is the
+ * shape of the mapping, and the fix is a stage mapping rather than a
+ * reconnection.
+ *
+ * Counted through `getFunnelCounts`, deliberately — the same query the
+ * dashboard renders from, under the client's own paid-lead filter. A check
+ * with its own hand-rolled count could disagree with the screen it is
+ * describing, which would make it worse than no check.
+ */
+async function checkFunnelShape(client: Client): Promise<HealthCheck> {
+  const base = { id: "funnel_shape", label: "Funnel shape" };
+  const window = trailingWindowInclusive(30, client.timezone);
+  const funnel = await getFunnelCounts(client.id, window, undefined, {
+    mode: client.paidLeadFilter,
+    tag: client.paidLeadTag,
+  });
+
+  const leads = funnel.new_lead;
+  const appts = funnel.appointment_booked;
+
+  // Nothing happened. `checkSpendLeadCoherence` owns that story; saying it
+  // twice would train someone to skim the list.
+  if (leads === 0 && appts === 0) {
+    return { ...base, level: "green", message: "No funnel activity in 30 days" };
+  }
+
+  if (appts > leads) {
+    return {
+      ...base,
+      level: "amber",
+      message:
+        leads === 0
+          ? `${appts} appointments but no lead ever entered the first stage`
+          : `${appts} appointments against ${leads} leads — a ${Math.round((appts / leads) * 100)}% booking rate`,
+      hint: "Leads are entering the pipeline below the top — usually ads driving straight to a calendar, or the stage they land in not being mapped to New Lead. Cost per lead and booking rate are not meaningful until the entry stage is mapped.",
+    };
+  }
+
+  return {
+    ...base,
+    level: "green",
+    message: `${leads} leads, ${appts} appointments`,
   };
 }
 

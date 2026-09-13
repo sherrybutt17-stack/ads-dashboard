@@ -289,6 +289,88 @@ describe("spend / lead coherence", () => {
   });
 });
 
+describe("funnel shape", () => {
+  /*
+   * The check exists because the live book produced "Book % 800.0%" on the
+   * default view — `appointment_booked / new_lead` with a denominator that was
+   * never the population the numerator came from. See `checkFunnelShape`.
+   */
+  const shaped = (over: Partial<Client> = {}) =>
+    client({ paidLeadFilter: "all", paidLeadTag: "", ...over } as Partial<Client>);
+
+  /** Drop `n` opportunities straight into one canonical stage. */
+  async function seedStage(stage: string, n: number, tag: string) {
+    for (let i = 0; i < n; i++) {
+      const opp = (
+        await run(
+          `INSERT INTO opportunities (client_id, ghl_opportunity_id)
+           VALUES ('${CLIENT_A}', 'opp-${tag}-${i}') RETURNING id`,
+        )
+      ).rows[0].id;
+      await run(
+        `INSERT INTO stage_transitions
+           (client_id, opportunity_id, to_stage_ghl_id, to_canonical, changed_at, dedupe_key)
+         VALUES ('${CLIENT_A}', '${opp}', 'stage-${stage}', '${stage}',
+                 '2026-08-10T12:00:00Z', 'dk-${tag}-${i}')`,
+      );
+    }
+  }
+
+  it("🔴 flags a booking rate above 100% rather than printing it", async () => {
+    await seedStage("new_lead", 2, "l");
+    await seedStage("appointment_booked", 16, "a");
+    const c = await check("funnel_shape", shaped());
+    expect(c.level).toBe("amber");
+    expect(c.message).toContain("16 appointments against 2 leads");
+    expect(c.message).toContain("800%");
+  });
+
+  it("names the case where no lead entered the first stage at all", async () => {
+    // Division would be Infinity here, so the message has to be built without
+    // one — the shape this check is most likely to meet on a calendar funnel.
+    await seedStage("appointment_booked", 9, "a");
+    const c = await check("funnel_shape", shaped());
+    expect(c.level).toBe("amber");
+    expect(c.message).toBe(
+      "9 appointments but no lead ever entered the first stage",
+    );
+  });
+
+  it("passes a funnel that narrows the way a funnel should", async () => {
+    await seedStage("new_lead", 20, "l");
+    await seedStage("appointment_booked", 6, "a");
+    const c = await check("funnel_shape", shaped());
+    expect(c.level).toBe("green");
+    expect(c.message).toBe("20 leads, 6 appointments");
+  });
+
+  it("passes when appointments exactly equal leads", async () => {
+    // The boundary is `>`, not `>=`: every lead booking is a great month, not
+    // a broken mapping, and flagging it would make the check noise.
+    await seedStage("new_lead", 5, "l");
+    await seedStage("appointment_booked", 5, "a");
+    expect((await check("funnel_shape", shaped())).level).toBe("green");
+  });
+
+  it("stays quiet on a client with no funnel activity", async () => {
+    // `checkSpendLeadCoherence` owns the "nothing is happening" story; saying
+    // it twice teaches people to skim the checklist.
+    const c = await check("funnel_shape", shaped());
+    expect(c.level).toBe("green");
+    expect(c.message).toBe("No funnel activity in 30 days");
+  });
+
+  it("ignores activity outside the trailing 30 days", async () => {
+    await seedStage("appointment_booked", 4, "a");
+    await run(
+      `UPDATE stage_transitions SET changed_at = '2026-05-01T12:00:00Z'`,
+    );
+    expect((await check("funnel_shape", shaped())).message).toBe(
+      "No funnel activity in 30 days",
+    );
+  });
+});
+
 describe("attribution, on a client who does not run Meta", () => {
   /*
    * 🔴 The same blindness the coherence check had, and worse here, because the

@@ -101,17 +101,32 @@ export const DEFAULT_LEAD_FILTER: PaidLeadFilter = {
  * Returns `null` when no filtering applies, so callers can skip the join.
  */
 export function paidLeadPredicate(filter: PaidLeadFilter): SQL | null {
-  const tag = filter.tag.trim().toLowerCase();
+  /*
+   * Defensive on both fields, though the types say neither can be missing and
+   * `clients.paid_lead_filter` / `paid_lead_tag` are both NOT NULL with
+   * defaults. The reason is blast radius, not doubt: this runs inside
+   * `getFunnelCounts`, which every dashboard render and every health check
+   * calls, so a partially-built `Client` — a fixture, a `select` that omits a
+   * column, a future caller assembling one by hand — turns a missing string
+   * into a 500 on the main screen rather than a slightly wrong number.
+   *
+   * The `default` arm matters as much as the `?? ""`. Without it an
+   * unrecognised mode returns `undefined`, and `undefined !== null` makes the
+   * caller join `contacts` while pushing no predicate — which silently DROPS
+   * every transition whose contact is null instead of counting it.
+   */
+  const tag = (filter.tag ?? "").trim().toLowerCase();
 
   switch (filter.mode) {
-    case "all":
-      return null;
     case "attributed":
       return sql`c.meta_campaign_id IS NOT NULL`;
     case "tagged":
       return sql`c.tags @> ARRAY[${tag}]::text[]`;
     case "either":
       return sql`(c.meta_campaign_id IS NOT NULL OR c.tags @> ARRAY[${tag}]::text[])`;
+    case "all":
+    default:
+      return null;
   }
 }
 
