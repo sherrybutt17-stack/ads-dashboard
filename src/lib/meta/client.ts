@@ -307,6 +307,17 @@ export function insightFields(level: InsightLevel): string {
   ).join(",");
 }
 
+/**
+ * The creative sub-fields, named once.
+ *
+ * Shared by the nightly listing and the single-ad re-read behind the preview
+ * proxy. Two copies would drift, and the failure would be quiet: a preview
+ * resolved from a shorter field list picks a different image than the grid
+ * synced, so the card and its thumbnail would slowly stop agreeing.
+ */
+const CREATIVE_FIELD_EXPANSION =
+  "creative{id,image_hash,image_url,video_id,thumbnail_url,title,body,object_story_spec,asset_feed_spec,effective_object_story_id}";
+
 export class MetaClient {
   private readonly token: string;
   private readonly appSecret: string | undefined;
@@ -541,7 +552,7 @@ export class MetaClient {
               "adset_id",
               "campaign_id",
               // Nested field expansion — one round trip instead of one per ad.
-              "creative{id,image_hash,image_url,video_id,thumbnail_url,title,body,object_story_spec,asset_feed_spec,effective_object_story_id}",
+              CREATIVE_FIELD_EXPANSION,
               "adset{id,name,learning_stage_info}",
             ].join(","),
             limit: 200,
@@ -556,6 +567,22 @@ export class MetaClient {
       );
     }
     return rows;
+  }
+
+  /**
+   * One ad's creative, re-read live, purely to mint a working preview URL.
+   *
+   * Meta's image URLs are signed and expire in about two weeks, so the copy
+   * stored at sync time dies long before the ad does. The preview proxy calls
+   * this only when the stored URL has actually stopped working — a re-read per
+   * card per view would spend the account's whole API budget on pictures.
+   */
+  async getAdCreative(adId: string): Promise<unknown> {
+    const res = await this.request<{ creative?: unknown }>(
+      `/${encodeURIComponent(adId)}`,
+      { fields: CREATIVE_FIELD_EXPANSION },
+    );
+    return res.creative ?? null;
   }
 
   /**

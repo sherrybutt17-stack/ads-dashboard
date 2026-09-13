@@ -12,7 +12,7 @@ import type { AdPipeStatus, CrmPipeStatus } from "@/lib/metrics/pipe-state";
  * Google account, a Google Business Profile and Google Analytics — so the copy
  * that tells someone what to go and fix names the product.
  */
-const PLATFORM_NAME: Record<AdPlatform, string> = {
+export const PLATFORM_NAME: Record<AdPlatform, string> = {
   meta: "Meta",
   google: "Google Ads",
   tiktok: "TikTok Ads",

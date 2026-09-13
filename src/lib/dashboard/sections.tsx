@@ -48,6 +48,9 @@ import type { Insight } from "@/lib/metrics/insights";
 import type { CommentaryForEditor } from "@/lib/commentary/report";
 import type { StoredSummary } from "@/lib/ai/store";
 import type { AdPlatform, PeriodMetrics } from "@/lib/metrics/queries";
+import type { OutOfRangeNotice } from "@/lib/metrics/data-extent";
+import { PLATFORM_NAME } from "@/components/DataState";
+import { rangeLabel } from "@/lib/dates";
 import type { Client } from "@/db/schema";
 import {
   CADENCE_HINT,
@@ -518,6 +521,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
         <>
       {/* Which ASSET is working — one card per image or video, not per ad id */}
       <CreativeGrid
+        slug={slug}
         creatives={data.creatives}
         reconciliation={data.creativeLeads}
         revenueCoverage={data.revenueCoverage}
@@ -778,6 +782,74 @@ export function NoWebhookBanner({ slug }: { slug: string }) {
         style={{ background: "var(--status-critical)" }}
       >
         Finish setup
+      </Link>
+    </div>
+  );
+}
+
+/**
+ * "There is no data here, but there is data — over there."
+ *
+ * The state this exists for is a dormant ad account: spend that ended before
+ * the selected range, so every tile dashes out and the screen reads exactly
+ * like a dead pipe. The operator cannot discover the real window by hand —
+ * presets stop at a year and the calendar pages one month per click — so the
+ * dashboard names the window it holds and links straight to it.
+ *
+ * Neutral tone, not a warning. Nothing is broken; the account simply stopped
+ * running, and dressing that as a fault is how a checklist earns being ignored.
+ */
+export function OutOfRangeBanner({
+  slug,
+  platform,
+  notice,
+}: {
+  slug: string;
+  platform: AdPlatform;
+  notice: OutOfRangeNotice;
+}) {
+  const name = PLATFORM_NAME[platform];
+  const span = rangeLabel(notice.firstKey, notice.lastKey);
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-[10px] border p-4"
+      style={{
+        borderColor: "var(--border-strong)",
+        background: "color-mix(in srgb, var(--text-muted) 6%, transparent)",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+        style={{
+          background: "var(--text-muted)",
+          color: "var(--surface-page)",
+        }}
+      >
+        i
+      </span>
+      <div className="min-w-0 flex-1">
+        <p
+          className="text-[13px] font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
+          No {name} data in this date range
+        </p>
+        <p className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+          {notice.direction === "before"
+            ? `This account's ${name} history runs ${span} and it has not spent since. Nothing is broken — the range is simply past the end of the data.`
+            : `This account's ${name} history runs ${span}, which is later than the range you are viewing.`}
+        </p>
+      </div>
+      <Link
+        href={`/c/${slug}?platform=${platform}&start=${notice.firstKey}&end=${notice.lastKey}`}
+        className="shrink-0 rounded-[8px] border px-3 py-2 text-[13px] font-medium"
+        style={{
+          borderColor: "var(--border-strong)",
+          color: "var(--text-primary)",
+        }}
+      >
+        View {span}
       </Link>
     </div>
   );

@@ -93,6 +93,7 @@ function rankingColor(r: DeliveryRanking): string {
 }
 
 export function CreativeGrid({
+  slug,
   creatives,
   reconciliation,
   revenueCoverage,
@@ -100,6 +101,8 @@ export function CreativeGrid({
   emptyState,
   adLevelSynced,
 }: {
+  /** Needed to build the preview proxy URL, which is tenant-scoped. */
+  slug: string;
   creatives: CreativeWithOutcome[];
   reconciliation: CreativeLeadReconciliation;
   /** How much closed revenue is traceable to an asset. Governs the whole block. */
@@ -231,6 +234,7 @@ export function CreativeGrid({
               <CreativeCard
                 key={c.creativeKey}
                 creative={c}
+                slug={slug}
                 currency={currency}
                 shareOfSpend={totalSpend > 0 ? c.totals.spend / totalSpend : null}
                 /*
@@ -393,11 +397,13 @@ function CreativeCard({
   currency,
   shareOfSpend,
   showOutcome,
+  slug,
 }: {
   creative: CreativeWithOutcome;
   currency: string;
   shareOfSpend: number | null;
   showOutcome: boolean;
+  slug: string;
 }) {
   const cpl = costPer(c.totals.spend, c.totals.leads);
   const hook = hookRate(c.totals);
@@ -411,7 +417,7 @@ function CreativeCard({
       className="flex flex-col overflow-hidden rounded-xl border"
       style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
     >
-      <Thumb creative={c} />
+      <Thumb creative={c} slug={slug} />
 
       <div className="flex flex-1 flex-col gap-3 p-3.5">
         <header className="min-w-0">
@@ -710,9 +716,24 @@ function Rankings({ creative: c }: { creative: CreativeWithOutcome }) {
  * viewed. The URLs also expire, so a broken image is expected eventually and
  * falls back to a typed placeholder rather than a browser-default broken icon.
  */
-function Thumb({ creative: c }: { creative: CreativeWithOutcome }) {
+function Thumb({
+  creative: c,
+  slug,
+}: {
+  creative: CreativeWithOutcome;
+  slug: string;
+}) {
   const [failed, setFailed] = useState(false);
-  const show = c.thumbnailUrl && !failed;
+  /*
+   * Our own origin, never Meta's URL directly — see the route's header comment.
+   * The short version: a quarter of these URLs are `www.facebook.com/ads/…`,
+   * which content blockers drop, and all of them expire between syncs. The key
+   * identifies the asset; the proxy re-resolves it when it has gone stale.
+   */
+  const src = c.creativeKey
+    ? `/api/c/${slug}/creative/${encodeURIComponent(c.creativeKey)}/thumb`
+    : null;
+  const show = c.thumbnailUrl && src && !failed;
 
   return (
     <div
@@ -720,16 +741,15 @@ function Thumb({ creative: c }: { creative: CreativeWithOutcome }) {
       style={{ background: "var(--surface-2)" }}
     >
       {show ? (
-        /* Meta CDN URLs are short-lived and per-client: next/image would need a
-           remotePatterns allowlist for a host that varies, and would cache an
-           asset that expires out from under the cache. */
+        /* Our own tenant-scoped route, so `next/image` would need a
+           remotePatterns entry for our own origin and would cache across a
+           re-resolve. The bytes are already cached by the route's headers. */
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={c.thumbnailUrl ?? ""}
+          src={src ?? ""}
           alt={c.title ? `Creative: ${c.title}` : "Ad creative preview"}
           className="h-full w-full object-cover"
           loading="lazy"
-          referrerPolicy="no-referrer"
           onError={() => setFailed(true)}
         />
       ) : (
@@ -739,7 +759,7 @@ function Thumb({ creative: c }: { creative: CreativeWithOutcome }) {
         >
           <Icon name={TYPE_ICON[c.creativeType]} size={22} />
           <span className="text-[10px] uppercase tracking-wider">
-            {c.thumbnailUrl ? "Preview expired" : "No preview"}
+            {c.thumbnailUrl ? "Preview unavailable" : "No preview"}
           </span>
         </div>
       )}

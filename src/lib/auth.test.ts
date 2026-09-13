@@ -146,6 +146,10 @@ const CLIENT_TIER_ROUTES: string[] = [
   "c/[slug]/branding/logo/route.ts",
   // Which sections a client has hidden on their own dashboard is theirs to set.
   "c/[slug]/layout/route.ts",
+  // Creative preview images, proxied from Meta. The creative grid is on the
+  // client's own dashboard, so an agency-tier guard here would render it as a
+  // wall of broken cards for exactly the person it is built for.
+  "c/[slug]/creative/[key]/thumb/route.ts",
 ];
 
 function requiredTier(rel: string): Tier {

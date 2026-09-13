@@ -640,6 +640,36 @@ export async function getGoogleAccountSummary(
 }
 
 /**
+ * The first and last day this client has ANY ad data for, on one platform.
+ *
+ * 🔴 The empty dashboard this exists to explain. An ad account that stopped
+ * spending before the selected range renders exactly like a broken pipe: every
+ * tile dashes out and nothing on screen says the data is simply somewhere else
+ * in time. The date picker's presets only reach back a year and its calendar
+ * pages one month per click, so on a dormant account the operator has no way to
+ * discover where the spend actually lives — they conclude the sync is broken.
+ *
+ * Null when the client has no rows at all, which is a different sentence and
+ * belongs to `adPipeState` rather than here.
+ */
+export async function getAdDataExtent(
+  clientId: string,
+  platform: AdPlatform = "meta",
+): Promise<{ firstKey: string; lastKey: string } | null> {
+  const simple = simpleAdTable(platform);
+  const table = simple ? simple.table : fbDailyMetrics;
+  const [row] = await db
+    .select({
+      firstKey: sql<string | null>`MIN(${table.date})`,
+      lastKey: sql<string | null>`MAX(${table.date})`,
+    })
+    .from(table)
+    .where(eq(table.clientId, clientId));
+  if (!row?.firstKey || !row?.lastKey) return null;
+  return { firstKey: row.firstKey, lastKey: row.lastKey };
+}
+
+/**
  * Reach for an exact period, from the separately-queried cache.
  *
  * Returns null when we have not queried that precise window — better an honest

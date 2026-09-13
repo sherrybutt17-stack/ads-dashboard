@@ -182,6 +182,25 @@ describe("proxy carve-out for client-role users", () => {
     }
   });
 
+  it("lets a client fetch their own creative previews, read-only", () => {
+    // The creative grid renders on the CLIENT's dashboard, so a missing entry
+    // here is a grid of broken cards for the only person it is built for.
+    expect(
+      clientApiCarveOut("/api/c/acme/creative/abc123/thumb", "GET", MINE),
+    ).toBe(true);
+    // Another tenant's asset stays out of reach even with a valid session.
+    expect(
+      clientApiCarveOut("/api/c/other/creative/abc123/thumb", "GET", MINE),
+    ).toBe(false);
+    // Previews are readable, never writable.
+    for (const m of ["PUT", "POST", "DELETE", "PATCH"]) {
+      expect(
+        clientApiCarveOut("/api/c/acme/creative/abc123/thumb", m, MINE),
+        m,
+      ).toBe(false);
+    }
+  });
+
   it("proxy.ts uses this rule rather than its own copy", async () => {
     // Guards the guard from the other direction: the decision table above is
     // only meaningful if the proxy actually calls into it.

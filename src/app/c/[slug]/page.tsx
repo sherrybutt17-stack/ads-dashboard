@@ -11,6 +11,8 @@ import { refreshTiktokIfStale } from "@/lib/tiktok/sync";
 import { activeGoogleAccountsForDisplay } from "@/lib/google/accounts";
 import { activeTiktokAccountsForDisplay } from "@/lib/tiktok/accounts";
 import type { AdPlatform } from "@/lib/metrics/queries";
+import { getAdDataExtent } from "@/lib/metrics/queries";
+import { outOfRangeNotice } from "@/lib/metrics/data-extent";
 import { parseAdPlatform } from "@/lib/platforms";
 import {
   trailingWindowInclusive,
@@ -49,6 +51,7 @@ import {
   renderSection,
   NoWebhookBanner,
   AttributionBanner,
+  OutOfRangeBanner,
   CAMPAIGN_DOTS,
   type SectionContext,
 } from "@/lib/dashboard/sections";
@@ -209,8 +212,16 @@ export default async function ClientDashboard({
 
   const visibleSections = new Set(tabSections.map((d) => d.id));
 
-  const [data, google, tiktok, adPipe, branding, summaries, commentary] =
-    await Promise.all([
+  const [
+    data,
+    google,
+    tiktok,
+    adPipe,
+    branding,
+    summaries,
+    commentary,
+    adExtent,
+  ] = await Promise.all([
       loadDashboard(client, { ...range, sections: visibleSections }, platform),
       /*
        * Degrades to "no Google accounts" rather than throwing. This table gains
@@ -253,6 +264,13 @@ export default async function ClientDashboard({
       staff
         ? loadCommentaryForEditor(client, platform, commentaryMonth)
         : Promise.resolve(null),
+      /*
+       * One MIN/MAX over an indexed date column, so it costs nothing and runs
+       * on every load rather than only when the range turns up empty — which
+       * would mean a second round trip at exactly the moment the page has
+       * nothing to show.
+       */
+      getAdDataExtent(client.id, platform),
     ]);
   const crmPipe = getCrmPipeStatus(client);
   const { current, daily } = data;
@@ -283,6 +301,13 @@ export default async function ClientDashboard({
    * healthy and an empty panel is free to mean what it looks like.
    */
   const adState = adPipeState(adPipe, { staff, slug });
+  /*
+   * Only when the pipe itself is healthy. If Meta is unreachable or still
+   * backfilling, THAT is the reason the range is empty, and offering to jump to
+   * a different date range would send someone chasing a range problem while the
+   * connection is the thing that is actually broken.
+   */
+  const outOfRange = adState ? null : outOfRangeNotice(range, adExtent);
   const crmState = (emptyPanel: boolean) =>
     crmPipeState(crmPipe, { staff, slug, emptyPanel });
 
@@ -713,6 +738,16 @@ export default async function ClientDashboard({
           )}
           {staff && data.attributionGap && (
             <AttributionBanner slug={slug} platform={platform} />
+          )}
+          {/* Not staff-gated: a client looking at their own dormant account
+              deserves the same explanation, and the link only moves the date
+              range — it reaches nothing they cannot already see. */}
+          {outOfRange && (
+            <OutOfRangeBanner
+              slug={slug}
+              platform={platform}
+              notice={outOfRange}
+            />
           )}
 
           {/*

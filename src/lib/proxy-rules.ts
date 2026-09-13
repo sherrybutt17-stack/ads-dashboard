@@ -30,6 +30,13 @@ const CLIENT_RESOURCES: Record<string, readonly string[]> = {
    * destructive verb on a preference, not on data.
    */
   layout: ["GET", "PUT", "DELETE"],
+  /*
+   * Ad creative preview images, proxied from Meta. GET-only, and a read that
+   * goes deeper (`creative/<key>/thumb`). Listed here because the creative grid
+   * is on the client's own dashboard: without this line the agency would see
+   * every thumbnail and the client would see a grid of broken cards.
+   */
+  creative: ["GET"],
 };
 
 /**
