@@ -31,7 +31,18 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="flex min-h-full flex-col">{children}</body>
+      {/*
+        Suppressed for the same reason as <html>, but a different culprit:
+        browser extensions inject attributes onto <body> before React
+        hydrates — ColorZilla's `cz-shortcut-listen`, password managers,
+        grammar checkers — and React reports each one as a hydration mismatch.
+        Observed on /login as a red console error caused by nothing in this
+        codebase. The flag covers attributes on this element only, so a real
+        mismatch in the tree below still reports normally.
+      */}
+      <body className="flex min-h-full flex-col" suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }
