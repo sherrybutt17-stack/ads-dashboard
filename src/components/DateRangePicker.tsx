@@ -34,6 +34,38 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
   const calendarTrigger = useRef<HTMLButtonElement>(null);
+  /*
+   * Where to paint the popover, measured from the trigger.
+   *
+   * 🔴 The popover CANNOT be positioned by CSS relative to its trigger, because
+   * it no longer lives next to it — see the stacking-context note where it is
+   * rendered. Portalled to <body>, `absolute right-0` would resolve against the
+   * document instead of the button, so the coordinates are taken from the
+   * trigger's own rect and re-taken whenever the page moves under it.
+   */
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(
+    null,
+  );
+
+  const place = useCallback(() => {
+    const el = calendarTrigger.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setAnchor({ top: r.bottom + 8, right: window.innerWidth - r.right });
+  }, []);
+
+  // The header is sticky, so scrolling moves the trigger under a popover that
+  // would otherwise stay where it was first painted.
+  useEffect(() => {
+    if (!open) return;
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
 
   // Escape shuts the calendar and hands focus back to the button that opened
   // it. Deliberately not a focus trap — a popover you cannot click past is a
@@ -143,7 +175,11 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
         <div className="relative">
           <button
             ref={calendarTrigger}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => {
+              // Measure before paint so the popover never flashes at 0,0.
+              if (!open) place();
+              setOpen((v) => !v);
+            }}
             aria-pressed={activeId === "custom"}
             aria-expanded={open}
             aria-haspopup="dialog"
@@ -160,25 +196,43 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
           </button>
 
           {open && (
-            <>
-              {/*
-                Portalled: this catcher lives inside the sticky header, whose
-                `backdrop-filter` makes it the containing block for fixed
-                descendants. Rendered in place it covered only the header strip,
-                so clicking anywhere on the page below left the picker open.
-              */}
-              <Portal>
-                <div
-                  className="fixed inset-0 z-20"
-                  onClick={() => setOpen(false)}
-                  aria-hidden="true"
-                />
-              </Portal>
+            /*
+             * 🔴 The catcher AND the dialog both go through the portal, and
+             * they have to travel together.
+             *
+             * The catcher was portalled on its own to fix a real bug: it lives
+             * inside the sticky header, whose `backdrop-filter` makes that
+             * header the containing block for fixed descendants, so in place it
+             * covered only the header strip and clicking the page below left
+             * the picker open.
+             *
+             * But `backdrop-filter` also opens a STACKING CONTEXT, and that is
+             * what broke the calendar. The dialog left behind was `z-30` inside
+             * a header painted at `z-10`, while the portalled catcher sat at
+             * `z-20` in the ROOT context — above the entire header, dialog
+             * included. The catcher covered the calendar and swallowed every
+             * click on it: pressing "‹" to go back a month dismissed the
+             * popover instead, so the calendar could not be navigated at all
+             * and no range before the current month was reachable.
+             *
+             * Both in the same context, dialog above catcher, is the fix.
+             */
+            <Portal>
+              <div
+                className="fixed inset-0 z-[100]"
+                onClick={() => setOpen(false)}
+                aria-hidden="true"
+              />
               <div
                 role="dialog"
                 aria-label="Pick a custom date range"
-                className="absolute right-0 z-30 mt-2 rounded-[12px] p-3"
+                className="fixed z-[101] rounded-[12px] p-3"
                 style={{
+                  top: anchor?.top ?? 0,
+                  // Clamped so the popover cannot be pushed off-screen on a
+                  // narrow viewport, where the trigger sits near the edge.
+                  right: Math.max(8, anchor?.right ?? 8),
+                  visibility: anchor ? "visible" : "hidden",
                   background: "var(--surface-raised)",
                   border: "1px solid var(--border-strong)",
                   boxShadow: "var(--shadow-overlay)",
@@ -196,7 +250,7 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
                   onApply={applyRange}
                 />
               </div>
-            </>
+            </Portal>
           )}
         </div>
       </div>

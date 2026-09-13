@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import {
   addMonths,
   subMonths,
+  addYears,
+  subYears,
   startOfMonth,
   endOfMonth,
   startOfWeek,
@@ -88,21 +90,48 @@ export function RangeCalendar({
 
   return (
     <div className="select-none" style={{ width: 260 }}>
-      {/* Month nav */}
-      <div className="mb-2 flex items-center justify-between">
-        <NavBtn label="Previous month" onClick={() => setView((v) => subMonths(v, 1))}>
-          ‹
-        </NavBtn>
-        <span className="text-[13px] font-semibold" style={{ color: "var(--text-primary)" }}>
+      {/*
+        Month AND year nav.
+        
+        A month-at-a-time control is fine for last quarter and useless for a
+        dormant ad account: reaching July 2024 from this September is
+        twenty-six clicks, which is not a thing anyone does — they conclude the
+        calendar is broken and give up. The year arrows make any month inside
+        Meta's 37-month retention two clicks away.
+      */}
+      <div className="mb-2 flex items-center justify-between gap-0.5">
+        <div className="flex items-center gap-0.5">
+          <NavBtn label="Previous year" onClick={() => setView((v) => subYears(v, 1))}>
+            «
+          </NavBtn>
+          <NavBtn label="Previous month" onClick={() => setView((v) => subMonths(v, 1))}>
+            ‹
+          </NavBtn>
+        </div>
+        <span
+          className="text-[13px] font-semibold whitespace-nowrap"
+          style={{ color: "var(--text-primary)" }}
+        >
           {format(view, "MMMM yyyy")}
         </span>
-        <NavBtn
-          label="Next month"
-          disabled={isSameMonth(view, t0) || isAfter(view, t0)}
-          onClick={() => setView((v) => addMonths(v, 1))}
-        >
-          ›
-        </NavBtn>
+        <div className="flex items-center gap-0.5">
+          <NavBtn
+            label="Next month"
+            disabled={isSameMonth(view, t0) || isAfter(view, t0)}
+            onClick={() => setView((v) => addMonths(v, 1))}
+          >
+            ›
+          </NavBtn>
+          <NavBtn
+            // A year forward from any month of this year overshoots today, so
+            // the bound is the same one the month arrow uses, a year out.
+            label="Next year"
+            disabled={isSameMonth(addYears(view, 1), t0) || isAfter(addYears(view, 1), t0)}
+            onClick={() => setView((v) => addYears(v, 1))}
+          >
+            »
+          </NavBtn>
+        </div>
       </div>
 
       {/* Weekday header */}
@@ -131,6 +160,7 @@ export function RangeCalendar({
 
           return (
             <button
+              type="button"
               key={d.toISOString()}
               onClick={() => click(d)}
               onMouseEnter={() => setHover(d)}
@@ -201,6 +231,7 @@ function NavBtn({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
