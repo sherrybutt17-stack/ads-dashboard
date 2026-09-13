@@ -14,7 +14,13 @@ const BodySchema = z.object({
   action: z
     .enum(["meta_sync", "meta_backfill", "ghl_backfill"])
     .default("meta_sync"),
-  days: z.number().int().min(1).max(365).default(90),
+  /*
+   * Meta retains insights for ~37 months, so the ceiling is 36 to leave a
+   * month of margin. 365 was the old cap and it silently made dormant
+   * accounts look empty: an account whose spend ended 17 months ago returned
+   * zero rows from a backfill that reported success.
+   */
+  days: z.number().int().min(1).max(1095).default(90),
 });
 
 /** Manual sync triggers, used by the onboarding wizard and the Re-test button. */

@@ -2615,6 +2615,11 @@ function WebhookStep({
 
 /* ------------------------------------------------------------------ */
 
+/** "90 days" / "12 months" / "36 months", for button and result copy. */
+function windowLabel(days: number): string {
+  return days >= 365 ? `${Math.round(days / 30.44 / 12) * 12} months` : `${days} days`;
+}
+
 function BackfillStep({
   clientId,
   slug,
@@ -2626,6 +2631,12 @@ function BackfillStep({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; msg: string } | null>(null);
+  /*
+   * An account that stopped spending more than 90 days ago returns nothing
+   * from the default window, and a backfill reporting "0 rows" reads as a
+   * broken connection rather than an old one. Meta keeps ~37 months.
+   */
+  const [days, setDays] = useState(90);
 
   async function run(action: "meta_backfill" | "ghl_backfill") {
     setBusy(action);
@@ -2634,7 +2645,7 @@ function BackfillStep({
       const res = await fetch(`/api/clients/${clientId}/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, days: 90 }),
+        body: JSON.stringify({ action, days }),
       });
       const body = await res.json();
       setMsg(
@@ -2643,7 +2654,9 @@ function BackfillStep({
               ok: true,
               msg:
                 action === "meta_backfill"
-                  ? `Imported ${body.rowsWritten} daily metric rows.`
+                  ? body.rowsWritten === 0
+                    ? `No spend found in the last ${windowLabel(days)}. The connection works — this account simply has no activity in that window. Try a longer one.`
+                    : `Imported ${body.rowsWritten} daily metric rows.`
                   : `Snapshotted ${body.opportunities} opportunities (${body.transitions} arrivals). ${body.note}`,
             }
           : { ok: false, msg: failureText(body, "Failed") },
@@ -2659,7 +2672,26 @@ function BackfillStep({
       title="Import historical data"
       description="Optional, run once. Meta history imports fully; GHL history does not."
     >
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="sr-only" htmlFor="backfill-window">
+          How far back to import Meta data
+        </label>
+        <select
+          id="backfill-window"
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          disabled={busy !== null}
+          className="rounded-[8px] border px-2 py-2 text-[13px] disabled:opacity-50"
+          style={{
+            borderColor: "var(--border-strong)",
+            color: "var(--text-secondary)",
+            background: "var(--surface-raised)",
+          }}
+        >
+          <option value={90}>Last 90 days</option>
+          <option value={365}>Last 12 months</option>
+          <option value={1095}>Last 36 months</option>
+        </select>
         <button
           onClick={() => run("meta_backfill")}
           disabled={busy !== null}
@@ -2671,7 +2703,7 @@ function BackfillStep({
         >
           {busy === "meta_backfill"
             ? "Importing…"
-            : "Import 90 days of Meta data"}
+            : `Import ${windowLabel(days)} of Meta data`}
         </button>
         <button
           onClick={() => run("ghl_backfill")}
