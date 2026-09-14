@@ -38,7 +38,20 @@ export function Funnel({
   steps: FunnelStep[];
   exits?: { no_show: number; lost: number };
 }) {
-  const top = steps[0]?.count ?? 0;
+  /*
+   * 🔴 Scaled to the LARGEST stage, not the first one.
+   *
+   * A funnel normally narrows, so the first stage is the widest and dividing
+   * by it gives every bar a width between 0 and 100%. This book breaks that
+   * assumption: leads arrive already booked, so New Lead was 2 while
+   * Appointment Booked was 21 — a width of 1050%, and three bars ran straight
+   * out through the side of the card.
+   *
+   * Using the maximum keeps every bar inside its container whatever shape the
+   * data turns out to be, and the bars stay comparable to each other because
+   * they are still all measured against one number.
+   */
+  const scale = steps.reduce((m, s) => Math.max(m, s.count), 0);
 
   return (
     <div className="card p-5">
@@ -54,12 +67,12 @@ export function Funnel({
         </span>
       </div>
 
-      {top === 0 ? (
+      {scale === 0 ? (
         <EmptyFunnel />
       ) : (
         <div className="mt-4 flex flex-col">
           {steps.map((step, i) => {
-            const pctOfTop = top > 0 ? step.count / top : 0;
+            const pctOfTop = scale > 0 ? step.count / scale : 0;
             return (
               <div key={step.stage}>
                 <div
@@ -115,10 +128,28 @@ export function Funnel({
                         minHeight: 22,
                       }}
                     >
-                      <span className="tnum">
-                        {formatPercent(steps[i + 1].conversionFromPrevious, 1)}{" "}
-                        continue
-                      </span>
+                      {/*
+                        A rate above 100% is not a continuation — it means the
+                        later stage was entered by leads that never passed
+                        through the earlier one, which is what an ads-to-calendar
+                        funnel does. Printing "300.0% continue" states something
+                        that cannot be true; naming the extra arrivals says what
+                        actually happened.
+                      */}
+                      {(steps[i + 1].conversionFromPrevious ?? 0) > 1 ? (
+                        <span className="tnum">
+                          +{formatNumber(steps[i + 1].count - steps[i].count)}{" "}
+                          entered here directly
+                        </span>
+                      ) : (
+                        <span className="tnum">
+                          {formatPercent(
+                            steps[i + 1].conversionFromPrevious,
+                            1,
+                          )}{" "}
+                          continue
+                        </span>
+                      )}
                       {steps[i + 1].droppedFromPrevious !== null &&
                         steps[i + 1].droppedFromPrevious! > 0 && (
                           <span className="tnum">
