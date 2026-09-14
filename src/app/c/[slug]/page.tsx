@@ -503,7 +503,24 @@ export default async function ClientDashboard({
           }}
         >
           <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-3 px-4 py-3.5 sm:px-6">
-            <div className="flex min-w-0 flex-1 items-center gap-3">
+            {/*
+              `basis-[15rem]`, not a bare `flex-1`.
+              
+              🔴 `flex-1` is `flex: 1 1 0%` — a ZERO basis, so this block only
+              ever receives space the controls opposite it did not want. The
+              controls are one flex item that wraps internally, so it never
+              yields the line; it just grows. Connecting a second ad platform
+              added the Facebook/TikTok toggle to that row and pushed it over,
+              and the client name — the one thing on screen identifying whose
+              dashboard this is — collapsed to "Eb..". The header still looked
+              deliberate, which is why it reads as a rendering fault rather than
+              a layout one.
+              
+              A real basis makes the two items unable to share a line once the
+              controls grow, so the parent's `flex-wrap` does its job and drops
+              them to a second row with the name intact.
+            */}
+            <div className="flex min-w-0 flex-1 basis-[15rem] items-center gap-3">
               {branding.hasLogo ? (
                 /*
                  * The client's own mark, at the client's own dashboard.
@@ -558,7 +575,7 @@ export default async function ClientDashboard({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
               <SyncIndicator syncedAt={data.client.lastSyncedAt} />
               {platforms.length > 1 && (
                 <div
