@@ -229,9 +229,20 @@ export const SECTIONS: readonly SectionDef[] = [
     label: "Written summary",
     description:
       "A drafted update for this period, in four framings — edited by a person, published deliberately.",
-    // Above the numbers, because it is written by reading them and the reader
-    // of a report meets the words first.
-    defaultOrder: 27,
+    /*
+     * BELOW the numbers, at the operator's request.
+     *
+     * It sat above them on the reasoning that a report's reader meets the words
+     * first. That is true of a finished report and wrong for this screen: the
+     * Reports tab is where the agency goes to READ the tables, and an empty
+     * draft box with "Nothing drafted for this framing yet" was the first thing
+     * on it every time. The prose is written BY reading the figures, so the
+     * figures come first and the writing surfaces sit under them.
+     *
+     * The published report document is unaffected — its order is
+     * `REPORT_SECTIONS` below, which is a separate list.
+     */
+    defaultOrder: 101,
     defaultVisible: true,
     cadence: "range",
     dataKeys: [],
@@ -244,8 +255,9 @@ export const SECTIONS: readonly SectionDef[] = [
     description:
       "What we did and what happens next, written per calendar month — and last month's plan answered against this month's figures.",
     // Directly under the written summary: both are prose the agency writes by
-    // reading the numbers, and they are edited in the same sitting.
-    defaultOrder: 28,
+    // reading the numbers, and they are edited in the same sitting. They moved
+    // to the foot of the tab together, for the reason recorded above.
+    defaultOrder: 102,
     defaultVisible: true,
     /*
      * `month`, not `range`. Every other cadence on this dashboard follows the
@@ -645,7 +657,15 @@ export const SECTIONS: readonly SectionDef[] = [
     label: "Report tables",
     description:
       "Moving averages, 7-day change, 14-day daily and month-on-month — the source sheet's four views.",
-    defaultOrder: 100,
+    /*
+     * Directly after `budget_delivery` (45), so the Reports tab opens on the
+     * figures rather than on an empty drafting box — see `weekly_summary`.
+     * Still after `funnel` (40), which `layout.test.ts` pins: a section's
+     * default position is what a NEW section inherits, and jumping this one
+     * ahead of the funnel would reorder the page for reasons unrelated to this
+     * change.
+     */
+    defaultOrder: 46,
     defaultVisible: true,
     cadence: "fixed_windows",
     dataKeys: [], // loaded separately, behind its own Suspense boundary

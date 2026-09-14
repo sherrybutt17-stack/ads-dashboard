@@ -141,17 +141,24 @@ describe("the six resolution rules", () => {
      * COUNT, since every unlisted section is inserted visible. A mutation test
      * caught exactly that.
      *
-     * `report_tables` is the probe because it is LAST by default: if the stored
-     * row is honoured it jumps to the front, and if it is ignored it stays at
-     * the back. Order and `isNew` then both discriminate.
+     * The probe is whichever section is LAST by default: if the stored row is
+     * honoured it jumps to the front, and if it is ignored it stays at the
+     * back. Order and `isNew` then both discriminate.
+     *
+     * DERIVED, not named. This was hardcoded to `report_tables`, which stopped
+     * being last the moment the Reports tab was reordered to put the figures
+     * above the drafting boxes. The test still passed — and silently stopped
+     * testing what its comment claimed, because a probe that starts halfway up
+     * proves much less by moving to the front.
      */
-    const stored = { sections: [{ id: "report_tables", visible: true }] };
     // Computed for the audience being resolved: without `staff: true` the
     // registry these calls see excludes staff-only sections entirely.
     const defaultOrder = [...SECTIONS]
       .filter((s) => !s.staffOnly)
       .sort((a, b) => a.defaultOrder - b.defaultOrder)
       .map((s) => s.id);
+    const probe = defaultOrder[defaultOrder.length - 1];
+    const stored = { sections: [{ id: probe, visible: true }] };
 
     const future = resolveLayoutFull({
       ...stored,
@@ -167,7 +174,7 @@ describe("the six resolution rules", () => {
       schemaVersion: LAYOUT_SCHEMA_VERSION,
     });
     expect(honoured.map((s) => s.def.id)).not.toEqual(defaultOrder);
-    expect(honoured.map((s) => s.def.id).indexOf("report_tables")).toBeLessThan(
+    expect(honoured.map((s) => s.def.id).indexOf(probe)).toBeLessThan(
       honoured.length - 1,
     );
     expect(honoured.some((s) => s.isNew)).toBe(true);
