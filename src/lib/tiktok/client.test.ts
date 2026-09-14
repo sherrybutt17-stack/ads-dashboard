@@ -122,6 +122,69 @@ describe("requests", () => {
     expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
   });
 
+  it("🔴 asks /advertiser/info/ for `name`, never `advertiser_name`", async () => {
+    /*
+     * TikTok names this field differently on the two endpoints that return it.
+     * `/oauth2/advertiser/get/` answers with `advertiser_name`;
+     * `/advertiser/info/` accepts only `name` and refuses `advertiser_name`
+     * with a 40002 listing all thirty legal names. Verified against the live
+     * API: the wrong spelling fails the WHOLE call for every id in the chunk,
+     * so a one-word typo showed up on screen as all 26 advertisers reporting
+     * "? · ?" for currency and timezone — which reads as TikTok withholding
+     * data, not as us asking wrongly.
+     */
+    const spy = stubFetch(async () => envelope({ code: 0, data: { list: [] } }));
+    await client().getAdvertisers(["7012345678901234567"]);
+    const url = String((spy.mock.calls[0] as unknown as [URL, RequestInit])[0]);
+    const fields = JSON.parse(
+      new URL(url).searchParams.get("fields") ?? "[]",
+    ) as string[];
+    expect(fields).toContain("name");
+    expect(fields).not.toContain("advertiser_name");
+    // The other three are load-bearing: currency and timezone drive the picker
+    // and the day-bucketing, and the id is what the rows are keyed by.
+    expect(fields).toEqual(
+      expect.arrayContaining(["advertiser_id", "currency", "timezone"]),
+    );
+  });
+
+  it("normalises `name` back to `advertiser_name` for callers", async () => {
+    // The two endpoints must not leak two spellings into the rest of the app —
+    // `discoverTiktokAdvertisers` merges their results by id and reads one key.
+    stubFetch(async () =>
+      envelope({
+        code: 0,
+        data: {
+          list: [
+            {
+              advertiser_id: "7012345678901234567",
+              name: "Time to Smile (A)",
+              currency: "USD",
+              timezone: "Etc/GMT+8",
+            },
+          ],
+        },
+      }),
+    );
+    const [row] = await client().getAdvertisers(["7012345678901234567"]);
+    expect(row.advertiser_name).toBe("Time to Smile (A)");
+    expect(row.currency).toBe("USD");
+    expect(row.timezone).toBe("Etc/GMT+8");
+  });
+
+  it("stringifies an advertiser id TikTok returns as a number", async () => {
+    // These ids exceed Number.MAX_SAFE_INTEGER, and the picker keys its map on
+    // the string form — a number here would miss every lookup and show "?".
+    stubFetch(async () =>
+      envelope({
+        code: 0,
+        data: { list: [{ advertiser_id: 7012345678901234567, name: "X" }] },
+      }),
+    );
+    const [row] = await client().getAdvertisers(["7012345678901234567"]);
+    expect(typeof row.advertiser_id).toBe("string");
+  });
+
   it("asks for auction campaign delivery, day by day", async () => {
     const spy = stubFetch(async () => envelope({ code: 0, data: { list: [] } }));
     await client().getDailyInsights("7012345678901234567", "2026-07-01", "2026-07-31");

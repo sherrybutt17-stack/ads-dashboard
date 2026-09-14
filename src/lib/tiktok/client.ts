@@ -84,7 +84,22 @@ export class TiktokApiError extends Error {
 
 export interface TiktokAdvertiser {
   advertiser_id: string;
+  /**
+   * Normalised by us, because TikTok calls this field two different things.
+   *
+   * `/oauth2/advertiser/get/` returns `advertiser_name`. `/advertiser/info/`
+   * calls the identical value `name` and REJECTS `advertiser_name` outright —
+   * see `getAdvertisers`. Callers get one spelling either way.
+   */
   advertiser_name?: string;
+  currency?: string;
+  timezone?: string;
+}
+
+/** `/advertiser/info/` rows, in TikTok's own spelling, before normalising. */
+interface TiktokAdvertiserInfoRow {
+  advertiser_id: string | number;
+  name?: string;
   currency?: string;
   timezone?: string;
 }
@@ -197,19 +212,43 @@ export class TiktokClient {
 
     for (let i = 0; i < ids.length; i += ADVERTISER_INFO_CHUNK) {
       const chunk = ids.slice(i, i + ADVERTISER_INFO_CHUNK);
-      const data = await this.request<{ list?: TiktokAdvertiser[] }>(
+      const data = await this.request<{ list?: TiktokAdvertiserInfoRow[] }>(
         "/advertiser/info/",
         {
           advertiser_ids: JSON.stringify(chunk),
+          /*
+           * 🔴 `name`, NOT `advertiser_name`.
+           *
+           * TikTok names this field differently on the two endpoints that
+           * return it: `/oauth2/advertiser/get/` answers with
+           * `advertiser_name`, and `/advertiser/info/` accepts only `name` and
+           * refuses `advertiser_name` with a 40002 whose message lists all 30
+           * legal field names. Asking for the wrong one does not degrade the
+           * response — it fails the WHOLE call, for every id in the chunk.
+           *
+           * Which is how it presented: the picker listed every advertiser by
+           * name from the first endpoint, and showed "? · ?" for currency and
+           * timezone on all 26 of them, because this call had thrown and been
+           * caught as "detail unavailable". A field-name typo reads on screen
+           * as TikTok withholding data it was never asked for correctly.
+           */
           fields: JSON.stringify([
             "advertiser_id",
-            "advertiser_name",
+            "name",
             "currency",
             "timezone",
           ]),
         },
       );
-      out.push(...(data.list ?? []));
+      // Normalised to the shared shape so callers never see the second spelling.
+      out.push(
+        ...(data.list ?? []).map((r) => ({
+          advertiser_id: String(r.advertiser_id),
+          advertiser_name: r.name,
+          currency: r.currency,
+          timezone: r.timezone,
+        })),
+      );
     }
     return out;
   }
