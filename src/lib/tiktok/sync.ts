@@ -137,6 +137,72 @@ export async function syncClientTiktokMetrics(
   }
 }
 
+/**
+ * Backfill a TikTok advertiser's history, chunked by month.
+ *
+ * 🔴 Without this, a newly connected advertiser only ever received the trailing
+ * 28-day reconcile window — and TikTok's enum already carried `tiktok_backfill`
+ * as a kind nothing ever wrote. Meta has `backfillClientMetrics` and Google has
+ * its own; TikTok was the sibling that never got one, so connecting an
+ * advertiser with years of delivery produced a dashboard showing only the last
+ * four weeks, which for a paused account is an empty one. Measured on the first
+ * real advertiser connected: Feb 2024 through Jun 2026 of spend, none of it
+ * reachable, and nothing on screen saying so.
+ *
+ * Chunked rather than one call for the same reason as Meta's: a throttle
+ * mid-way loses only the current month, and TikTok's report endpoint paginates
+ * per request.
+ */
+export async function backfillClientTiktokMetrics(
+  client: Client,
+  days = 365,
+): Promise<number> {
+  const [run] = await db
+    .insert(syncRuns)
+    .values({ clientId: client.id, kind: "tiktok_backfill", status: "running" })
+    .returning({ id: syncRuns.id });
+
+  try {
+    const accounts = await activeTiktokAccounts(client.id);
+    if (accounts.length === 0) {
+      throw new Error("Client has no TikTok advertiser configured");
+    }
+
+    const window = trailingWindowInclusive(days, client.timezone);
+    let total = 0;
+    let cursor = window.startKey;
+    let guard = 0;
+
+    while (cursor <= window.endKey && guard++ < 60) {
+      const [y, m] = cursor.split("-").map(Number);
+      const lastOfMonth = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+      const chunkEnd = lastOfMonth < window.endKey ? lastOfMonth : window.endKey;
+
+      for (const account of accounts) {
+        total += await syncAccount(client, account, cursor, chunkEnd);
+      }
+
+      cursor = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+      // Paced, like the Meta backfill: TikTok throttles per advertiser and a
+      // burst of month-sized report queries is exactly what trips it.
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    await db
+      .update(syncRuns)
+      .set({ status: "success", finishedAt: new Date(), rowsWritten: total })
+      .where(eq(syncRuns.id, run.id));
+    return total;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await db
+      .update(syncRuns)
+      .set({ status: "failed", finishedAt: new Date(), error: message })
+      .where(eq(syncRuns.id, run.id));
+    throw err;
+  }
+}
+
 async function syncAccount(
   client: Client,
   account: TiktokAdAccount,

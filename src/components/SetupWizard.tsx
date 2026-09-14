@@ -199,7 +199,12 @@ export function SetupWizard({
       )}
       {/* On the OAuth path WebhookStep (step 6) isn't rendered, so backfill takes
           its number — otherwise the wizard reads 1,2,3,4,5,7 with a missing "6". */}
-      <BackfillStep clientId={clientId} slug={slug} step={usingOauth ? 6 : 7} />
+      <BackfillStep
+        clientId={clientId}
+        slug={slug}
+        step={usingOauth ? 6 : 7}
+        hasTiktok={tiktokAccounts.some((a) => a.status !== "removed")}
+      />
     </div>
   );
 }
@@ -2624,10 +2629,13 @@ function BackfillStep({
   clientId,
   slug,
   step,
+  hasTiktok,
 }: {
   clientId: string;
   slug: string;
   step: number;
+  /** Only offer the TikTok import once an advertiser is actually attached. */
+  hasTiktok: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -2638,7 +2646,9 @@ function BackfillStep({
    */
   const [days, setDays] = useState(90);
 
-  async function run(action: "meta_backfill" | "ghl_backfill") {
+  async function run(
+    action: "meta_backfill" | "tiktok_backfill" | "ghl_backfill",
+  ) {
     setBusy(action);
     setMsg(null);
     try {
@@ -2653,7 +2663,7 @@ function BackfillStep({
           ? {
               ok: true,
               msg:
-                action === "meta_backfill"
+                action === "meta_backfill" || action === "tiktok_backfill"
                   ? body.rowsWritten === 0
                     ? `No spend found in the last ${windowLabel(days)}. The connection works — this account simply has no activity in that window. Try a longer one.`
                     : `Imported ${body.rowsWritten} daily metric rows.`
@@ -2705,6 +2715,21 @@ function BackfillStep({
             ? "Importing…"
             : `Import ${windowLabel(days)} of Meta data`}
         </button>
+        {hasTiktok && (
+          <button
+            onClick={() => run("tiktok_backfill")}
+            disabled={busy !== null}
+            className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+            style={{
+              borderColor: "var(--border-strong)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {busy === "tiktok_backfill"
+              ? "Importing…"
+              : `Import ${windowLabel(days)} of TikTok data`}
+          </button>
+        )}
         <button
           onClick={() => run("ghl_backfill")}
           disabled={busy !== null}

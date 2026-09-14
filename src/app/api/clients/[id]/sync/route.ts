@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { backfillClientMetrics, syncClientMetrics } from "@/lib/meta/sync";
+import { backfillClientTiktokMetrics } from "@/lib/tiktok/sync";
 import { backfillClientSnapshot } from "@/lib/ghl/backfill";
 import { trailingWindowInclusive } from "@/lib/dates";
 import { isSuperadmin, requireClient } from "@/lib/auth";
@@ -12,7 +13,7 @@ export const maxDuration = 300;
 
 const BodySchema = z.object({
   action: z
-    .enum(["meta_sync", "meta_backfill", "ghl_backfill"])
+    .enum(["meta_sync", "meta_backfill", "tiktok_backfill", "ghl_backfill"])
     .default("meta_sync"),
   /*
    * Meta retains insights for ~37 months, so the ceiling is 36 to leave a
@@ -57,6 +58,10 @@ export async function POST(
         const rows = await backfillClientMetrics(client, parsed.data.days);
         return NextResponse.json({ ok: true, rowsWritten: rows });
       }
+      case "tiktok_backfill": {
+        const rows = await backfillClientTiktokMetrics(client, parsed.data.days);
+        return NextResponse.json({ ok: true, rowsWritten: rows });
+      }
       case "ghl_backfill": {
         const res = await backfillClientSnapshot(client);
         return NextResponse.json({
@@ -73,7 +78,12 @@ export async function POST(
      * "Meta did not respond" would send someone to re-check a connection that
      * was never involved.
      */
-    const source = parsed.data.action === "ghl_backfill" ? "ghl" : "meta";
+    const source =
+      parsed.data.action === "ghl_backfill"
+        ? "ghl"
+        : parsed.data.action === "tiktok_backfill"
+          ? "tiktok"
+          : "meta";
     return NextResponse.json(
       {
         ok: false,

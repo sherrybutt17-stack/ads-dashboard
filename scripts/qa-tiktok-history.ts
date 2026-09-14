@@ -19,14 +19,14 @@ const call = async (path: string, token: string, params: Record<string, string |
 async function main() {
   const rows = await q(`
     SELECT c.slug, t.advertiser_id, t.advertiser_name, t.currency, t.timezone,
-           t.token_encrypted, t.status::text, t.last_synced_at::text
+           t.access_token_encrypted, t.status::text, t.last_synced_at::text
       FROM tiktok_ad_accounts t JOIN clients c ON c.id = t.client_id`);
   console.log("attached TikTok advertisers:");
   rows.forEach((r: any) => console.log(`  ${r.slug} · ${r.advertiser_name} (${r.advertiser_id}) · ${r.currency} · ${r.timezone} · ${r.status} · last sync ${r.last_synced_at ?? "never"}`));
   if (!rows.length) return console.log("  (none attached)");
 
   const a = rows[0];
-  const token = decrypt(a.token_encrypted);
+  const token = decrypt(a.access_token_encrypted);
 
   console.log(`\ncampaigns on ${a.advertiser_name}:`);
   const camp = await call("/campaign/get/", token, { advertiser_id: a.advertiser_id, page_size: 100 });
