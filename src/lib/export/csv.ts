@@ -143,12 +143,20 @@ export function buildCsv(table: CsvTable): string {
  * string lands in a `Content-Disposition` header: a client display name
  * carrying a quote or a newline would otherwise split the header, and a name
  * carrying a `/` would look like a path.
+ *
+ * `ext` defaults to `csv` because this was a CSV-only export before there were
+ * other formats, and every existing caller and test predates them. The
+ * extension is slugified with everything else — it reaches here from a format
+ * registry rather than from a request, but a filename builder that trusts one
+ * input and not the others is a filename builder waiting to be handed the
+ * wrong one.
  */
 export function exportFilename(
   slug: string,
   dataset: string,
   startKey: string,
   endKey: string,
+  ext: string = "csv",
 ): string {
   const safe = (s: string) =>
     s
@@ -156,5 +164,5 @@ export function exportFilename(
       .replace(/[^a-z0-9-]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 40) || "export";
-  return `${safe(slug)}-${safe(dataset)}-${safe(startKey)}_${safe(endKey)}.csv`;
+  return `${safe(slug)}-${safe(dataset)}-${safe(startKey)}_${safe(endKey)}.${safe(ext)}`;
 }

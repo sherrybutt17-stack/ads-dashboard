@@ -37,6 +37,22 @@ const CLIENT_RESOURCES: Record<string, readonly string[]> = {
    * every thumbnail and the client would see a grid of broken cards.
    */
   creative: ["GET"],
+  /*
+   * Their own numbers, as a file. GET-only.
+   *
+   * 🔴 This line makes the path REACHABLE; it does not decide which datasets a
+   * client may have. The `leads` dataset carries people's names and is refused
+   * inside the handler, after the session is re-read from the database — the
+   * same division of labour as `branding`, where this rule admits the PUT and
+   * the stored `clientEditable` flag decides whether it is honoured.
+   *
+   * Note the GET-goes-deeper rule below admits `export/<anything>` too. No such
+   * route exists today; if one is ever added under this segment it inherits
+   * client reachability without anyone revisiting this file, which is the
+   * hazard the doc comment above names. Same exposure `branding/logo` already
+   * carries, and accepted on the same terms.
+   */
+  export: ["GET"],
 };
 
 /**

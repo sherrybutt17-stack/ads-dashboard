@@ -1,6 +1,6 @@
 import { TZDate } from "@date-fns/tz";
 import { endOfMonth, format, startOfMonth, subDays, subMonths } from "date-fns";
-import { shiftDateKey } from "@/lib/dates";
+import { rangeLabel, shiftDateKey } from "@/lib/dates";
 import { monthBounds, previousMonthKey } from "@/lib/commentary/model";
 
 /**
@@ -204,4 +204,30 @@ export function isDue(
   ).filter((p) => p.key !== period.key);
 
   return { due: true, period, skipped };
+}
+
+/**
+ * A `Period` for a range somebody picked by hand.
+ *
+ * The scheduled path derives its periods from a cadence, so they are whole
+ * weeks or whole months with names like "September 2026". An ad-hoc send has
+ * neither — it carries whatever range the operator was looking at — but the
+ * email template takes a `Period`, and giving it a second input shape would
+ * mean a second template, which is where the "no figures in the email" property
+ * would quietly stop holding.
+ *
+ * `key` is the end date, matching the scheduled periods' rule that the end key
+ * IS the period's identity. Nothing deduplicates on it here — ad-hoc sends are
+ * deliberately repeatable — but a `Period` whose `key` meant something
+ * different from every other `Period` would be a trap for the next reader.
+ */
+export function adHocPeriod(startKey: string, endKey: string): Period {
+  return {
+    startKey,
+    endKey,
+    key: endKey,
+    // The same label every other range in the product uses — "Aug 20 – Sep 18,
+    // 2026" — rather than two raw ISO dates in a client's subject line.
+    label: rangeLabel(startKey, endKey),
+  };
 }

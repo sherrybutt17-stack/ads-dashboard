@@ -649,19 +649,19 @@ export default async function ClientDashboard({
                 />
               )}
               {/*
-              Staff only, matching the route. Giving clients their own export is
-              reasonable and is one line in `CLIENT_RESOURCES` — but that line
-              changes the security model, and this is not the change that should
-              carry it.
+              Shown to clients too — they can take their own numbers away.
+              `staff` is passed rather than gating the whole menu, because the
+              difference is per-dataset: the lead list carries people's names
+              and stays with the agency. The route refuses it regardless; this
+              only keeps a client from clicking something that answers 403.
             */}
-              {staff && (
-                <ExportMenu
-                  slug={slug}
-                  start={range.startKey}
-                  end={range.endKey}
-                  platform={platform}
-                />
-              )}
+              <ExportMenu
+                slug={slug}
+                start={range.startKey}
+                end={range.endKey}
+                platform={platform}
+                staff={staff}
+              />
               {/*
               These stay in the header rather than moving to the sidebar with
               the rest of the account chrome, because the sidebar is `lg:` and

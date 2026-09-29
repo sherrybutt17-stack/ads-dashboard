@@ -201,6 +201,22 @@ describe("proxy carve-out for client-role users", () => {
     }
   });
 
+
+  it("lets a client download their own export, and only theirs", () => {
+    // Their own numbers as a file. The route additionally refuses the `leads`
+    // dataset to client-role callers — that gate lives in the handler, because
+    // this rule cannot see a query string.
+    expect(clientApiCarveOut("/api/c/acme/export", "GET", MINE)).toBe(true);
+    expect(clientApiCarveOut("/api/c/rival/export", "GET", MINE)).toBe(false);
+  });
+
+  it("refuses every writing verb on export", () => {
+    // An export is a read. Nothing here should ever accept a body.
+    for (const m of ["PUT", "POST", "DELETE", "PATCH"]) {
+      expect(clientApiCarveOut("/api/c/acme/export", m, MINE), m).toBe(false);
+    }
+  });
+
   it("proxy.ts uses this rule rather than its own copy", async () => {
     // Guards the guard from the other direction: the decision table above is
     // only meaningful if the proxy actually calls into it.

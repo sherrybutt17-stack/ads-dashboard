@@ -16,6 +16,7 @@ const CLAIMS: RenderClaims = {
   start: "2026-07-01",
   end: "2026-07-31",
   platform: "meta",
+  dataset: "report",
 };
 
 const NOW = Date.UTC(2026, 6, 14, 12, 0, 0);
@@ -101,14 +102,78 @@ describe("🔴 forgery", () => {
      * it was not issued for.
      */
     const a = mintRenderToken(
-      { clientId: "ab", start: "cd", end: "e", platform: "meta" },
+      { clientId: "ab", start: "cd", end: "e", platform: "meta", dataset: "report" },
       NOW,
     );
     const b = mintRenderToken(
-      { clientId: "abc", start: "d", end: "e", platform: "meta" },
+      { clientId: "abc", start: "d", end: "e", platform: "meta", dataset: "report" },
       NOW,
     );
     expect(a).not.toBe(b);
+  });
+
+  it("🔴 covers the dataset, so a token cannot be replayed against another", () => {
+    /*
+     * The security property of the whole dataset-PDF feature. If `dataset`
+     * were a query parameter instead of a signed claim, a client-role user who
+     * legitimately obtained a token for their own `daily` PDF could edit the
+     * URL and render `leads` — the one dataset carrying people's names, and the
+     * one the export route refuses them.
+     */
+    const token = mintRenderToken({ ...CLAIMS, dataset: "daily" }, NOW);
+    const [body, sig] = token.split(".");
+    const tampered = Buffer.from(body, "base64url")
+      .toString("utf8")
+      .replace("daily", "leads");
+    const forged = `${Buffer.from(tampered, "utf8").toString("base64url")}.${sig}`;
+
+    const got = verifyRenderToken(forged, NOW);
+    expect(got.ok).toBe(false);
+    if (!got.ok) expect(got.reason).toBe("bad_signature");
+  });
+
+  it("round-trips the dataset claim", () => {
+    const got = verifyRenderToken(
+      mintRenderToken({ ...CLAIMS, dataset: "campaigns" }, NOW),
+      NOW,
+    );
+    expect(got.ok).toBe(true);
+    if (got.ok) expect(got.claims.dataset).toBe("campaigns");
+  });
+
+  /** Sign a body exactly as a given version of the module would have. */
+  const signAs = (label: string, body: string) => {
+    const key = createHmac("sha256", process.env.ENCRYPTION_KEY!).update(label).digest();
+    const sig = createHmac("sha256", key).update(body).digest("base64url");
+    return `${Buffer.from(body, "utf8").toString("base64url")}.${sig}`;
+  };
+  const exp = () => Math.floor(NOW / 1000) + 90;
+  const fiveFields = () =>
+    [CLAIMS.clientId, CLAIMS.start, CLAIMS.end, "meta", exp()].join("\n");
+
+  it("🔴 refuses a GENUINE v1 token on its signature", () => {
+    /*
+     * A real v1 token: five fields, signed with the v1-derived key. It must
+     * fail on the SIGNATURE, which proves the label bump rotated the key. An
+     * earlier version of this test used the literal signature "whatever",
+     * which any implementation rejects — it tested nothing about v1.
+     */
+    expect(verifyRenderToken(signAs("report-render-token/v1", fiveFields()), NOW)).toEqual({
+      ok: false,
+      reason: "bad_signature",
+    });
+  });
+
+  it("🔴 refuses a five-field body even when signed with the CURRENT key", () => {
+    /*
+     * The second defence, isolated: a v1-shaped body carries no dataset, so a
+     * validating one would authorise an unspecified table. Signed with the v2
+     * key so the signature passes and only the shape check stands in the way.
+     */
+    expect(verifyRenderToken(signAs("report-render-token/v2", fiveFields()), NOW)).toEqual({
+      ok: false,
+      reason: "malformed",
+    });
   });
 });
 
@@ -163,9 +228,11 @@ describe("malformed input", () => {
 
   it("refuses a correctly-signed payload with the wrong field count", () => {
     // Signed by us, so the signature passes — the shape check is what stops it.
+    // The label must track the current version, or this asserts "bad_signature"
+    // and stops testing the field count it was written for.
     const body = "only\nthree\nfields";
     const key = createHmac("sha256", process.env.ENCRYPTION_KEY!)
-      .update("report-render-token/v1")
+      .update("report-render-token/v2")
       .digest();
     const sig = createHmac("sha256", key).update(body).digest("base64url");
     const token = `${Buffer.from(body).toString("base64url")}.${sig}`;

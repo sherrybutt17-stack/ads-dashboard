@@ -37,7 +37,17 @@ interface ShareLinkView {
   lastViewedAt: string | null;
 }
 
+/** Whether this deployment can send mail, as the share GET reports it. */
+interface EmailConfigView {
+  configured: boolean;
+  /** A sentence written for an operator, or null when the sender is fine. */
+  senderProblem: string | null;
+}
+
 const TTL_OPTIONS = [7, 30, 90] as const;
+
+/** Matches the server's `z.string().email()` closely enough to gate a button. */
+const LOOKS_LIKE_EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 const inputStyle = {
   borderColor: "var(--border-strong)",
@@ -69,6 +79,38 @@ export function ShareReport({
   const [minted, setMinted] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * 🔴 Defaults to "copy", and switching is an explicit act.
+   *
+   * This dialog mints a bearer credential that cannot be recalled. A mode the
+   * operator did not notice they were in is the one way this UI could send a
+   * link to a client that was meant to be pasted into an internal channel —
+   * so the existing behaviour stays the default and email is a deliberate tab.
+   */
+  const [mode, setMode] = useState<"copy" | "email">("copy");
+  const [recipientText, setRecipientText] = useState("");
+  const [message, setMessage] = useState("");
+  const [sentCount, setSentCount] = useState<number | null>(null);
+  const [emailCfg, setEmailCfg] = useState<EmailConfigView | null>(null);
+
+  /*
+   * Split on commas OR whitespace — the same expression `ReportSchedule` uses
+   * for its recipient field, because an operator who learns one should not
+   * discover the other behaves differently. Parsed on every keystroke so the
+   * chips below act as the confirmation that two addresses were actually read
+   * as two.
+   */
+  const recipients = [
+    // De-duplicated case-insensitively, exactly as the server does, so the
+    // chips and the "Send to N" count agree with what is actually sent — and
+    // two identical chips no longer share a React key.
+    ...new Set(
+      recipientText
+        .split(/[,\s]+/)
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
 
   const load = useCallback(async () => {
     try {
@@ -76,6 +118,7 @@ export function ShareReport({
       if (!res.ok) return;
       const json = await res.json();
       setLinks(json.links ?? []);
+      setEmailCfg(json.email ?? null);
     } catch {
       /* the list is supporting detail; a failure to load it must not block
          creating a link, which is what the operator came here to do */
@@ -104,9 +147,66 @@ export function ShareReport({
         return;
       }
       setMinted(json.url);
+      setSentCount(null);
       setCopied(false);
       setLabel("");
       setPassword("");
+      void load();
+    } catch {
+      setError("Could not reach the server");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendByEmail() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/share/email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: recipients,
+          rangeStart,
+          rangeEnd,
+          platform,
+          label: label.trim() || undefined,
+          ttlDays,
+          password: password.trim() || undefined,
+          message: message.trim() || undefined,
+        }),
+      });
+      /*
+       * Tolerant of a body that is not JSON — a proxy's HTML error page, a
+       * timeout. Parsing it used to throw into the catch below, which reported
+       * "Could not reach the server" for a request that HAD reached it and
+       * may well have minted a link.
+       */
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Refresh on every failure: a link may exist even if the body is lost.
+        void load();
+        /*
+         * The route returns the URL alongside the error when the link was
+         * minted but the send failed. Showing it means the operator still has
+         * something to paste rather than starting over — and the link exists
+         * either way, so hiding it would only make it invisible, not absent.
+         */
+        setError(json.error ?? `Could not send the report (HTTP ${res.status}).`);
+        if (json.url) {
+          setMinted(json.url);
+          setCopied(false);
+        }
+        return;
+      }
+      setMinted(json.url);
+      setSentCount(json.recipients ?? recipients.length);
+      setCopied(false);
+      setLabel("");
+      setPassword("");
+      setRecipientText("");
+      setMessage("");
       void load();
     } catch {
       setError("Could not reach the server");
@@ -164,18 +264,200 @@ export function ShareReport({
         open={open}
         onClose={() => {
           setOpen(false);
+          /*
+           * A full reset, not a partial one. `sentCount` surviving a close made
+           * the next COPIED link read "Sent to 1 recipient"; `mode` surviving
+           * it reopened the dialog on "Email it", contradicting the rule that
+           * copying is the default and emailing is a deliberate choice.
+           */
           setMinted(null);
           setError(null);
+          setSentCount(null);
+          setMode("copy");
         }}
         busy={busy}
         title="Share this report"
         description="A read-only link to the figures below. No lead names, emails or phone numbers are included."
       >
         <div className="flex flex-col gap-4">
+          {/*
+           * 🔴 Rendered ABOVE the branch, so it survives the switch to the
+           * minted screen.
+           *
+           * It used to live inside the form only. When a send failed AFTER the
+           * link was minted — an unverified sending domain is the common case —
+           * the route answers with both an error and the url, the url flipped
+           * this to the minted screen, and the error was rendered by the branch
+           * that had just been replaced. The operator saw a green "Link
+           * created" and no indication whatsoever that the email had not gone.
+           * That is the worst possible failure for this feature: silent, and
+           * indistinguishable from success.
+           */}
+          {error && minted && (
+            <p
+              className="rounded-[8px] border px-3 py-2 text-[12px] leading-snug"
+              style={{
+                borderColor: "var(--danger, #b3261e)",
+                color: "var(--danger, #b3261e)",
+              }}
+            >
+              {error}
+            </p>
+          )}
           {minted ? (
-            <MintedLink url={minted} copied={copied} onCopy={copy} onNew={() => setMinted(null)} />
+            <MintedLink
+              url={minted}
+              copied={copied}
+              onCopy={copy}
+              onNew={() => {
+                setMinted(null);
+                setSentCount(null);
+                setError(null);
+              }}
+              sentCount={sentCount}
+              /* Green tick only when nothing went wrong. */
+              failed={Boolean(error)}
+            />
           ) : (
             <>
+              {/*
+                Two ways to deliver the same link. Rendered as tabs rather than
+                a checkbox so the active mode is legible at a glance — the
+                button at the bottom changes what it does, and a control that
+                changes an action's meaning should not be a detail.
+              */}
+              <div
+                className="flex gap-1 rounded-[9px] border p-1"
+                style={{ borderColor: "var(--border)" }}
+                role="tablist"
+                aria-label="How to share"
+              >
+                {(
+                  [
+                    ["copy", "Copy a link"],
+                    ["email", "Email it"],
+                  ] as const
+                ).map(([m, text]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === m}
+                    onClick={() => {
+                      setMode(m);
+                      setError(null);
+                    }}
+                    className="flex-1 rounded-[7px] px-3 py-1.5 text-[12.5px] font-medium transition-colors"
+                    style={{
+                      background:
+                        mode === m ? "var(--surface-2)" : "transparent",
+                      color:
+                        mode === m
+                          ? "var(--text-primary)"
+                          : "var(--text-muted)",
+                    }}
+                  >
+                    {text}
+                  </button>
+                ))}
+              </div>
+
+              {mode === "email" && emailCfg && !emailCfg.configured && (
+                <p
+                  className="rounded-[8px] border px-3 py-2 text-[12px] leading-snug"
+                  style={{
+                    borderColor: "var(--border-strong)",
+                    background: "var(--surface-2)",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  Email is not configured on this deployment, so nothing can be
+                  sent from here. Set <code>RESEND_API_KEY</code> and{" "}
+                  <code>REPORT_FROM</code>, then reload. You can still create a
+                  link and send it yourself.
+                </p>
+              )}
+              {mode === "email" && emailCfg?.senderProblem && (
+                /* Shown verbatim — it is already a sentence for an operator. */
+                <p
+                  className="rounded-[8px] border px-3 py-2 text-[12px] leading-snug"
+                  style={{
+                    borderColor: "var(--border-strong)",
+                    background: "var(--surface-2)",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  {emailCfg.senderProblem}
+                </p>
+              )}
+
+              {mode === "email" && (
+                <>
+                  <Field
+                    label="Send to"
+                    hint="Up to five addresses, separated by commas or spaces. They receive the link — never an attachment, so the figures stay correctable."
+                  >
+                    <input
+                      type="text"
+                      value={recipientText}
+                      onChange={(e) => setRecipientText(e.target.value)}
+                      placeholder="finance@client.com, cfo@client.com"
+                      className={INPUT_CLASS}
+                      style={inputStyle}
+                    />
+                    {recipients.length > 0 && (
+                      /*
+                         The parsed result, shown back. "Typed two addresses
+                         with no separator" is otherwise invisible until the
+                         send fails or, worse, succeeds to one wrong address.
+                      */
+                      <span className="mt-1.5 flex flex-wrap gap-1">
+                        {recipients.map((r) => {
+                          const ok = LOOKS_LIKE_EMAIL.test(r);
+                          return (
+                            <span
+                              key={r}
+                              className="rounded-[5px] border px-1.5 py-0.5 text-[11px]"
+                              style={{
+                                borderColor: ok
+                                  ? "var(--border-strong)"
+                                  : "var(--danger, #b3261e)",
+                                color: ok
+                                  ? "var(--text-secondary)"
+                                  : "var(--danger, #b3261e)",
+                              }}
+                            >
+                              {r}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    )}
+                  </Field>
+
+                  <Field
+                    label="Message (optional)"
+                    hint="Added above the link. Plain text — it is never read as HTML."
+                  >
+                    <textarea
+                      value={message}
+                      onChange={(e) => setMessage(e.target.value)}
+                      placeholder="Here's the July report ahead of Thursday's call."
+                      maxLength={500}
+                      rows={3}
+                      className={INPUT_CLASS}
+                      style={inputStyle}
+                    />
+                    <span
+                      className="mt-1 block text-right text-[11px]"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      {message.length}/500
+                    </span>
+                  </Field>
+                </>
+              )}
+
               <Field
                 label="Period"
                 hint="Fixed permanently. The link will always show this period, not whatever is current when it is opened."
@@ -250,12 +532,33 @@ export function ShareReport({
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => void create()}
-                  disabled={busy}
+                  onClick={() => void (mode === "email" ? sendByEmail() : create())}
+                  /*
+                   * In email mode the button stays disabled until every parsed
+                   * chip is a plausible address and the deployment can actually
+                   * send — a send that 400s after the operator has typed a
+                   * message is a worse experience than a button that explains
+                   * itself by being unavailable.
+                   */
+                  disabled={
+                    busy ||
+                    (mode === "email" &&
+                      (recipients.length === 0 ||
+                        recipients.length > 5 ||
+                        !recipients.every((r) => LOOKS_LIKE_EMAIL.test(r)) ||
+                        emailCfg?.configured === false ||
+                        Boolean(emailCfg?.senderProblem)))
+                  }
                   className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
                   style={{ background: "var(--brand, var(--series-1))" }}
                 >
-                  {busy ? "Creating…" : "Create link"}
+                  {busy
+                    ? mode === "email"
+                      ? "Sending…"
+                      : "Creating…"
+                    : mode === "email"
+                      ? `Send${recipients.length > 1 ? ` to ${recipients.length}` : ""}`
+                      : "Create link"}
                 </button>
                 {error && (
                   <span
@@ -291,11 +594,29 @@ function MintedLink({
   copied,
   onCopy,
   onNew,
+  sentCount,
+  failed,
 }: {
   url: string;
   copied: boolean;
   onCopy: () => void;
   onNew: () => void;
+  /**
+   * True when the link exists but the SEND failed.
+   *
+   * The link is still shown — it was created and is revocable, so hiding it
+   * would only make it invisible, not absent — but the heading must not read
+   * as success.
+   */
+  failed?: boolean;
+  /**
+   * How many addresses it went to, or null when the link was only created.
+   *
+   * The URL is shown either way: after a send the operator often still wants
+   * to paste it somewhere, and offering it here avoids minting a second link
+   * with its own separate expiry to revoke later.
+   */
+  sentCount: number | null;
 }) {
   return (
     <div
@@ -304,9 +625,14 @@ function MintedLink({
     >
       <div
         className="mb-2 flex items-center gap-1.5 text-xs font-medium"
-        style={{ color: "var(--status-good)" }}
+        style={{ color: failed ? "var(--danger, #b3261e)" : "var(--status-good)" }}
       >
-        <Icon name="check" size={12} /> Link created
+        <Icon name={failed ? "alert" : "check"} size={12} />{" "}
+        {failed
+          ? "Link created — but the email was NOT sent"
+          : sentCount === null
+            ? "Link created"
+            : `Sent to ${sentCount} ${sentCount === 1 ? "recipient" : "recipients"}`}
       </div>
       <code
         className="block break-all rounded-[6px] px-2 py-1.5 text-[11px]"
@@ -321,6 +647,13 @@ function MintedLink({
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
           type="button"
+          /*
+           * The minted view REPLACES the form, unmounting whatever had focus,
+           * and the dialog no longer re-seats focus on every render (that was
+           * the one-character-then-focus-lost bug). So focus is placed here,
+           * on the thing the operator does next, instead of falling to <body>.
+           */
+          autoFocus
           onClick={onCopy}
           className="inline-flex items-center gap-1.5 rounded-[7px] border px-2.5 py-1 text-[12px] font-medium"
           style={{

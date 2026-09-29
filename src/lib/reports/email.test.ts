@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EmailError, emailConfig, emailConfigured, senderProblem, sendEmail } from "./email";
 import { renderReportEmail } from "./template";
-import type { Period } from "./schedule";
+import { adHocPeriod, type Period } from "./schedule";
 
 const ORIGINAL = { ...process.env };
 
@@ -180,6 +180,86 @@ describe("renderReportEmail", () => {
     skipped: [],
   };
 
+  describe("the ad-hoc personal message", () => {
+    const withMsg = (message: string, senderName?: string) =>
+      renderReportEmail({ ...base, message, senderName });
+
+    it("🔴 never reaches the subject line", () => {
+      /*
+       * A subject is a header at the provider. A newline inside one is header
+       * injection — the single most dangerous thing a caller-supplied string
+       * could do here — so the subject is built from the client and the period
+       * only, and this asserts it for a message that actively tries.
+       */
+      const nasty = "hello\nBcc: attacker@evil.com";
+      const { subject } = withMsg(nasty);
+      expect(subject).toBe("Parfaire — July 2026");
+      expect(subject).not.toContain("Bcc");
+      expect(subject).not.toContain("\n");
+    });
+
+    it("🔴 is HTML-escaped, never rendered as markup", () => {
+      const { html } = withMsg('<script>alert(1)</script> & "quoted"');
+      expect(html).not.toContain("<script>");
+      expect(html).toContain("&lt;script&gt;");
+      expect(html).toContain("&amp;");
+      expect(html).toContain("&quot;");
+    });
+
+    it("appears in both the html and the text part", () => {
+      // Every message carries a plain-text alternative; a message that existed
+      // only in the HTML would vanish for text-mode and screen-reader readers.
+      const { html, text } = withMsg("Ahead of Thursday's call.");
+      expect(text).toContain("Ahead of Thursday's call.");
+      expect(html).toContain("Ahead of Thursday");
+    });
+
+    it("adds no figures of its own — the only figures are the ones the sender typed", () => {
+      /*
+       * Named for what it can actually check. The EMAIL can now contain a
+       * figure — an operator may type "spend is $500" — so "the email has no
+       * figures" is no longer true and a test claiming it would be lying. What
+       * still holds is that the TEMPLATE generates none: strip the sender's
+       * message out, and nothing quantitative is left.
+       */
+      const msg = "Spend was $1,234 and CPL fell 12%.";
+      const { html, text } = withMsg(msg);
+      expect(text).toContain(msg);
+      const htmlWithout = html.replace("Spend was $1,234 and CPL fell 12%.", "");
+      const textWithout = text.replace(msg, "");
+      expect(htmlWithout).not.toMatch(/[$£€]\s?\d/);
+      expect(textWithout).not.toMatch(/[$£€]\s?\d/);
+      expect(textWithout).not.toMatch(/\d+(\.\d+)?%/);
+    });
+
+    it("🔴 strips CR/LF from the subject even when the client's display name carries them", () => {
+      /*
+       * `clientName` can be a display name the client edited, and it lands in
+       * a header. A newline there is header injection at the provider.
+       */
+      const { subject } = renderReportEmail({
+        ...base,
+        clientName: "Parfaire\r\nBcc: attacker@evil.test",
+      });
+      expect(subject).not.toMatch(/[\r\n]/);
+      expect(subject).toBe("Parfaire Bcc: attacker@evil.test — July 2026");
+    });
+
+    it("is omitted entirely when blank or whitespace", () => {
+      for (const m of ["", "   ", "\n"]) {
+        const { html } = withMsg(m);
+        // No empty bubble: an operator who typed nothing gets the same email
+        // the scheduled path sends.
+        expect(html).not.toContain("white-space:pre-line");
+      }
+    });
+
+    it("names the sender when one is given, and does not invent one", () => {
+      expect(withMsg("hi", "Sherry").text).toContain("Sherry shared your report");
+      expect(renderReportEmail(base).text).toContain("Your report for July 2026 is ready");
+    });
+  });
+
   it("names the client and the period in the subject", () => {
     expect(renderReportEmail(base).subject).toBe("Parfaire — July 2026");
   });
@@ -250,5 +330,16 @@ describe("renderReportEmail", () => {
     expect(html).not.toContain("display:flex");
     expect(html).not.toContain("display:grid");
     expect(html).not.toContain("<style");
+  });
+});
+
+describe("adHocPeriod", () => {
+  it("labels a hand-picked range the way every other range is labelled", () => {
+    // Not two raw ISO dates in a client's subject line.
+    const p = adHocPeriod("2026-08-20", "2026-09-18");
+    expect(p.label).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(p.label).toMatch(/Aug/);
+    expect(p.label).toMatch(/Sep/);
+    expect(p).toMatchObject({ startKey: "2026-08-20", endKey: "2026-09-18", key: "2026-09-18" });
   });
 });

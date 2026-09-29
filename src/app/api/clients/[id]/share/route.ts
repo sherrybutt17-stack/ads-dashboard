@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser, requireClient, agencyGuard } from "@/lib/auth";
 import { isValidDateKey } from "@/lib/dates";
 import { record as recordAudit, requestContext } from "@/lib/audit";
+import { emailConfig, senderProblem } from "@/lib/reports/email";
 import {
   mintShareLink,
   listShareLinks,
@@ -53,7 +54,22 @@ export async function GET(
    * it later would mean keeping the credential, which is what the hash exists
    * to avoid.
    */
+  /*
+   * Whether this deployment can email a link, answered alongside the list
+   * rather than from its own endpoint: `ShareReport` already calls this on
+   * open, so it costs one field and no extra request, and it keeps the
+   * server-only `emailConfigured()` out of the page component.
+   *
+   * The field NAMES match what `ReportSchedule` already consumes, deliberately
+   * — two panels explaining the same misconfiguration should say the same
+   * sentence, and `senderProblem` is already written to be read by an operator.
+   */
+  const cfg = emailConfig();
   return NextResponse.json({
+    email: {
+      configured: cfg !== null,
+      senderProblem: cfg ? senderProblem(cfg.from) : null,
+    },
     links: links.map((l) => ({
       id: l.id,
       label: l.label,

@@ -1,7 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
- * A one-shot credential letting a headless renderer fetch one report.
+ * A short-lived credential letting a headless renderer fetch one report or
+ * one dataset table.
+ *
+ * Short-lived, not single-use: nothing is stored, so the same token works for
+ * every request inside its 90 seconds. That is acceptable because it is only
+ * ever handed to the renderer, never shown to a person — but it means the
+ * window, not a consumed nonce, is the whole replay defence.
  *
  * ── The problem this solves ───────────────────────────────────────────
  *
@@ -40,13 +46,38 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  */
 
 const TTL_SECONDS = 90;
-const LABEL = "report-render-token/v1";
+/*
+ * 🔴 Bumped to v2 when `dataset` joined the claims.
+ *
+ * The label is mixed into the signing key, so a v1 token cannot validate here
+ * however the parser is later loosened — the key it was signed with no longer
+ * exists. Breaking the format outright is free at this TTL: nothing in flight
+ * survives a deploy by more than ninety seconds, so the worst case is one
+ * failed render and a retry.
+ */
+const LABEL = "report-render-token/v2";
 
 export interface RenderClaims {
   clientId: string;
   start: string;
   end: string;
   platform: string;
+  /**
+   * `"report"` for the full document, or a `DatasetId` for a single table.
+   *
+   * 🔴 Inside the signature, and it has to be. If the dataset travelled as a
+   * query parameter on the render URL, one token minted for `daily` would
+   * authorise EVERY dataset for that client and range — including `leads`,
+   * which carries people's names. The export route refuses that dataset to
+   * client-role callers; a token they legitimately hold for their own `daily`
+   * PDF could then be replayed against the lead list simply by editing the URL,
+   * and the refusal would be worth nothing.
+   *
+   * Typed as `string` rather than `DatasetId` to keep this module free of an
+   * import from the export layer — it is a credential, not a catalogue. The
+   * render page validates the value with `isDatasetId` before using it.
+   */
+  dataset: string;
 }
 
 function signingKey(): Buffer {
@@ -70,9 +101,14 @@ function signingKey(): Buffer {
  * date key or a platform name.
  */
 function canonical(claims: RenderClaims, exp: number): string {
-  return [claims.clientId, claims.start, claims.end, claims.platform, exp].join(
-    "\n",
-  );
+  return [
+    claims.clientId,
+    claims.start,
+    claims.end,
+    claims.platform,
+    claims.dataset,
+    exp,
+  ].join("\n");
 }
 
 export function mintRenderToken(
@@ -122,8 +158,9 @@ export function verifyRenderToken(
   }
 
   const parts = body.split("\n");
-  if (parts.length !== 5) return { ok: false, reason: "malformed" };
-  const [clientId, start, end, platform, expRaw] = parts;
+  // Six since v2. A five-part body is a v1 token and is not accepted.
+  if (parts.length !== 6) return { ok: false, reason: "malformed" };
+  const [clientId, start, end, platform, dataset, expRaw] = parts;
 
   const exp = Number(expRaw);
   if (!Number.isFinite(exp)) return { ok: false, reason: "malformed" };
@@ -134,10 +171,10 @@ export function verifyRenderToken(
    */
   if (exp * 1000 <= now) return { ok: false, reason: "expired" };
 
-  if (!clientId || !start || !end || !platform) {
+  if (!clientId || !start || !end || !platform || !dataset) {
     return { ok: false, reason: "malformed" };
   }
-  return { ok: true, claims: { clientId, start, end, platform } };
+  return { ok: true, claims: { clientId, start, end, platform, dataset } };
 }
 
 export const RENDER_TOKEN_TTL_SECONDS = TTL_SECONDS;

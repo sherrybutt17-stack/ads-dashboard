@@ -75,9 +75,12 @@ const PUBLIC_PREFIXES = [
    * The report as fetched by the hosted headless browser that renders the PDF.
    * It arrives with no session — that is the entire problem this path solves —
    * and the 90-second HMAC-signed token in the URL is the credential. The page
-   * verifies the signature and 404s on anything else, and the token covers the
-   * client and the date range so a valid one cannot be replayed against a
-   * different report. See `src/lib/report/render-token.ts`.
+   * verifies the signature and 404s on anything else. The token covers the
+   * client, the date range AND the dataset, so a valid one cannot be replayed
+   * against a different report or a different table — which matters because
+   * this path now also serves single-dataset tables, including the lead list
+   * (names) when agency staff export it as PDF. A token is replayable within
+   * its 90 seconds; it is not single-use. See `src/lib/report/render-token.ts`.
    */
   "/render/",
   /*

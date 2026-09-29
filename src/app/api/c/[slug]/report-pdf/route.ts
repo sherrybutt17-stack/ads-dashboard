@@ -122,6 +122,11 @@ export async function GET(
     start,
     end,
     platform,
+    /*
+     * The whole document, not one table. `/render/[token]` branches on this to
+     * choose between `ReportDocument` and a single-dataset page.
+     */
+    dataset: "report",
   });
 
   let bytes: Uint8Array;
@@ -164,10 +169,9 @@ export async function GET(
     metadata: { platform, start, end, bytes: bytes.length },
   });
 
-  const filename = exportFilename(client.slug, "report", start, end).replace(
-    /\.csv$/,
-    ".pdf",
-  );
+  // The extension is a parameter now, so the `.csv` → `.pdf` rewrite this line
+  // used to carry is gone: it was only ever working around a hardcoded suffix.
+  const filename = exportFilename(client.slug, "report", start, end, "pdf");
 
   return new NextResponse(bytes as unknown as BodyInit, {
     status: 200,

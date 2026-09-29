@@ -1,11 +1,18 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getClientUnscoped } from "@/lib/clients";
-import { loadDashboard } from "@/lib/metrics/dashboard";
+import { loadDashboard, loadDeferredTables } from "@/lib/metrics/dashboard";
 import { getClientBranding, getAgencySettings } from "@/lib/branding-store";
 import type { AdPlatform } from "@/lib/metrics/queries";
 import { isValidDateKey } from "@/lib/dates";
 import { ReportDocument } from "@/components/report/ReportDocument";
+import { DatasetDocument } from "@/components/report/DatasetDocument";
+import {
+  DATASETS,
+  DATASET_BUILDERS,
+  DATASET_ROW_CAP,
+  isDatasetId,
+} from "@/lib/export/datasets";
 import { verifyRenderToken } from "@/lib/report/render-token";
 import { parseAdPlatform } from "@/lib/platforms";
 
@@ -58,7 +65,13 @@ export default async function RenderReportPage({
    */
   if (!verified.ok) notFound();
 
-  const { clientId, start, end, platform: rawPlatform } = verified.claims;
+  const {
+    clientId,
+    start,
+    end,
+    platform: rawPlatform,
+    dataset,
+  } = verified.claims;
 
   /*
    * Re-validate the dates even though they arrived inside a signature we
@@ -74,6 +87,55 @@ export default async function RenderReportPage({
   if (!client) notFound();
 
   const platform: AdPlatform = parseAdPlatform(rawPlatform);
+
+  /*
+   * Two documents behind one route.
+   *
+   * `"report"` is the narrative document; anything else names a single
+   * dataset. Kept on one path rather than adding `/render/d/[dataset]/[token]`
+   * because a second public prefix buys nothing and would put the dataset
+   * outside the signature — which is the whole point of it being a claim.
+   *
+   * `isDatasetId` guards it even though the value arrived inside a signature we
+   * trust: the signature proves WE issued the claim, not that the string is
+   * still a dataset this build knows how to render. A removed dataset would
+   * otherwise reach `DATASET_BUILDERS[...]` as undefined.
+   */
+  if (dataset !== "report") {
+    if (!isDatasetId(dataset)) notFound();
+    const builder = DATASET_BUILDERS[dataset];
+    const meta = DATASETS.find((d) => d.id === dataset);
+
+    const [table, branding] = await Promise.all([
+      builder.source === "deferred"
+        ? /*
+           * `monthly` ignores the range by design, so it loads the same way the
+           * export route loads it. The token's start/end carry the derived
+           * trailing-12 bounds, and the header prints those rather than
+           * implying the picker drove them.
+           */
+          loadDeferredTables(client, platform).then((t) => builder.build(t))
+        : loadDashboard(client, { startKey: start, endKey: end }, platform).then(
+            (d) => builder.build(d),
+          ),
+      getClientBranding(client.id),
+    ]);
+
+    const cap = DATASET_ROW_CAP[dataset];
+    return (
+      <DatasetDocument
+        client={client}
+        branding={branding}
+        table={table}
+        datasetLabel={meta?.label ?? dataset}
+        datasetDescription={meta?.description ?? ""}
+        rangeStart={start}
+        rangeEnd={end}
+        truncatedAt={cap !== undefined && table.rows.length === cap ? cap : null}
+      />
+    );
+  }
+
   const [data, branding, agency] = await Promise.all([
     loadDashboard(client, { startKey: start, endKey: end }, platform),
     getClientBranding(client.id),

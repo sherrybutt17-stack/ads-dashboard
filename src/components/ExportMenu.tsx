@@ -1,5 +1,17 @@
 import { DATASETS } from "@/lib/export/datasets";
+import { EXPORT_FORMATS, type ExportFormat } from "@/lib/export/formats";
+import { FetchDownloadButton } from "@/components/FetchDownloadButton";
 import type { AdPlatform } from "@/lib/metrics/queries";
+
+/**
+ * Formats offered in the menu.
+ *
+ * All three. PDF only answers on a deployment with `PDF_RENDER_KEY` set and a
+ * public `NEXT_PUBLIC_APP_URL` — locally it returns 501 with that sentence,
+ * which `FetchDownloadButton` renders in place rather than opening a blank tab
+ * full of JSON.
+ */
+const OFFERED: readonly ExportFormat[] = ["csv", "xlsx", "pdf"];
 
 /**
  * Download the numbers.
@@ -26,15 +38,24 @@ export function ExportMenu({
   start,
   end,
   platform,
+  staff,
 }: {
   slug: string;
   start: string;
   end: string;
   platform: AdPlatform;
+  /**
+   * Agency staff see every dataset; a client-role viewer does not see the ones
+   * carrying lead names. This hides them — the route REFUSES them, which is the
+   * check that actually holds. Filtering here only means a client never clicks
+   * something that answers 403.
+   */
+  staff: boolean;
 }) {
-  const href = (dataset: string) =>
+  const datasets = DATASETS.filter((d) => staff || !d.personal);
+  const href = (dataset: string, format: ExportFormat) =>
     `/api/c/${encodeURIComponent(slug)}/export?dataset=${dataset}` +
-    `&platform=${platform}&start=${start}&end=${end}`;
+    `&format=${format}&platform=${platform}&start=${start}&end=${end}`;
 
   return (
     <details className="relative">
@@ -55,18 +76,10 @@ export function ExportMenu({
           boxShadow: "var(--shadow-overlay)",
         }}
       >
-        {DATASETS.map((d) => (
-          <a
+        {datasets.map((d) => (
+          <div
             key={d.id}
-            href={href(d.id)}
-            /*
-             * `download` is a hint only — the route's Content-Disposition is
-             * what actually decides, and it has to, because a client can reach
-             * this URL directly. Kept because it makes the intent legible in
-             * the markup.
-             */
-            download
-            className="block rounded-[7px] px-2.5 py-2 transition-colors hover:bg-[var(--surface-2)]"
+            className="rounded-[7px] px-2.5 py-2 transition-colors hover:bg-[var(--surface-2)]"
           >
             <span
               className="block text-[13px] font-medium"
@@ -93,14 +106,69 @@ export function ExportMenu({
             >
               {d.description}
             </span>
-          </a>
+            {/*
+             * The format choice sits under the dataset rather than beside it:
+             * the dataset is what the operator is choosing, and the format is
+             * how they want it. A grid of label×format at the top level would
+             * make those look like eight peer options instead of four.
+             */}
+            {/*
+              `flex-wrap` and `min-w-0`: an error message renders inside this
+              row, and without both it pushed the buttons out through the side
+              of a 288px menu instead of wrapping under them.
+            */}
+            <span className="mt-1.5 flex min-w-0 flex-wrap items-start gap-1.5">
+              {EXPORT_FORMATS.filter((f) => OFFERED.includes(f.id)).map((f) =>
+                /*
+                 * The metered formats go through a fetch so a slow render shows
+                 * progress and a failure shows its message; the instant ones
+                 * stay plain links, which is why this component can remain a
+                 * server component with one small client island inside it.
+                 */
+                f.metered ? (
+                  <FetchDownloadButton
+                    key={f.id}
+                    url={href(d.id, f.id)}
+                    label={f.label}
+                    pendingLabel="Rendering…"
+                    title={f.description}
+                    className="rounded-[5px] border px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:bg-[var(--surface-raised)] disabled:opacity-60"
+                    style={{
+                      borderColor: "var(--border)",
+                      color: "var(--text-secondary)",
+                    }}
+                  />
+                ) : (
+                  <a
+                    key={f.id}
+                    href={href(d.id, f.id)}
+                    /*
+                     * `download` is a hint only — the route's
+                     * Content-Disposition is what actually decides, and it has
+                     * to, because a client can reach this URL directly. Kept
+                     * because it makes the intent legible in the markup.
+                     */
+                    download
+                    title={f.description}
+                    className="rounded-[5px] border px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:bg-[var(--surface-raised)]"
+                    style={{
+                      borderColor: "var(--border)",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    {f.label}
+                  </a>
+                ),
+              )}
+            </span>
+          </div>
         ))}
         <p
           className="mt-1 px-2.5 py-1.5 text-[11px] leading-snug"
           style={{ color: "var(--text-muted)" }}
         >
-          Comma-separated, UTF-8. Undefined values are left blank rather than
-          written as zero.
+          Undefined values are left blank rather than written as zero. Excel
+          files carry real number types, so totals work on open.
         </p>
       </div>
     </details>

@@ -5,10 +5,13 @@ import { COLUMNS } from "@/lib/metrics/table-columns";
 import { EMPTY_ADS, EMPTY_FUNNEL, derive } from "@/lib/metrics/compute";
 import type { DailyPoint, LeadRow, PeriodMetrics } from "@/lib/metrics/queries";
 import type { CampaignStageRow } from "@/lib/metrics/campaign-stages";
-import { windowFromKeys } from "@/lib/dates";
+import { trailingMonths, windowFromKeys } from "@/lib/dates";
 import { buildCsv } from "./csv";
 import {
   DATASETS,
+  DATASET_BUILDERS,
+  DATASET_IDS,
+  DATASET_ROW_CAP,
   campaignsTable,
   dailyTable,
   isDatasetId,
@@ -284,16 +287,39 @@ describe("the export route", () => {
     "utf8",
   );
 
-  it("🔴 is guarded at the agency tier", () => {
+  /*
+   * Source assertions, so they must match CODE rather than prose: an earlier
+   * version checked for the bare identifiers and for "403", both of which also
+   * appear in this file's comments — deleting the guard or the gate left the
+   * tests green. Comments are stripped first, and the patterns require the
+   * actual call shapes.
+   */
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  it("🔴 is guarded, and scoped to one tenant", () => {
     /*
-     * A raw CSV of a client's leads, spend and pipeline is the highest-value
-     * single response in the application — it is the whole dataset, in a form
-     * built to be kept. Was `staffGuard`; the tier widened when the `agency`
-     * role arrived, and the SCOPING that makes it safe is
-     * `getClientForSession`, which returns null across a tenant boundary.
+     * A raw export of a client's leads, spend and pipeline is the
+     * highest-value single response in the application. The tier widened from
+     * staff to agency to client (a client may take their OWN numbers); what
+     * never changed is `getClientForSession`, the scoping that returns null
+     * across a tenant boundary regardless of role.
      */
-    expect(src).toContain("agencyGuard");
-    expect(src).toContain("getClientForSession");
+    expect(code).toMatch(/await\s+clientAccessGuard\(\s*slug\s*\)/);
+    expect(code).toMatch(/if\s*\(\s*denied\s*\)\s*return\s+denied/);
+    expect(code).toMatch(/await\s+getClientForSession\(\s*session\s*,\s*slug\s*\)/);
+  });
+
+  it("🔴 still refuses personal datasets to client-role callers", () => {
+    /*
+     * The counterweight to widening the guard: the LEAD LIST does not leave
+     * with a client-role user. Asserted as the real condition and its 403, so
+     * deleting or inverting the gate fails here.
+     */
+    expect(code).toMatch(
+      /\.personal\s*&&\s*!isAgencyOperator\(\s*session\s*\)\s*\)\s*\{\s*return\s+NextResponse\.json\([\s\S]{0,300}?status:\s*403/,
+    );
   });
 
   it("🔴 sends the file as an attachment, not inline", () => {
@@ -313,5 +339,92 @@ describe("the export route", () => {
   it("audits every export, recording whether it carried personal data", () => {
     expect(src).toContain("client.exported");
     expect(src).toContain("personal:");
+  });
+});
+
+describe("DATASET_BUILDERS", () => {
+  it("🔴 has a builder for every dataset id", () => {
+    /*
+     * The type already enforces this — `Record<DatasetId, DatasetBuilder>` will
+     * not compile with a member missing. This is the runtime backstop for the
+     * one way round that: an `as any` or an `as DatasetBuilder` cast added in a
+     * hurry.
+     *
+     * It matters more than a usual exhaustiveness check because of what the old
+     * code did when a dataset was unrecognised: the nested ternary it replaced
+     * fell through to `leadsTable`, so an unmatched id served the LEAD LIST
+     * under the wrong filename and logged `personal: false` while doing it.
+     */
+    expect(Object.keys(DATASET_BUILDERS).sort()).toEqual(
+      [...DATASET_IDS].sort(),
+    );
+  });
+
+  it("declares a range resolver exactly when the source is deferred", () => {
+    for (const [id, b] of Object.entries(DATASET_BUILDERS)) {
+      if (b.source === "deferred") {
+        // Deferred datasets ignore the picker, so they must report the bounds
+        // they actually contain or the filename claims a range the rows do not
+        // cover.
+        expect(typeof b.range, id).toBe("function");
+      } else {
+        expect(b.source, id).toBe("dashboard");
+      }
+    }
+  });
+
+  it("routes only month-on-month through the deferred loader", () => {
+    const deferred = Object.entries(DATASET_BUILDERS)
+      .filter(([, b]) => b.source === "deferred")
+      .map(([id]) => id);
+    expect(deferred).toEqual(["monthly"]);
+  });
+});
+
+describe("DATASET_ROW_CAP", () => {
+  it("matches the limit the leads query is actually called with", () => {
+    /*
+     * Read from dashboard.ts rather than restated here, so moving the query's
+     * limit without moving the cap fails — a stale cap makes the truncation
+     * signal lie in the quieter direction.
+     */
+    const dash = readFileSync(
+      join(process.cwd(), "src/lib/metrics/dashboard.ts"),
+      "utf8",
+    );
+    const m = dash.match(/getLeads\(\s*client\.id\s*,\s*\w+\s*,\s*(\d+)/);
+    expect(m, "getLeads call not found in dashboard.ts").not.toBeNull();
+    expect(DATASET_ROW_CAP).toEqual({ leads: Number(m![1]) });
+  });
+
+  it("only caps ids that exist", () => {
+    for (const id of Object.keys(DATASET_ROW_CAP)) {
+      expect(DATASET_IDS).toContain(id);
+    }
+  });
+});
+
+describe("month-on-month range", () => {
+  it("🔴 returns start <= end for the real, newest-first month list", () => {
+    /*
+     * `trailingMonths` returns months NEWEST FIRST. The resolver took the
+     * first element's start and the last element's end, so start was this
+     * month and end was eleven months ago. For CSV that garbled the filename;
+     * for PDF it failed the render page's start > end guard, and every
+     * month-on-month PDF was a PDF of a 404. Driven through the real
+     * `trailingMonths`, so the order it produces is the order tested.
+     */
+    const months = trailingMonths(12, TZ);
+    const tables = {
+      monthOnMonth: months.map((w) => ({ window: w })),
+    } as unknown as Parameters<
+      Extract<(typeof DATASET_BUILDERS)["monthly"], { source: "deferred" }>["range"]
+    >[0];
+    const b = DATASET_BUILDERS.monthly;
+    if (b.source !== "deferred") throw new Error("monthly must be deferred");
+    const [start, end] = b.range(tables);
+    expect(start <= end).toBe(true);
+    expect(start).toBe(months.map((m) => m.startKey).sort()[0]);
+    expect(end).toBe(months.map((m) => m.endKey).sort().at(-1));
   });
 });

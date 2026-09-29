@@ -34,6 +34,22 @@ export interface ReportEmailInput {
   expiresAt: Date;
   /** Periods that went by without a report. Named rather than hidden. */
   skipped: readonly Period[];
+  /**
+   * A note typed by the person sending it, on an ad-hoc send.
+   *
+   * 🔴 Confined to the body; it must never reach `subject`. A subject line is
+   * a header at the provider, and a newline inside one is header injection.
+   * (It is not the only caller-influenced string: `clientName` can come from a
+   * client-editable display name, which is why the subject is sanitised.)
+   *
+   * Rendered escaped and as plain text, never as markdown or HTML, for the same
+   * reason `ReportDocument` renders generated prose as text: the moment a
+   * string from a human goes through an HTML renderer it becomes an injection
+   * surface in someone else's inbox.
+   */
+  message?: string | null;
+  /** Who sent it, named in the body so the recipient knows why it arrived. */
+  senderName?: string | null;
 }
 
 function escapeHtml(s: string): string {
@@ -59,7 +75,30 @@ export function renderReportEmail(input: ReportEmailInput): {
 } {
   const { clientName, period, url, expiresAt, skipped } = input;
 
-  const subject = `${clientName} — ${period.label}`;
+  /*
+   * Trimmed to null so an empty textarea does not render an empty paragraph,
+   * and so `""` and `"   "` behave identically to not passing it at all.
+   */
+  const message = input.message?.trim() || null;
+  const senderName = input.senderName?.trim() || null;
+
+  /*
+   * 🔴 The subject is built from the client and the period ONLY. No caller
+   * string reaches it — see `message` on the input type.
+   */
+  /*
+   * Control characters stripped, CR and LF above all. `clientName` may be a
+   * display name the CLIENT edited (self-service branding), and it lands in a
+   * header — the one place a newline changes what the message is.
+   */
+  const subject = `${clientName} — ${period.label}`
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const intro = senderName
+    ? `${senderName} shared your report for ${period.label}.`
+    : `Your report for ${period.label} is ready.`;
 
   const gap =
     skipped.length > 0
@@ -73,7 +112,8 @@ export function renderReportEmail(input: ReportEmailInput): {
   const text = [
     `${clientName} — ${period.label}`,
     "",
-    `Your report for ${period.label} is ready.`,
+    intro,
+    ...(message ? ["", message] : []),
     "",
     url,
     "",
@@ -89,8 +129,20 @@ export function renderReportEmail(input: ReportEmailInput): {
         <h1 style="margin:6px 0 0 0;font-size:20px;line-height:1.3;font-weight:600;color:#1a1a18;">${escapeHtml(clientName)}</h1>
       </td></tr>
       <tr><td style="padding:12px 28px 0 28px;">
-        <p style="margin:0;font-size:14px;line-height:1.6;color:#44443f;">Your report for ${escapeHtml(period.label)} is ready.</p>
+        <p style="margin:0;font-size:14px;line-height:1.6;color:#44443f;">${escapeHtml(intro)}</p>
       </td></tr>
+      ${
+        message
+          ? /*
+             * `white-space:pre-line` so the sender's own line breaks survive
+             * without any markup being interpreted. Escaped first, so the only
+             * thing that renders is the characters they typed.
+             */
+            `<tr><td style="padding:14px 28px 0 28px;">
+        <p style="margin:0;padding:12px 14px;background:#f6f6f4;border-radius:8px;font-size:14px;line-height:1.6;color:#44443f;white-space:pre-line;">${escapeHtml(message)}</p>
+      </td></tr>`
+          : ""
+      }
       <tr><td style="padding:20px 28px 4px 28px;">
         <a href="${escapeHtml(url)}" style="display:inline-block;background:#1a1a18;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:11px 20px;border-radius:8px;">View the report</a>
       </td></tr>

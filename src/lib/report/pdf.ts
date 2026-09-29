@@ -76,6 +76,7 @@ export class PdfRenderError extends Error {
 function buildRequest(
   cfg: PdfConfig,
   targetUrl: string,
+  landscape: boolean,
 ): { url: string; init: RequestInit } {
   const base = cfg.url ?? DEFAULT_URL[cfg.provider];
 
@@ -92,6 +93,12 @@ function buildRequest(
           source: targetUrl,
           format: "Letter",
           margin: "0",
+          /*
+           * Wide tables only. A dataset export can be twenty-odd columns, which
+           * is unreadable portrait; the report document is designed for portrait
+           * and stays there.
+           */
+          ...(landscape ? { landscape: true } : {}),
           /*
            * The renderer must wait for the charts. Recharts draws after
            * hydration, so a screenshot taken at DOMContentLoaded catches an
@@ -116,6 +123,8 @@ function buildRequest(
         options: {
           format: "Letter",
           printBackground: true,
+          // See the pdfshift branch: wide dataset tables only.
+          ...(landscape ? { landscape: true } : {}),
           /*
            * Zero margins. The document supplies its own padding, and a margin
            * here is exactly the strip Chrome would otherwise stamp a URL into —
@@ -137,9 +146,21 @@ function buildRequest(
  * development origin rather than a timeout thirty seconds later that reads like
  * the service is down.
  */
+export interface RenderPdfOptions {
+  signal?: AbortSignal;
+  /**
+   * Render the page in landscape.
+   *
+   * For the wide single-dataset tables — `daily` alone is nineteen columns, and
+   * portrait Letter renders those at a size nobody can read. The full report
+   * document is laid out for portrait and must not pass this.
+   */
+  landscape?: boolean;
+}
+
 export async function renderPdf(
   targetUrl: string,
-  opts: { signal?: AbortSignal } = {},
+  opts: RenderPdfOptions = {},
 ): Promise<Uint8Array> {
   const cfg = pdfConfig();
   if (!cfg) {
@@ -155,7 +176,7 @@ export async function renderPdf(
     );
   }
 
-  const { url, init } = buildRequest(cfg, targetUrl);
+  const { url, init } = buildRequest(cfg, targetUrl, opts.landscape ?? false);
   const res = await fetch(url, { ...init, signal: opts.signal, cache: "no-store" });
 
   if (!res.ok) {

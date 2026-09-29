@@ -111,6 +111,23 @@ export function Modal({
   const descId = useId();
   const mounted = useIsHydrated();
 
+  /*
+   * 🔴 Focus placement and scroll lock run ONCE per open — deps are `[open,
+   * mounted]` and nothing else.
+   *
+   * They used to share an effect with the key handler below, whose deps
+   * necessarily include `onClose` and `busy`. Callers pass `onClose` as an
+   * inline arrow (`onClose={() => setOpen(false)}`), so its identity changes on
+   * every render of the parent — and a parent re-renders on every keystroke into
+   * any field it holds state for.
+   *
+   * The result: type one character, the effect's cleanup returns focus to the
+   * opener, the effect re-runs and moves focus to the FIRST focusable in the
+   * panel. Every field in every dialog accepted exactly one character before
+   * throwing focus away. Splitting the effects is the fix; memoising `onClose`
+   * at each call site would also work and would be one `useCallback` away from
+   * silently regressing the next time somebody writes the obvious inline arrow.
+   */
   useEffect(() => {
     // `mounted` gates this because the panel does not exist in the DOM until
     // the portal has rendered, and focus cannot be moved into a node that is
@@ -126,6 +143,34 @@ export function Modal({
     // typing immediately instead of tabbing in.
     const first = panel?.querySelector<HTMLElement>(FOCUSABLE);
     (first ?? panel)?.focus();
+
+    // Scroll lock. Preserve whatever `overflow` was there rather than assuming
+    // "" — a future layout may set it.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      // `isConnected` guards the case where the opener was itself unmounted by
+      // whatever the dialog did — focusing a detached node throws nothing but
+      // silently drops focus to <body>, which is what we are here to prevent.
+      if (opener?.isConnected) opener.focus();
+    };
+    /*
+     * `mounted` is a dependency, not just a guard. A dialog rendered open on the
+     * very first pass would otherwise run this effect while the panel is still
+     * unrendered — `panelRef.current` null, focus silently not moved — and never
+     * re-run, because `open` did not change when the portal appeared.
+     */
+  }, [open, mounted]);
+
+  /*
+   * The key handler is separate precisely BECAUSE it must see the current
+   * `onClose` and `busy`. Re-subscribing a listener on every render is free;
+   * re-running the focus move is not.
+   */
+  useEffect(() => {
+    if (!open || !mounted) return;
 
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape" && !busy) {
@@ -157,26 +202,7 @@ export function Modal({
     }
 
     document.addEventListener("keydown", onKeyDown);
-
-    // Scroll lock. Preserve whatever `overflow` was there rather than assuming
-    // "" — a future layout may set it.
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = prevOverflow;
-      // `isConnected` guards the case where the opener was itself unmounted by
-      // whatever the dialog did — focusing a detached node throws nothing but
-      // silently drops focus to <body>, which is what we are here to prevent.
-      if (opener?.isConnected) opener.focus();
-    };
-    /*
-     * `mounted` is a dependency, not just a guard. A dialog rendered open on the
-     * very first pass would otherwise run this effect while the panel is still
-     * unrendered — `panelRef.current` null, focus silently not moved — and never
-     * re-run, because `open` did not change when the portal appeared.
-     */
+    return () => document.removeEventListener("keydown", onKeyDown);
   }, [open, onClose, busy, mounted]);
 
   if (!open || !mounted) return null;

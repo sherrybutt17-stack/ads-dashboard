@@ -1,6 +1,13 @@
 import { COLUMNS, valueFor, type MetricValues } from "@/lib/metrics/table-columns";
 import type { DailyPoint, LeadRow, PeriodMetrics } from "@/lib/metrics/queries";
 import type { CampaignStageRow } from "@/lib/metrics/campaign-stages";
+/*
+ * Type-only, and it has to stay that way. `ExportMenu` is a server component
+ * that imports `DATASETS` from this file to render the menu; a value import of
+ * `dashboard.ts` here would drag the entire metrics layer into that render for
+ * four labels and four descriptions.
+ */
+import type { DashboardData, DeferredTables } from "@/lib/metrics/dashboard";
 import { STAGE_LABELS } from "@/db/schema";
 import { money, num, percent, text, type Cell, type CsvTable } from "./csv";
 
@@ -205,3 +212,81 @@ export function leadsTable(leads: readonly LeadRow[]): CsvTable {
     ]),
   };
 }
+
+/**
+ * Which rows each dataset is built from.
+ *
+ * ── 🔴 Why this is a Record and not a switch ──────────────────────────
+ *
+ * The route used to choose a builder with a nested ternary whose final branch
+ * was `leadsTable` — the one dataset carrying people's names. That meant any
+ * dataset id the ternary did not recognise served the LEAD LIST, under the
+ * unrecognised dataset's filename, and recorded `personal: false` in the audit
+ * log while doing it. Only `isDatasetId` stood in the way, and it stood in the
+ * way of unknown strings, not of a new `DatasetId` whose branch someone forgot
+ * to add.
+ *
+ * `Record<DatasetId, …>` makes that omission a compile error instead. Adding an
+ * id to the union without adding a builder here does not build, which is the
+ * only form of this guarantee that survives a hurried change.
+ *
+ * ── The two shapes, and why `monthly` needs its own ───────────────────
+ *
+ * Most datasets read the range the operator selected, so they come from
+ * `loadDashboard` and the range is already known. `monthOnMonth` does not: it
+ * is a fixed trailing twelve months regardless of the picker, so it loads from
+ * `loadDeferredTables` and has to report the bounds it actually contains —
+ * otherwise the filename claims a range the rows do not cover.
+ */
+export type DatasetBuilder =
+  | { source: "dashboard"; build: (d: DashboardData) => CsvTable }
+  | {
+      source: "deferred";
+      build: (t: DeferredTables) => CsvTable;
+      /** The bounds the rows really span, for the filename and the footnote. */
+      range: (t: DeferredTables) => readonly [string, string];
+    };
+
+export const DATASET_BUILDERS: Record<DatasetId, DatasetBuilder> = {
+  daily: { source: "dashboard", build: (d) => dailyTable(d.daily) },
+  campaigns: {
+    source: "dashboard",
+    build: (d) => campaignsTable(d.campaignStages.rows),
+  },
+  leads: { source: "dashboard", build: (d) => leadsTable(d.leads) },
+  monthly: {
+    source: "deferred",
+    build: (t) => monthlyTable(t.monthOnMonth),
+    /*
+     * 🔴 Min and max, not first and last. `trailingMonths` returns the months
+     * NEWEST FIRST, so first/last gave start = this month and end = eleven
+     * months ago — start after end. For CSV that only garbled the filename;
+     * once the bounds went into a render token it failed the render page's
+     * `start > end` guard, so every month-on-month PDF was a PDF of a 404.
+     * Order-independent, so a future change to `trailingMonths` cannot bring
+     * it back. Date keys are ISO, so string comparison is date comparison.
+     */
+    range: (t) => {
+      const starts = t.monthOnMonth.map((m) => m.window.startKey).sort();
+      const ends = t.monthOnMonth.map((m) => m.window.endKey).sort();
+      return [starts[0] ?? "", ends[ends.length - 1] ?? ""] as const;
+    },
+  },
+};
+
+/**
+ * Where the source query stops, for datasets that have a ceiling.
+ *
+ * 🔴 `getLeads` is called with a hard `LIMIT 2000` and says nothing about it.
+ * Past that the file simply ends, and a client reconciling a busy month against
+ * their CRM finds a shortfall with no explanation available anywhere on the
+ * page or in the file.
+ *
+ * In a codebase that writes four paragraphs on why an empty cell must not
+ * become `0`, a silently truncated export is out of character. The route turns
+ * a hit here into a response header and an audit field, and the PDF prints it
+ * as a footnote.
+ */
+export const DATASET_ROW_CAP: Partial<Record<DatasetId, number>> = {
+  leads: 2000,
+};

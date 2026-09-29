@@ -150,6 +150,20 @@ const CLIENT_TIER_ROUTES: string[] = [
   // client's own dashboard, so an agency-tier guard here would render it as a
   // wall of broken cards for exactly the person it is built for.
   "c/[slug]/creative/[key]/thumb/route.ts",
+  /*
+   * Their own numbers as a file. Client-tier by design — but listed here
+   * DELIBERATELY rather than left to the matcher, which would have passed it
+   * anyway for the wrong reason: the handler mentions `isAgencyOperator` inside
+   * the gate that refuses `personal` datasets to clients, and this test matches
+   * guard names as substrings anywhere in the body. That incidental mention
+   * would have classified a client-tier route as agency-tier and hidden the
+   * change entirely.
+   *
+   * The route's baseline guard really is `clientAccessGuard`; the agency check
+   * inside it is per-dataset, not per-route. Saying so here keeps the
+   * classification true if the lead-list gate is ever refactored away.
+   */
+  "c/[slug]/export/route.ts",
 ];
 
 function requiredTier(rel: string): Tier {
@@ -213,6 +227,27 @@ describe("API route authorization", () => {
       unguarded,
       `These handlers have no authorization strong enough for their tier. Add \`const denied = await agencyGuard(); if (denied) return denied;\` — or \`requireClient(id)\` where the route takes a client id — or, if the route is genuinely public, add it to PUBLIC_ROUTES with the reason it is safe:\n  ${unguarded.join("\n  ")}`,
     ).toEqual([]);
+  });
+
+  it("🔴 every client-tier route CALLS clientAccessGuard, not merely names a guard", () => {
+    /*
+     * The tier check above matches guard names as substrings anywhere in a
+     * handler. For a client-tier route that is too weak: the export route
+     * mentions `isAgencyOperator(session)` inside its per-dataset gate, which
+     * satisfies the agency tier all by itself — so deleting the route's actual
+     * guard left this whole file green. Here the call itself is required,
+     * with comments stripped so prose cannot stand in for code.
+     */
+    const missing: string[] = [];
+    for (const rel of CLIENT_TIER_ROUTES) {
+      const src = readFileSync(join(API_ROOT, ...rel.split("/")), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      for (const { method, body } of handlers(src)) {
+        if (!/await\s+clientAccessGuard\(/.test(body)) missing.push(`${method} ${rel}`);
+      }
+    }
+    expect(missing, `Client-tier handlers without an awaited clientAccessGuard(...) call:\n  ${missing.join("\n  ")}`).toEqual([]);
   });
 
   it("every public-route exemption still exists on disk", () => {
