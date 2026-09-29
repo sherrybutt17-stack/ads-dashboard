@@ -11,7 +11,7 @@ import {
   VERDICT_LABEL,
   type CommitmentStatus,
 } from "@/lib/commentary/model";
-import { formatValue, type Slide } from "@/lib/present/slides";
+import { formatValue, sparkRuns, type Slide } from "@/lib/present/slides";
 
 /**
  * One slide.
@@ -56,20 +56,29 @@ function Kicker({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** A bare-bones sparkline. No axes, no grid — a shape, at a glance. */
-function Spark({ values }: { values: number[] }) {
-  const clean = values.filter((v) => Number.isFinite(v));
-  if (clean.length < 2) return null;
-  const max = Math.max(...clean);
-  const min = Math.min(...clean);
-  const span = max - min || 1;
-  const points = clean
-    .map((v, i) => {
-      const x = (i / (clean.length - 1)) * 100;
-      const y = 30 - ((v - min) / span) * 28;
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(" ");
+/**
+ * A bare-bones sparkline. No axes, no grid — a shape, at a glance.
+ *
+ * ── 🔴 A day with no figure is a GAP, not a zero and not a missing day ──
+ *
+ * `cpLead` is null on a day with spend and no leads. Two wrong ways to handle
+ * that, and this component previously enabled the first:
+ *
+ *   · **Plot it as 0.** The line dives to the floor as though the cost had
+ *     collapsed. On one real client that is 15 of 28 days — more than half the
+ *     month reading $0 cost per lead, in front of them, on the call.
+ *   · **Drop it.** Quieter and still wrong: removing a point closes the gap and
+ *     shifts every later day left, so the chart misdates the month.
+ *
+ * The honest rendering is a break in the line. `x` is computed from the day's
+ * INDEX rather than from its position among the surviving points, so every
+ * plotted day sits where it actually falls in the period, and the missing ones
+ * are visibly missing.
+ */
+function Spark({ values }: { values: (number | null)[] }) {
+  const runs = sparkRuns(values);
+  if (runs.length === 0) return null;
+
   return (
     <svg
       viewBox="0 0 100 32"
@@ -78,14 +87,44 @@ function Spark({ values }: { values: number[] }) {
       role="presentation"
       aria-hidden="true"
     >
-      <polyline
-        points={points}
-        fill="none"
-        stroke="var(--text-muted)"
-        strokeWidth="0.8"
-        vectorEffect="non-scaling-stroke"
-        strokeLinejoin="round"
-      />
+      {runs.map((r, i) =>
+        r.length === 1 ? (
+          /*
+           * 🔴 A zero-length LINE with a round cap, not a <circle>.
+           *
+           * The svg is `preserveAspectRatio="none"`, stretching a 100×32 box
+           * across the full slide width but only 64px of height. Geometry is
+           * scaled non-uniformly, so a <circle> came out as a flat sliver of an
+           * ellipse — visible on the real deck as two faint horizontal dashes.
+           * `non-scaling-stroke` does nothing for a circle's FILL.
+           *
+           * A stroke under `non-scaling-stroke` is drawn in screen pixels, and
+           * a round cap on a zero-length segment renders as a dot of the
+           * stroke's width — so this stays a true circle at any aspect ratio.
+           */
+          <line
+            key={i}
+            x1={r[0].x.toFixed(2)}
+            y1={r[0].y.toFixed(2)}
+            x2={r[0].x.toFixed(2)}
+            y2={r[0].y.toFixed(2)}
+            stroke="var(--text-muted)"
+            strokeWidth="4"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : (
+          <polyline
+            key={i}
+            points={r.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ")}
+            fill="none"
+            stroke="var(--text-muted)"
+            strokeWidth="0.8"
+            vectorEffect="non-scaling-stroke"
+            strokeLinejoin="round"
+          />
+        ),
+      )}
     </svg>
   );
 }
@@ -211,11 +250,20 @@ export function SlideView({ slide, currency }: { slide: Slide; currency: string 
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-[14px] sm:text-[16px]">
               <thead>
+                {/*
+                  Carried down the funnel, not stopped at cost per lead. The
+                  question a monthly call actually asks is which campaign
+                  produced APPOINTMENTS — a campaign with the best CPL and no
+                  bookings is the one to cut, and the old four-column table
+                  showed it as the winner.
+                */}
                 <tr style={{ color: "var(--text-muted)" }}>
                   <th className="py-2 text-left font-normal">Campaign</th>
                   <th className="py-2 text-right font-normal">Spend</th>
                   <th className="py-2 text-right font-normal">Leads</th>
-                  <th className="py-2 text-right font-normal">Cost per lead</th>
+                  <th className="py-2 text-right font-normal">CPL</th>
+                  <th className="py-2 text-right font-normal">Appts</th>
+                  <th className="py-2 text-right font-normal">Cost/appt</th>
                 </tr>
               </thead>
               <tbody>
@@ -236,10 +284,23 @@ export function SlideView({ slide, currency }: { slide: Slide; currency: string 
                       {formatCurrency(r.spend, currency)}
                     </td>
                     <td className="tnum py-2.5 text-right" style={{ color: "var(--text-secondary)" }}>
-                      {formatNumber(r.leads)}
+                      {formatNumber(r.counts.new_lead)}
                     </td>
                     <td className="tnum py-2.5 text-right" style={{ color: "var(--text-primary)" }}>
-                      {formatCurrency(r.cpLead, currency)}
+                      {/*
+                        `cost` is null where it is undefined — no conversions,
+                        or conversions against no spend. `formatCurrency`
+                        renders that as the dash, which is the honest mark; a
+                        `?? 0` here would be the same $0 lie the sparkline was
+                        telling.
+                      */}
+                      {formatCurrency(r.costs.new_lead.cost, currency)}
+                    </td>
+                    <td className="tnum py-2.5 text-right" style={{ color: "var(--text-secondary)" }}>
+                      {formatNumber(r.counts.appointment_booked)}
+                    </td>
+                    <td className="tnum py-2.5 text-right" style={{ color: "var(--text-primary)" }}>
+                      {formatCurrency(r.costs.appointment_booked.cost, currency)}
                     </td>
                   </tr>
                 ))}

@@ -136,7 +136,15 @@ export function Funnel({
                         that cannot be true; naming the extra arrivals says what
                         actually happened.
                       */}
-                      {(steps[i + 1].conversionFromPrevious ?? 0) > 1 ? (
+                      {/*
+                        Also when the earlier stage is ZERO: the rate is then
+                        undefined and printed "– continue", which says nothing
+                        about the leads that did arrive. With no new leads in
+                        the window but appointments booked — a slow pipeline
+                        paying off — every one of them "entered here directly".
+                      */}
+                      {(steps[i + 1].conversionFromPrevious ?? 0) > 1 ||
+                      (steps[i].count === 0 && steps[i + 1].count > 0) ? (
                         <span className="tnum">
                           +{formatNumber(steps[i + 1].count - steps[i].count)}{" "}
                           entered here directly

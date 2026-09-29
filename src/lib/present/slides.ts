@@ -83,7 +83,20 @@ export interface MetricSlide {
   basis: string;
   /** Honest framing where a bare figure would mislead. */
   note: string | null;
-  spark: number[];
+  /**
+   * The daily series under the number.
+   *
+   * 🔴 `null` for a day with no figure, and it MUST stay null all the way to
+   * the renderer. A cost per lead is null on a day with spend and no leads —
+   * `?? 0` there plots a measured zero, and the line dives to the floor as if
+   * the cost had collapsed. On one real client that was 15 of 28 days: more
+   * than half a month of $0 cost per lead, on screen, during the call.
+   *
+   * Dropping the nulls instead is worse in a quieter way — it closes the gap
+   * and shifts every later point left, so the chart misdates the month. The
+   * renderer breaks the line instead.
+   */
+  spark: (number | null)[];
 }
 
 export interface FunnelSlide {
@@ -102,7 +115,16 @@ export interface TrendSlide {
 export interface CampaignSlide {
   kind: "campaigns";
   id: string;
-  rows: DashboardData["campaigns"];
+  /**
+   * 🔴 The stage rows, not the flat `campaigns` array.
+   *
+   * Both come from the same query — `campaignStages` is BUILT from `campaigns`
+   * — so nothing here contradicts the dashboard. The difference is reach: the
+   * flat rows stop at cost per lead, and the question actually asked on a
+   * monthly call is "which campaign produced appointments?". The deck could not
+   * answer it while the dashboard table and the CSV export both could.
+   */
+  rows: DashboardData["campaignStages"]["rows"];
   currency: string;
 }
 
@@ -195,7 +217,7 @@ interface MetricSpec {
   polarityKey: string;
   basis: string;
   note?: string | null;
-  spark: number[];
+  spark: (number | null)[];
   /**
    * Which side of the funnel slide this metric sits on.
    *
@@ -224,13 +246,14 @@ export function buildDeck(
     commentary: CommentaryForReport | null;
   },
 ): Deck {
-  const { current, deltas, daily, prevDaily, funnel, campaigns } = data;
+  const { current, deltas, daily, prevDaily, funnel } = data;
   const currency = data.client.currency;
   const slides: Slide[] = [];
   const skipped: SkippedSlide[] = [];
 
-  const sparkOf = (pick: (d: DashboardData["daily"][number]) => number) =>
-    daily.map(pick);
+  const sparkOf = (
+    pick: (d: DashboardData["daily"][number]) => number | null,
+  ) => daily.map(pick);
 
   slides.push({
     kind: "title",
@@ -308,7 +331,7 @@ export function buildDeck(
       deltaKey: "cpLead",
       polarityKey: "cpLead",
       basis: `${formatCurrency(current.ads.spend, currency)} spend ÷ ${formatNumber(current.funnel.new_lead)} paid leads`,
-      spark: sparkOf((d) => d.derived.cpLead ?? 0),
+      spark: sparkOf((d) => d.derived.cpLead),
     },
     {
       id: "appts",
@@ -330,7 +353,7 @@ export function buildDeck(
       deltaKey: "cpAppt",
       polarityKey: "cpAppt",
       basis: `${formatCurrency(current.ads.spend, currency)} spend ÷ ${formatNumber(current.funnel.appointment_booked)} appointments`,
-      spark: sparkOf((d) => d.derived.cpAppt ?? 0),
+      spark: sparkOf((d) => d.derived.cpAppt),
     },
     {
       id: "shows",
@@ -422,12 +445,26 @@ export function buildDeck(
   // What a lead costs, then what happens to them. The funnel sits between the
   // two groups unconditionally, so no metric's absence can move or lose it.
   emit("head");
-  if (current.funnel.new_lead > 0) {
+  /*
+   * 🔴 Gated on movement ANYWHERE in the funnel, not on new leads alone.
+   *
+   * It used to require `new_lead > 0`, which is wrong for the case the funnel
+   * is most needed: a pipeline where last month's leads book, show and close
+   * this month has zero new leads and a funnel full of movement. The deck
+   * dropped the one slide that explains that month, and told the presenter
+   * "no leads entered the pipeline, so there is no funnel to walk" — which is
+   * a true sentence about new leads and a false one about the funnel.
+   *
+   * Summed across steps rather than checking `new_lead`, so any stage with
+   * activity keeps the slide.
+   */
+  const funnelMovement = funnel.reduce((n, step) => n + step.count, 0);
+  if (funnelMovement > 0) {
     slides.push({ kind: "funnel", id: "funnel", steps: funnel });
   } else {
     skipped.push({
       label: "Funnel",
-      why: "no leads entered the pipeline, so there is no funnel to walk",
+      why: "nothing moved at any stage in this period, so there is no funnel to walk",
     });
   }
   emit("tail");
@@ -446,13 +483,21 @@ export function buildDeck(
     });
   }
 
-  const spending = campaigns.filter((c) => c.spend > 0);
+  /*
+   * Spend OR outcomes. A campaign paused before the window with appointments
+   * still landing in it has zero spend and real results — dropping it made the
+   * deck's table disagree with the dashboard's, and hid a campaign that is
+   * still producing.
+   */
+  const spending = data.campaignStages.rows.filter(
+    (c) => c.spend > 0 || Object.values(c.counts).some((n) => n > 0),
+  );
   if (spending.length > 0) {
     slides.push({ kind: "campaigns", id: "campaigns", rows: spending, currency });
   } else {
     skipped.push({
       label: "Campaigns",
-      why: "no campaign recorded spend in this period",
+      why: "no campaign recorded spend or results in this period",
     });
   }
 
@@ -501,4 +546,39 @@ export function buildDeck(
 export function clampSlide(index: number, total: number): number {
   if (!Number.isFinite(index) || total <= 0) return 0;
   return Math.min(Math.max(Math.floor(index), 0), total - 1);
+}
+
+/**
+ * A sparkline's geometry: runs of consecutive real values, in a 100×32 box.
+ *
+ * Pure, so the rules the renderer depends on are testable without a DOM:
+ *
+ *   · a null (or non-finite) day ENDS a run — it is a gap, never a zero;
+ *   · `x` comes from the day's INDEX in the full series, so a missing day
+ *     leaves a hole instead of pulling every later day left;
+ *   · the vertical scale is fitted to the real values only;
+ *   · fewer than two real values yields nothing — one point is not a trend.
+ */
+export function sparkRuns(
+  values: readonly (number | null)[],
+): Array<Array<{ x: number; y: number }>> {
+  const finite = values.filter((v): v is number => v !== null && Number.isFinite(v));
+  if (finite.length < 2) return [];
+  const max = Math.max(...finite);
+  const min = Math.min(...finite);
+  const span = max - min || 1;
+  const lastIndex = values.length - 1 || 1;
+
+  const runs: Array<Array<{ x: number; y: number }>> = [];
+  let run: Array<{ x: number; y: number }> = [];
+  values.forEach((v, i) => {
+    if (v === null || !Number.isFinite(v)) {
+      if (run.length) runs.push(run);
+      run = [];
+      return;
+    }
+    run.push({ x: (i / lastIndex) * 100, y: 30 - ((v - min) / span) * 28 });
+  });
+  if (run.length) runs.push(run);
+  return runs;
 }

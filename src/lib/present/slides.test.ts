@@ -6,6 +6,7 @@ import {
   buildDeck,
   clampSlide,
   formatValue,
+  sparkRuns,
   type MetricSlide,
   type Slide,
 } from "./slides";
@@ -74,8 +75,63 @@ const data = (over: Record<string, unknown> = {}): DashboardData =>
       { campaignId: "c_1", campaignName: "Leads | GG", platform: "meta", spend: 640, impressions: 40_000, linkClicks: 500, leads: 14, cpLead: 45.71 },
       { campaignId: "c_2", campaignName: "Retargeting", platform: "meta", spend: 300, impressions: 20_000, linkClicks: 200, leads: 6, cpLead: 50 },
     ],
+    /*
+     * The campaign slide reads these, not the flat `campaigns` above — the deck
+     * carries each campaign down the funnel so the call can ask which one
+     * produced appointments. Both come from the same query upstream, so the
+     * fixture keeps them consistent with each other.
+     */
+    campaignStages: {
+      rows: [
+        {
+          campaignId: "c_1", campaignName: "Leads | GG", platform: "meta",
+          spend: 640, impressions: 40_000, linkClicks: 500,
+          counts: { new_lead: 14, appointment_booked: 5, showed: 3, closed_won: 1 },
+          costs: {
+            new_lead: { cost: 45.71, conversions: 14 },
+            appointment_booked: { cost: 128, conversions: 5 },
+            showed: { cost: 213.33, conversions: 3 },
+            closed_won: { cost: 640, conversions: 1 },
+          },
+        },
+        {
+          campaignId: "c_2", campaignName: "Retargeting", platform: "meta",
+          spend: 300, impressions: 20_000, linkClicks: 200,
+          counts: { new_lead: 6, appointment_booked: 2, showed: 1, closed_won: 0 },
+          costs: {
+            new_lead: { cost: 50, conversions: 6 },
+            appointment_booked: { cost: 150, conversions: 2 },
+            showed: { cost: 300, conversions: 1 },
+            // No closes: the cost is undefined, never 0.
+            closed_won: { cost: null, conversions: 0 },
+          },
+        },
+      ],
+    },
     ...over,
   }) as unknown as DashboardData;
+
+/** A campaign stage row, for tests that care only about spend or counts. */
+const stageRow = (
+  id: string,
+  name: string,
+  spend: number,
+  counts: Partial<Record<"new_lead" | "appointment_booked" | "showed" | "closed_won", number>> = {},
+) => {
+  const c = { new_lead: 0, appointment_booked: 0, showed: 0, closed_won: 0, ...counts };
+  const cost = (n: number) => ({ cost: n > 0 && spend > 0 ? spend / n : null, conversions: n });
+  return {
+    campaignId: id, campaignName: name, platform: "meta" as const,
+    spend, impressions: 1, linkClicks: 1,
+    counts: c,
+    costs: {
+      new_lead: cost(c.new_lead),
+      appointment_booked: cost(c.appointment_booked),
+      showed: cost(c.showed),
+      closed_won: cost(c.closed_won),
+    },
+  };
+};
 
 const commit = (over: Partial<Commitment> = {}): Commitment => ({
   id: "c1",
@@ -240,12 +296,90 @@ describe("zero versus missing", () => {
     expect(skipReason(deck, "Cost per appointment")).toBeTruthy();
   });
 
-  it("drops the funnel when nothing entered it, and says why", () => {
+  it("drops the funnel when NOTHING moved at any stage, and says why", () => {
     const d = data();
     d.current.funnel.new_lead = 0;
+    // Every step, not just the first — see the test below for why.
+    d.funnel = d.funnel.map((step) => ({ ...step, count: 0 }));
     const deck = build(d);
     expect(ids(deck.slides)).not.toContain("funnel");
-    expect(skipReason(deck, "Funnel")).toContain("no leads entered");
+    expect(skipReason(deck, "Funnel")).toContain("nothing moved");
+  });
+
+  it("🔴 KEEPS the funnel when later stages moved but no new lead arrived", () => {
+    /*
+     * The regression this guards: the gate used to be `new_lead > 0`, which is
+     * exactly backwards for a slow pipeline. A month where last month's leads
+     * book, show and close has zero new leads and a funnel full of movement —
+     * and the deck dropped the one slide that explains it, telling the presenter
+     * "no leads entered the pipeline, so there is no funnel to walk". True about
+     * new leads; false about the funnel.
+     */
+    const d = data();
+    d.current.funnel.new_lead = 0;
+    d.funnel = [
+      { stage: "new_lead", count: 0, conversionFromPrevious: null, droppedFromPrevious: null },
+      { stage: "appointment_booked", count: 7, conversionFromPrevious: null, droppedFromPrevious: null },
+    ];
+    const deck = build(d);
+    expect(ids(deck.slides)).toContain("funnel");
+    expect(skipReason(deck, "Funnel")).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Sparklines
+ * ------------------------------------------------------------------ */
+
+describe("sparklines", () => {
+  it("🔴 carries null for a day with no figure, never zero", () => {
+    /*
+     * The regression this guards, and it was live: `cpLead ?? 0`.
+     *
+     * A day with spend and no leads has a null cost per lead. Coerced to 0 it
+     * becomes a MEASURED zero and the sparkline dives to the floor as though
+     * the cost had collapsed. On the first real client this fired on 15 of 28
+     * days — more than half a month showing $0 cost per lead, on screen, during
+     * the call. It is the same "$0.00 CP-LEAD" defect the product was built to
+     * replace, reintroduced one layer up.
+     *
+     * Dropping the nulls instead would be quieter and still wrong: it closes
+     * the gap and shifts every later point left, so the chart misdates the
+     * month. The renderer breaks the line; the builder just tells the truth.
+     */
+    const d = data();
+    d.daily = [
+      day({ dateKey: "2026-08-01" }),
+      day({ dateKey: "2026-08-02" }),
+      day({ dateKey: "2026-08-03" }),
+    ];
+    // Middle day: spend, no leads -> no cost per lead.
+    d.daily[1].derived = { ...d.daily[1].derived, cpLead: null, cpAppt: null };
+
+    const cpLead = metric(build(d).slides, "cpLead");
+    expect(cpLead?.spark).toHaveLength(3);
+    expect(cpLead?.spark[1]).toBeNull();
+    expect(cpLead?.spark).not.toContain(0);
+
+    const cpAppt = metric(build(d).slides, "cpAppt");
+    expect(cpAppt?.spark[1]).toBeNull();
+  });
+
+  it("keeps one entry per day, so the series stays aligned to the period", () => {
+    // Length must equal the number of days regardless of how many are null —
+    // a shorter array is a chart that has silently moved every point.
+    const d = data();
+    d.daily = [day(), day(), day(), day()];
+    d.daily[0].derived = { ...d.daily[0].derived, cpLead: null };
+    d.daily[3].derived = { ...d.daily[3].derived, cpLead: null };
+    expect(metric(build(d).slides, "cpLead")?.spark).toHaveLength(4);
+  });
+
+  it("leaves a count metric's sparkline as plain numbers", () => {
+    // Counts are never null — a day with no leads had zero leads, which is a
+    // fact rather than an absence. Only ratios get the null treatment.
+    const spark = metric(build().slides, "leads")?.spark;
+    expect(spark?.every((v) => typeof v === "number")).toBe(true);
   });
 });
 
@@ -351,10 +485,12 @@ describe("trend and campaigns", () => {
 
   it("drops campaigns that recorded no spend", () => {
     const d = data({
-      campaigns: [
-        { campaignId: "c_1", campaignName: "Live", platform: "meta", spend: 640, impressions: 1, linkClicks: 1, leads: 14, cpLead: 45.71 },
-        { campaignId: "c_2", campaignName: "Paused", platform: "meta", spend: 0, impressions: 0, linkClicks: 0, leads: 0, cpLead: null },
-      ],
+      campaignStages: {
+        rows: [
+          stageRow("c_1", "Live", 640, { new_lead: 14, appointment_booked: 5 }),
+          stageRow("c_2", "Paused", 0),
+        ],
+      },
     });
     const slide = build(d).slides.find((s) => s.kind === "campaigns");
     expect(slide?.kind === "campaigns" && slide.rows.map((r) => r.campaignId)).toEqual([
@@ -363,7 +499,7 @@ describe("trend and campaigns", () => {
   });
 
   it("drops the campaign slide entirely when nothing spent", () => {
-    const deck = build(data({ campaigns: [] }));
+    const deck = build(data({ campaignStages: { rows: [] } }));
     expect(ids(deck.slides)).not.toContain("campaigns");
     expect(skipReason(deck, "Campaigns")).toContain("no campaign recorded spend");
   });
@@ -421,7 +557,7 @@ describe("commentary slides", () => {
 
 describe("a client with nothing", () => {
   it("still produces a walkable deck and explains every gap", () => {
-    const d = data({ campaigns: [], daily: [] });
+    const d = data({ campaignStages: { rows: [] }, daily: [] });
     d.current.ads.spend = 0;
     d.current.funnel = {
       new_lead: 0, contacted: 0, appointment_booked: 0, showed: 0,
@@ -432,6 +568,13 @@ describe("a client with nothing", () => {
       ...d.current.derived,
       cpLead: null, cpAppt: null, cpWon: null, roas: null,
     };
+    /*
+     * The funnel STEPS too, not only the current-period counts. The fixture
+     * zeroed one and left the other populated, which describes a client with no
+     * leads and a full funnel — a state that cannot occur. It only passed
+     * because the old gate read `new_lead` alone.
+     */
+    d.funnel = d.funnel.map((step) => ({ ...step, count: 0 }));
 
     const deck = build(d);
     // Title, spend, leads, appointments, shows, closed won, close — the counts
@@ -492,5 +635,62 @@ describe("clampSlide", () => {
 
   it("returns 0 for an empty deck rather than -1", () => {
     expect(clampSlide(5, 0)).toBe(0);
+  });
+});
+
+describe("sparkRuns — the sparkline's geometry", () => {
+  it("🔴 breaks the line at a null instead of drawing through zero", () => {
+    const runs = sparkRuns([10, null, 30]);
+    expect(runs).toHaveLength(2);
+    // Two single points, neither of them on the zero line.
+    expect(runs.flat().every((p) => Number.isFinite(p.y))).toBe(true);
+  });
+
+  it("🔴 positions each day by its INDEX, so a gap leaves a hole rather than shifting days left", () => {
+    const runs = sparkRuns([10, null, 20, 30]);
+    const xs = runs.flat().map((p) => Math.round(p.x));
+    // Days 0, 2, 3 of a 4-day series: 0%, 66.7%, 100% — not 0/50/100.
+    expect(xs).toEqual([0, 67, 100]);
+  });
+
+  it("keeps index positions when the first or last day is missing", () => {
+    expect(sparkRuns([null, 5, 6, null]).flat().map((p) => Math.round(p.x))).toEqual([33, 67]);
+  });
+
+  it("fits the vertical scale to real values only", () => {
+    const ys = sparkRuns([100, null, 200]).flat().map((p) => p.y);
+    // Min maps to the bottom (30), max to the top (2) — a null never pulls the floor to 0.
+    expect(Math.max(...ys)).toBe(30);
+    expect(Math.min(...ys)).toBe(2);
+  });
+
+  it("draws nothing with fewer than two real values", () => {
+    expect(sparkRuns([])).toEqual([]);
+    expect(sparkRuns([5])).toEqual([]);
+    expect(sparkRuns([null, 5, null])).toEqual([]);
+  });
+});
+
+describe("campaign slide selection", () => {
+  it("🔴 keeps a zero-spend campaign that still produced appointments", () => {
+    /*
+     * A campaign paused before the window can still have appointments landing
+     * in it. Filtering on spend alone dropped it, so the deck's table disagreed
+     * with the dashboard's and hid a campaign that is still producing.
+     */
+    const d = data({
+      campaignStages: {
+        rows: [
+          stageRow("c_live", "Live", 640, { new_lead: 14 }),
+          stageRow("c_paused", "Paused but booking", 0, { appointment_booked: 3 }),
+          stageRow("c_dead", "Nothing at all", 0),
+        ],
+      },
+    });
+    const slide = build(d).slides.find((s) => s.kind === "campaigns");
+    expect(slide?.kind === "campaigns" && slide.rows.map((r) => r.campaignId)).toEqual([
+      "c_live",
+      "c_paused",
+    ]);
   });
 });

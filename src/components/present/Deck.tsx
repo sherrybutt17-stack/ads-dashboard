@@ -102,11 +102,26 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
           go(total - 1);
           break;
         case "Escape":
-          // Escape leaves fullscreen if the browser has not already taken it;
-          // otherwise it leaves the deck. Two meanings, in the order a
-          // presenter expects them.
+          /*
+           * Three meanings, in the order a presenter expects them, and each
+           * one consumes the keystroke rather than falling through to the next.
+           *
+           * 🔴 The last step used to be missing. The comment here promised
+           * "otherwise it leaves the deck" and the code only dismissed the
+           * pre-flight card, so a presenter hitting Escape to get out mid-call
+           * pressed it repeatedly and nothing happened — with a room watching.
+           *
+           * Fullscreen is checked first and returns early: the browser handles
+           * Escape itself there, and navigating away at the same moment would
+           * exit fullscreen AND leave, which is two actions for one keystroke.
+           */
           if (document.fullscreenElement) return;
-          if (preflight) setPreflight(false);
+          if (preflight) {
+            setPreflight(false);
+            break;
+          }
+          e.preventDefault();
+          window.location.href = backHref;
           break;
         case "f":
         case "F":
@@ -117,7 +132,7 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [go, total, preflight]);
+  }, [go, total, preflight, backHref]);
 
   async function toggleFullscreen() {
     try {
