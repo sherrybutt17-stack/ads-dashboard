@@ -231,7 +231,7 @@ supports both:
 
 | | **Model A — agency MCC** | **Model B — client signs in** |
 |---|---|---|
-| How | client links their account to your Manager account | client clicks *Connect Google*, authorizes with their own Google login |
+| How | client links their account to your Manager account | client clicks *Continue with Google*, authorizes with their own Google login |
 | Credential | one agency refresh token, in env | a per-account token, encrypted in the database |
 | `login-customer-id` | your MCC | **theirs**, discovered automatically |
 | Needs OAuth verification | no | **yes** |
@@ -240,93 +240,110 @@ Model B is the front door — nobody has to be talked through a link request —
 Model A stays as the fallback. The app resolves `login-customer-id` per account,
 so the two coexist without interfering.
 
-### 🔴 Corrected 2026-08-21: you are probably not blocked
+### 🔴 Changed 2026-09-09: no developer token, no API Center
 
-This section used to say *"no Google data flows until your developer token has
-Basic access — Explorer only reaches test accounts."* **That is wrong.**
-Verified against Google's own access-levels page:
+Google **sunset developer tokens on 9 September 2026**. API access now belongs to
+the **Google Cloud project that owns your OAuth client**, and you apply for it on
+that project's **Google Ads API** page in Cloud Console — not in a manager
+account's API Center, whose applications "won't be processed". A token sent in
+the `developer-token` header is "optional and ignored". **You no longer need a
+Google Ads manager account** unless you use Model A.
 
-> "Explorer Access level allows the developer token to make Google Ads API
-> requests against both test accounts and production accounts. Production
-> accounts are any accounts that serve real, live Google ads."
+| Level | Real accounts? | Daily operations | How you get it |
+|---|---|---|---|
+| Test | no | 15,000 (test only) | on enabling the API |
+| **Explorer** | **yes** | **2,880** | *Upgrade access level* → apply; automated |
+| **Basic** | yes | 15,000 | apply again once branding is published; automated, minutes |
+| Standard | yes | unlimited | manual review; not needed here |
 
-| Level | Real accounts? | Daily operations |
-|---|---|---|
-| Test Account | no | 15,000 (test only) |
-| **Explorer** (often granted automatically) | **yes** | **2,880** |
-| Basic | yes | 15,000 |
-| Standard | yes | unlimited |
+A `Search`/`SearchStream` request counts as **one** operation however many rows
+it returns, and a sync makes exactly one per account — so Explorer alone covers
+~2,880 account-syncs a day. The practical ceiling is the dashboard-load refresh
+(up to 96 calls a day for one account whose dashboard sits open all day): ~30
+accounts on Explorer, ~156 on Basic. Apply for Basic anyway — it is free and
+automatic once branding is published.
 
-A `Search`/`SearchStream` request counts as **one** operation no matter how many
-rows it returns, and a sync makes exactly **one** — `getDailyMetrics`, whatever
-the window. (`listClientAccounts` and `getCustomer` are onboarding calls, not
-sync calls.) The OAuth token exchange hits `oauth2.googleapis.com` and is not an
-Ads API operation at all.
+Two known Google issues (Sept 2026): Basic/Explorer applications are rejected
+for projects on the **Cloud Free Trial** or with **suspended billing** — use a
+paid billing account (the API itself is free) — and projects that used a Test
+developer token *before* 9 Sept may see `AUTHORIZATION_ERROR` after upgrading. A
+fresh project avoids the second.
 
-So on the nightly cron alone, Explorer's 2,880/day is ~2,880 account-syncs —
-not a constraint at any plausible size.
+### The steps (Model B)
 
-**The one thing that can burn it** is the stale-while-revalidate refresh, which
-fires on dashboard load up to every 15 minutes: 96 ops/day for one account whose
-dashboard sits open all day. That puts the practical Explorer ceiling around
-**30 accounts** in that worst case, and ~156 on Basic. Both are far above the
-nightly-only figure, and neither is the 100-user OAuth cap, which is a different
-limit on a different axis — see the table above.
+Do them in this order — several pages refuse values until an earlier step is
+done. Use one company Google account throughout, with 2-step verification on.
 
-So: check your current level in API Center **before** treating this as blocked,
-and apply for Basic in parallel with shipping rather than ahead of it.
-
-### The steps
-
-1. **Create an empty Manager (MCC) account** at
-   <https://ads.google.com/home/tools/manager-accounts>. Nothing gets linked to
-   it under Model B — it exists solely because Google shows **API Center** only
-   on manager accounts, and API Center is where the developer token lives.
-2. **Google Cloud project:** at <https://console.cloud.google.com> create a
-   project, enable the **Google Ads API**, then create an **OAuth client**
-   (type: **Web application**). Add the redirect URI **exactly**:
-   `https://dash.growthguild.us/api/oauth/google/callback`
+1. **Cloud project:** at <https://console.cloud.google.com> create a project and
+   make sure it is on a **paid** billing account, not the Free Trial.
+2. **Enable the Google Ads API** (APIs & Services → Library).
+3. **Google Auth Platform → Get started:** app name **Growth Guild**, support
+   email, audience **External**, developer contact email (Google's review mail
+   goes here — add a second, shared address so it is never missed).
+4. **Branding:** add the authorized domain **`growthguild.us` first** — the URL
+   fields reject anything whose domain is not listed — then home page
+   `https://dash.growthguild.us/about`, privacy `…/legal/privacy`, terms
+   `…/legal/terms`. All three must load logged out (they are carved out of the
+   auth gate in `src/proxy.ts`). Logo optional: square, 120×120, ≤1 MB.
+5. **Domain ownership:** `growthguild.us` verified in **Search Console** as a
+   Domain property (DNS TXT record) by an account that is Owner or Editor on the
+   Cloud project. **Leave that TXT record in DNS permanently** — removing it
+   withdraws the verification.
+6. **Clients → Create client:** type **Web application**, one redirect URI,
+   exactly `https://dash.growthguild.us/api/oauth/google/callback`. No
+   JavaScript origins and **no `localhost`** — the reviewer checks every client
+   in the project, so keep dev clients in a separate project.
    → `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`.
-3. **Point `dash.growthguild.us` at Vercel** — one CNAME. OAuth must run on your
-   own domain (see *Domain strategy* below).
-4. **Check the three public pages load without signing in.** They ship with the
-   app and Google's reviewer must be able to reach all three:
-   `/about` · `/legal/privacy` · `/legal/terms`
-5. **Search Console:** add a **Domain property** for `growthguild.us` and verify
-   it by DNS TXT record.
-6. **OAuth consent screen:** add **Authorized domain `growthguild.us` BEFORE any
-   URLs** — the URL fields reject anything whose domain is not already listed.
-   Then set the home page, privacy and terms links to the three pages above, and
-   press **Verify Branding**.
-7. **Apply for developer token *Basic* access** in the MCC → **Tools → API
-   Center** → `GOOGLE_ADS_DEVELOPER_TOKEN`. Do this *after* step 6.
-8. **Set publishing status to *In production***. Do not stay in *Testing*:
-   Google **revokes refresh tokens after 7 days** in that state, so every client
-   connection silently dies within a week. *Published but unverified* is
-   shippable — it shows an "unverified app" warning and caps at **100 users for
-   the lifetime of the app, not resettable** — so publish, ship, and verify in
-   parallel.
-9. **Submit OAuth verification:** a written justification plus a demo video
-   showing your branding, the full consent flow, the exact scopes, and the
-   client ID visible in the address bar. Allow up to 10 days. The justification
-   text, the video shot list and a pre-submission checklist are written out in
-   **`GOOGLE-VERIFICATION.md`**.
+7. **Data Access:** add `https://www.googleapis.com/auth/adwords` (manually) and
+   confirm it is listed under **sensitive** scopes. Nothing else.
+8. **Audience → Publish app** (status *In production*). Never stay in
+   *Testing*: Google **revokes refresh tokens after 7 days** there, so every
+   client connection silently dies within a week.
+9. **Branding → Verify branding** (automated, minutes) → **Publish branding**
+   within 7 days, or it has to be verified again.
+10. **Google Ads API page** (`console.cloud.google.com/google/ads-apis/overview`):
+    accept the terms, then *Upgrade access level* → **Explorer**, then **Basic**.
+11. **Vercel env:** `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, and
+    `NEXT_PUBLIC_APP_URL=https://dash.growthguild.us` (the redirect URI is built
+    from it). Leave `GOOGLE_ADS_API_VERSION` unset — the code pins a supported
+    version. Delete any old `GOOGLE_ADS_DEVELOPER_TOKEN`; it is ignored.
+12. **Submit OAuth verification** (Verification Center) — justification text,
+    demo-video shot list and pre-submission checklist are in
+    **`GOOGLE-VERIFICATION.md`**. Allow 3–10 business days.
+
+*Published but unverified* is usable meanwhile: clients see "Google hasn't
+verified this app" (*Advanced → Go to Growth Guild* continues) and the app is
+capped at **100 users for its lifetime, not resettable**. If verification is
+**rejected**, Google cuts off the scope for everyone until it is fixed and
+resubmitted — fix what the reviewer will check before submitting.
 
 > **No CASA.** The annual third-party security assessment applies to
-> *restricted* scopes. `adwords` is *sensitive* (reclassified October 2020), so
-> this is standard review. The app requests `adwords` and nothing else —
-> deliberately, since one extra scope changes which review you are in.
+> *restricted* scopes. `adwords` is *sensitive*, so this is standard review.
+> The app requests `adwords` and nothing else — deliberately, since one extra
+> scope changes which review you are in.
+
+### Tell clients before they connect
+
+- Google requires **2-step verification** on the account that signs in, and may
+  require a **passkey**; a brand-new passkey can take **7 days** to be trusted.
+  Ask clients to set one up (g.co/passkeys) before onboarding day.
+- A client on a **Google Workspace** account may need their admin to mark the
+  app as trusted before the sign-in is allowed.
+- Google allows **100 refresh tokens per Google account per OAuth client**; the
+  oldest is silently invalidated past that. One staff member connecting a very
+  large number of clients from their own login will hit it — have clients sign
+  in themselves.
 
 ### For Model A only (agency MCC)
 
-10. **Refresh token:** authorize once as the MCC-owner user with scope
+13. **Refresh token:** authorize once as the MCC-owner user with scope
     `https://www.googleapis.com/auth/adwords` and offline access (the OAuth
     Playground is the quickest path) → `GOOGLE_ADS_REFRESH_TOKEN`. Google
     refresh tokens are reusable and do not rotate.
-11. Set `GOOGLE_ADS_LOGIN_CUSTOMER_ID` to the **MCC id, digits only** (no
+14. Set `GOOGLE_ADS_LOGIN_CUSTOMER_ID` to the **MCC id, digits only** (no
     dashes). Accounts connected through Model B store their own manager id and
     ignore this.
-12. **Link each client account to the MCC**, then paste that account's Customer
+15. **Link each client account to the MCC**, then paste that account's Customer
     ID into the wizard. It is verified against the API immediately, echoing back
     the account name so a wrong id is caught in the moment.
 
@@ -336,19 +353,20 @@ Google's *Authorized domain* covers every subdomain of the top private domain,
 so `<client>.growthguild.us` is free on the OAuth side and Vercel wildcards
 scale it. **Client-owned vanity domains do not scale** — each is a separate top
 private domain needing its own Authorized Domain entry and its own Search
-Console verification.
+Console verification. Adding a redirect URI, or changing the app name, logo or
+policy links, triggers re-verification.
 
 **Rule: run OAuth only on the agency's own domain.** Client vanity domains may
 serve read-only report views; never the consent flow.
 
-> ⚠️ **Pin the API version.** `GOOGLE_ADS_API_VERSION` defaults to `v22`. Unlike
-> Meta — which silently falls back to an older version and hands you quietly
-> wrong numbers — Google **hard-errors** on a sunset version, which is the
-> better failure. The previous default here was `v18` (Nov 2024), long past
-> sunset, and would have failed every call. Confirm the current version against
-> Google's release notes before the first real request and set it explicitly.
-> A separate nightly cron (`/api/cron/google-sync`) reconciles Google spend; it
-> never touches the Meta pipeline.
+> ⚠️ **API version.** The code pins `v25` (released July 2026, supported until
+> August 2027); minor releases are served on the same `/v25` endpoint. Google
+> **hard-errors** on a sunset version — v22, the previous default, stops
+> answering on 7 October 2026 — which is the better failure than Meta's silent
+> fallback. Re-check <https://developers.google.com/google-ads/api/docs/sunset-dates>
+> before mid-2027; `GOOGLE_ADS_API_VERSION` overrides the pin without a code
+> change. A separate nightly cron (`/api/cron/google-sync`) reconciles Google
+> spend; it never touches the Meta pipeline.
 
 ---
 
@@ -365,6 +383,11 @@ localhost.
    so an omission is no longer silently `localhost` — but a custom domain in
    front of the project is invisible to that fallback, so set it explicitly.
 4. Set `DASHBOARD_PASSWORD`. **Without it the dashboard is publicly readable.**
+   To use it, sign in with the **email field left blank** and this password.
+   It is accepted only while the deployment has no user accounts, or when it is
+   bound to a named one — so create real staff logins early, after which it
+   stops working as a shared key. The login page deliberately does not mention
+   it: that page is public, and it is where Google's OAuth reviewer lands.
 
 ### Cron — the nightly reconcile
 

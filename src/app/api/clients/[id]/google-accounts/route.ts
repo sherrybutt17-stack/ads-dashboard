@@ -56,7 +56,7 @@ export async function POST(
   if (!isGoogleConfigured()) {
     /*
      * Two registers for the same fact. The setup instructions name our
-     * developer token and our MCC — worth reading if you can act on them, and a
+     * OAuth client and our MCC — worth reading if you can act on them, and a
      * description of shared credentials to anyone who cannot. An agency owner
      * is in the second group, so they get told it is ours and that they cannot
      * fix it, which is the part that stops them re-entering a customer id ten
@@ -66,7 +66,7 @@ export async function POST(
       {
         ok: false,
         error: superadmin
-          ? "Google Ads is not configured yet. Set GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_CLIENT_ID and GOOGLE_ADS_CLIENT_SECRET (see SETUP.md §2b). The agency refresh token and MCC id are Model A only — client sign-in does not need them."
+          ? "Google Ads is not configured yet. Set GOOGLE_ADS_CLIENT_ID and GOOGLE_ADS_CLIENT_SECRET (see SETUP.md §2b). The agency refresh token and MCC id are Model A only — client sign-in does not need them."
           : "Google Ads is not fully set up on our side",
         hint: superadmin
           ? undefined

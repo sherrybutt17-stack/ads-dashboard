@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "Google connect is not configured. Set GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET and GOOGLE_ADS_DEVELOPER_TOKEN.",
+          "Google connect is not configured. Set GOOGLE_ADS_CLIENT_ID and GOOGLE_ADS_CLIENT_SECRET.",
       },
       { status: 500 },
     );

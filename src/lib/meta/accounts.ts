@@ -231,9 +231,32 @@ export async function removeAdAccount(
     .limit(1);
   if (!existing) throw new Error("Account not found");
 
+  /*
+   * Soft-removed, and its token dropped.
+   *
+   * 🔴 The credential is cleared, not just the status — the same rule
+   * `client-removal.ts` has always applied to a whole client. `removed` is a
+   * soft flag on a row that still exists, so a token left on it is usable
+   * access to someone's ad account that we were asked to give up, one missing
+   * `status` filter away from being used. The privacy policy says disconnecting
+   * "removes its stored credential immediately"; this is what makes that true.
+   * Re-adding costs nothing: every add path upserts and supplies a fresh token.
+   *
+   * Deliberately NOT revoked at Google/Meta/TikTok. One sign-in can back
+   * connections for several clients, and revoking a grant kills every token
+   * issued under it — detaching one account would silently disconnect others.
+   * The owner can revoke the app from their own account settings, which the
+   * privacy policy tells them.
+   */
   await db
     .update(metaAdAccounts)
-    .set({ status: "removed", isPrimary: false, updatedAt: new Date() })
+    .set({
+      status: "removed",
+      isPrimary: false,
+      tokenEncrypted: null,
+      tokenExpiresAt: null,
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(metaAdAccounts.id, accountId),

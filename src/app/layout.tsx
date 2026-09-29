@@ -4,8 +4,13 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Ads + CRM Dashboard",
-  description: "Live Facebook Ads and GoHighLevel pipeline reporting",
+  /*
+   * The same name as the Google OAuth consent screen and /about. Google's
+   * reviewer watches the demo video go from the consent screen into the app,
+   * and a product called something else in the tab reads as a different app.
+   */
+  title: "Growth Guild",
+  description: "Advertising and CRM reporting — ad spend joined to real pipeline outcomes",
 };
 
 export default function RootLayout({

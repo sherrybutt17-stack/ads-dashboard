@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function TermsPage() {
   return (
-    <PublicPage title="Terms of service" updated="13 August 2026">
+    <PublicPage title="Terms of service" updated="29 September 2026">
       <p>
         These terms cover use of the Growth Guild reporting dashboard. They sit
         alongside — and do not replace — the service agreement between Growth
@@ -19,8 +19,8 @@ export default function TermsPage() {
 
       <H2>Access</H2>
       <p>
-        Access is by invitation. We issue a login to named people at each client,
-        and to our own staff. Accounts are personal: do not share a login or its
+        An agency creates its own account. Client access is by invitation: a
+        login is issued to named people at each client by their agency. Accounts are personal: do not share a login or its
         password. Tell us promptly if you believe an account has been
         compromised, and we will disable it.
       </p>

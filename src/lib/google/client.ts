@@ -3,9 +3,11 @@ import { getAccessToken } from "./oauth";
 /**
  * Google Ads API HTTP wrapper — the Google analog of `MetaClient`.
  *
- * Every call goes through the MCC: `login-customer-id` is our Manager account,
- * and the URL targets a linked child `customer-id`. One developer token (env)
- * plus one OAuth access token authorize them all.
+ * The URL targets a `customer-id`; `login-customer-id` names the manager the
+ * call goes through (our MCC for Model A, the client's own manager — or none —
+ * for Model B). An OAuth access token authorizes the call, and the Cloud project
+ * that owns the OAuth client decides the access level; the old developer token
+ * was sunset by Google on 2026-09-09.
  *
  * Two traps handled here:
  *  1. **cost is in micros.** `metrics.cost_micros` is 1,000,000× the currency
@@ -18,21 +20,26 @@ import { getAccessToken } from "./oauth";
 const API_HOST = "https://googleads.googleapis.com";
 
 /**
- * ⚠️ CONFIRM THIS AGAINST GOOGLE'S RELEASE NOTES BEFORE THE FIRST REAL CALL.
+ * The Google Ads API major version every request is pinned to.
  *
- * Google ships roughly three Ads API versions a year and sunsets each after
- * about thirteen months. Unlike Meta — which silently falls back to an older
+ * Google ships a major version roughly every quarter and sunsets each about a
+ * year after release. Unlike Meta — which silently falls back to an older
  * version and gives you quietly wrong numbers — Google **hard-errors** on a
  * sunset version. That is the better failure: loud, immediate, and impossible
  * to mistake for a data problem.
  *
- * The previous default was `v18` (released around Nov 2024), which is long past
- * sunset and would fail every call. `v22` is the version this release series
- * lands on by that cadence, but it is a projection, not a checked fact, and
- * nothing here has yet made a live request. Set `GOOGLE_ADS_API_VERSION`
- * explicitly once the developer token is approved and the first call is made.
+ * 🔴 `v22` sunsets on 2026-10-07 ("all v22 API requests will begin to fail",
+ * Google Ads Developer Blog, 2026-09-02). `v25` was released 2026-07-22 and is
+ * supported until August 2027. None of the fields this client reads —
+ * `customer_client.*`, `customer.*`, `campaign.id/name`, `segments.date`,
+ * `metrics.cost_micros/impressions/clicks/conversions` — changed between the
+ * two. Minor releases (v25.1, v25.2 …) are served on the same `/v25` endpoint,
+ * so the path carries the major version only.
+ *
+ * Re-check https://developers.google.com/google-ads/api/docs/sunset-dates
+ * before mid-2027. `GOOGLE_ADS_API_VERSION` overrides this without a deploy.
  */
-const DEFAULT_API_VERSION = "v22";
+const DEFAULT_API_VERSION = "v25";
 
 function apiVersion(): string {
   return process.env.GOOGLE_ADS_API_VERSION ?? DEFAULT_API_VERSION;
@@ -167,10 +174,20 @@ export class GoogleAdsClient {
     return id ? { "login-customer-id": id } : {};
   }
 
-  private developerToken(): string {
+  /**
+   * `{"developer-token": …}` when one is set, otherwise `{}`.
+   *
+   * 🔴 Google sunset developer tokens on 2026-09-09. Access is now granted to
+   * the Cloud project that owns the OAuth client (Test → Explorer → Basic →
+   * Standard, applied for on the Cloud Console "Google Ads API" page), and a
+   * token sent in the header is "optional and ignored by the API servers".
+   * This used to THROW when the variable was unset, which would have failed
+   * every request from an install configured the way Google now tells you to.
+   * Still forwarded when present, so an older pinned version keeps working.
+   */
+  private developerTokenHeader(): Record<string, string> {
     const t = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
-    if (!t) throw new Error("GOOGLE_ADS_DEVELOPER_TOKEN is not set.");
-    return t;
+    return t ? { "developer-token": t } : {};
   }
 
   /**
@@ -190,7 +207,7 @@ export class GoogleAdsClient {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        "developer-token": this.developerToken(),
+        ...this.developerTokenHeader(),
         // Omitted entirely when the account has no manager above it — sending
         // an empty header is not the same as sending none, and Google rejects
         // the former.
@@ -256,7 +273,7 @@ export class GoogleAdsClient {
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        "developer-token": this.developerToken(),
+        ...this.developerTokenHeader(),
       },
       cache: "no-store",
     });

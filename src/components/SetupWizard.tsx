@@ -1895,9 +1895,10 @@ function GoogleAccountsStep({
       {!configured && live.length === 0 ? (
         <p className="text-xs" style={{ color: "var(--status-warning)" }}>
           Google Ads isn&rsquo;t configured on this deployment yet. Add the
-          agency developer token, OAuth client, refresh token and MCC id to the
-          environment (see <code>SETUP.md</code> §2b), then reload. A client can
-          run Meta-only until then.
+          Google OAuth client (<code>GOOGLE_ADS_CLIENT_ID</code> and
+          <code>GOOGLE_ADS_CLIENT_SECRET</code>) to the environment (see{" "}
+          <code>SETUP.md</code> §2b), then reload. A client can run Meta-only
+          until then.
         </p>
       ) : (
         <>
@@ -1993,6 +1994,32 @@ function GoogleAccountsStep({
               >
                 Sign in with the Google account that manages these ads, then
                 pick which accounts belong to this client.
+              </p>
+              {/*
+                The Google Ads Developer Policy requires the data-access
+                disclosure to sit in the normal flow at the point of connecting
+                — not behind a menu or only in the privacy policy. Keep it next
+                to the button, and keep it in step with /legal/privacy.
+              */}
+              <p
+                className="mt-1 text-[11.5px] leading-relaxed"
+                style={{ color: "var(--text-muted)" }}
+              >
+                What we access: read-only. We list the Google Ads accounts this
+                sign-in can reach so you can choose, then read daily campaign
+                names, impressions, clicks, cost and conversions for the ones
+                you pick, to report them next to this client&rsquo;s pipeline.
+                We never change campaigns, budgets or bids. Disconnect here any
+                time; see our{" "}
+                <a
+                  href="/legal/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  privacy policy
+                </a>
+                .
               </p>
             </div>
           )}

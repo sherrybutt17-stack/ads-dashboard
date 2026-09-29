@@ -141,10 +141,13 @@ function LoginForm() {
         <Link href="/signup" className="hover:underline">
           Create an agency
         </Link>
-        {" · "}
-        Agency staff: leave email blank to use the shared admin password. It is
-        accepted only while this deployment has no user accounts, or when it is
-        bound to a named one.
+        {/*
+          No hint about the shared admin password here. This page is public —
+          it is where Google's OAuth reviewer lands from every "Sign in" link —
+          and advertising that a shared credential exists, and how to use it,
+          is a note for staff, not for every visitor. The blank-email sign-in
+          itself is unchanged; SETUP.md documents it.
+        */}
       </p>
     </form>
   );

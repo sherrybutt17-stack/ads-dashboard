@@ -37,9 +37,10 @@ export default function AboutPage() {
 
       <H2>Who uses it</H2>
       <p>
-        The agency&rsquo;s staff, and the agency&rsquo;s clients. Every client
-        sees only their own data, through their own login. It is not a
-        general-purpose product and there is no public sign-up.
+        The agency&rsquo;s staff, and the agency&rsquo;s clients. An agency
+        creates its own account; each client is given a login by their agency,
+        and every client sees only their own data. Nobody can sign up for access
+        to a client&rsquo;s data.
       </p>
 
       <H2>What we ask Google for, and why</H2>

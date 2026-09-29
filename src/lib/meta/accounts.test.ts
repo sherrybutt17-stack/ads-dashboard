@@ -379,6 +379,21 @@ describe("removeAdAccount", () => {
     expect(rows[0].is_primary).toBe(false);
   });
 
+  it("🔴 drops the stored token and its expiry, keeping the row", async () => {
+    // "Disconnecting an advertising account removes its stored credential
+    // immediately" — the privacy policy. The row stays for history.
+    await mod.addAdAccount(CLIENT_A1, "111", "their-own-token", new Date(Date.now() + 86_400_000));
+    const [account] = await mod.listAdAccounts(CLIENT_A1);
+    expect(account.tokenEncrypted).not.toBeNull();
+
+    await mod.removeAdAccount(CLIENT_A1, account.id);
+
+    const [after] = await mod.listAdAccounts(CLIENT_A1, { includeRemoved: true });
+    expect(after.status).toBe("removed");
+    expect(after.tokenEncrypted).toBeNull();
+    expect(after.tokenExpiresAt).toBeNull();
+  });
+
   it("promotes another active account when the primary is removed", async () => {
     await mod.addAdAccount(CLIENT_A1, "111");
     metaResponse = { currency: "CAD", timezone_name: "America/Toronto" };

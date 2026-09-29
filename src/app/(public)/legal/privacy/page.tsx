@@ -18,19 +18,21 @@ export const metadata: Metadata = {
  */
 export default function PrivacyPage() {
   return (
-    <PublicPage title="Privacy policy" updated="13 August 2026">
+    <PublicPage title="Privacy policy" updated="29 September 2026">
       <p>
         This policy covers the Growth Guild reporting dashboard — the application
-        that joins advertising spend to CRM outcomes for our clients. It is not a
-        public product; access is by invitation, through a login we issue.
+        that joins advertising spend to CRM outcomes for our clients. An agency
+        creates its own account; clients get access only through a login their
+        agency issues.
       </p>
 
       <H2>What we hold</H2>
       <p>
         <strong>Advertising data.</strong> Daily campaign performance from
-        Facebook and Google Ads: impressions, clicks, cost, conversions, and the
-        names and identifiers of campaigns, ad sets and ads. Aggregate figures
-        only — never a list of the people who saw an ad.
+        Facebook, Google Ads and TikTok: impressions, clicks, cost, conversions,
+        and the names and identifiers of campaigns, ad sets and ads — plus the
+        name, identifier, currency and time zone of each connected ad account.
+        Aggregate figures only — never a list of the people who saw an ad.
       </p>
       <p>
         <strong>CRM data.</strong> From the client&rsquo;s own GoHighLevel
@@ -53,10 +55,13 @@ export default function PrivacyPage() {
         report.
       </p>
       <p>
-        We do not use it to create, change, pause or budget campaigns. We do not
-        read data from any Google Ads account the client has not explicitly
-        selected. We store the resulting metrics and an encrypted refresh token,
-        nothing else from Google.
+        We do not use it to create, change, pause or budget campaigns. When a
+        client signs in, we list the Google Ads accounts that sign-in can reach —
+        their names and identifiers — so the client can choose which to connect;
+        we read performance data only from the accounts they choose. From Google
+        we store: the daily metrics above, the names and identifiers of the
+        chosen accounts and their campaigns, each account&rsquo;s currency and
+        time zone, and an encrypted refresh token. Nothing else.
       </p>
       <p>
         <strong>Limited Use.</strong> Our use and transfer of information
@@ -86,16 +91,29 @@ export default function PrivacyPage() {
 
       <H2>Where it is held, and for how long</H2>
       <p>
-        Data is stored in a managed Postgres database and served from
+        Data is stored in a Postgres database hosted by Neon and served from
         Vercel&rsquo;s infrastructure. Credentials — advertising platform tokens
         and CRM tokens — are encrypted at rest with AES-256-GCM. Passwords are
         stored as scrypt hashes and are not recoverable.
       </p>
       <p>
+        <strong>Service providers.</strong> A small number of providers process
+        data for us, each only to run the part of the application named here:
+        Vercel (hosting) and Neon (database) for everything above; Resend, to
+        deliver report emails, which carry a link and never figures; and, only
+        where these features are switched on, Anthropic, which writes the
+        plain-English summary of a report from its aggregated figures (never
+        contact details), and a PDF rendering service (Browserless or PDFShift),
+        which turns a report page into a PDF when one is requested. None of them
+        may use the data for their own purposes.
+      </p>
+      <p>
         Reporting data is retained for as long as the client is with us, and
         removed within 30 days of a written request or the end of the engagement.
         Disconnecting an advertising account removes its stored credential
-        immediately.
+        immediately. It does not remove this application from your Google
+        account&rsquo;s list of connected apps — to do that, use Google Account
+        permissions, below.
       </p>
 
       <H2>Your choices</H2>

@@ -278,6 +278,24 @@ describe("removeTiktokAccount", () => {
     expect(all[0].status).toBe("removed");
   });
 
+  it("🔴 drops the stored access token, keeping the row", async () => {
+    // "Disconnecting an advertising account removes its stored credential
+    // immediately" — the privacy policy. The row stays for history.
+    await seed("1234567890");
+    await run(
+      `UPDATE tiktok_ad_accounts SET access_token_encrypted = 'ciphertext' WHERE advertiser_id = '1234567890'`,
+    );
+    const [row] = (
+      await run(`SELECT id FROM tiktok_ad_accounts WHERE advertiser_id = '1234567890'`)
+    ).rows;
+
+    await mod.removeTiktokAccount(CLIENT, String(row.id));
+
+    const [after] = await rows();
+    expect(after.status).toBe("removed");
+    expect(after.access_token_encrypted).toBeNull();
+  });
+
   it("🔴 refuses to detach another client's advertiser", async () => {
     /*
      * The account id arrives from a URL. Without the client in the WHERE this

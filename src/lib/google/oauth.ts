@@ -42,12 +42,17 @@ const cache = new Map<string, CachedToken>();
  * shared agency token otherwise, raising a clear error if neither exists. So
  * the right question here is "can we talk to Google at all", and the answer to
  * "do we have an agency-wide credential" belongs where that credential is used.
+ *
+ * 🔴 The developer token is NOT part of that answer any more. Google sunset
+ * developer tokens on 2026-09-09: API access now belongs to the Google Cloud
+ * project that owns the OAuth client, and a `developer-token` header is
+ * "optional and ignored by the API servers". Requiring it here would keep a
+ * correctly configured install dark over a variable that no longer does
+ * anything. See `developerTokenHeader` in `client.ts`.
  */
 export function isGoogleConfigured(): boolean {
   return Boolean(
-    process.env.GOOGLE_ADS_DEVELOPER_TOKEN &&
-      process.env.GOOGLE_ADS_CLIENT_ID &&
-      process.env.GOOGLE_ADS_CLIENT_SECRET,
+    process.env.GOOGLE_ADS_CLIENT_ID && process.env.GOOGLE_ADS_CLIENT_SECRET,
   );
 }
 
@@ -130,9 +135,9 @@ const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 /**
  * The one scope this app asks for.
  *
- * `adwords` is a SENSITIVE scope (upgraded from restricted in Oct 2020), which
- * means standard OAuth verification — a written justification and a demo video,
- * but **no CASA**. The annual third-party security assessment applies to
+ * `adwords` is a SENSITIVE scope (reclassified to sensitive in Oct 2020, when
+ * verification became mandatory for it), which means standard OAuth
+ * verification — a written justification and a demo video, but **no CASA**. The annual third-party security assessment applies to
  * restricted scopes only, and asking for anything beyond `adwords` would drag
  * this application into a different, far slower review.
  */
@@ -154,10 +159,9 @@ export function googleRedirectUri(): string {
  * do with it.
  */
 export function isGoogleConnectConfigured(): boolean {
+  // No developer token — sunset by Google; see `isGoogleConfigured`.
   return Boolean(
-    process.env.GOOGLE_ADS_CLIENT_ID &&
-      process.env.GOOGLE_ADS_CLIENT_SECRET &&
-      process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
+    process.env.GOOGLE_ADS_CLIENT_ID && process.env.GOOGLE_ADS_CLIENT_SECRET,
   );
 }
 

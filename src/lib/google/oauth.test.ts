@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isGoogleConfigured, isAgencyGoogleConfigured } from "./oauth";
+import {
+  isGoogleConfigured,
+  isAgencyGoogleConfigured,
+  isGoogleConnectConfigured,
+} from "./oauth";
 
 /**
  * Which env vars mean "Google is switched on".
@@ -30,8 +34,12 @@ function env(values: Partial<Record<(typeof KEYS)[number], string | undefined>>)
   for (const k of KEYS) vi.stubEnv(k, values[k]);
 }
 
+/*
+ * The app-level credentials: the OAuth client and nothing else. The developer
+ * token is deliberately absent — Google sunset it on 2026-09-09 and access now
+ * belongs to the Cloud project that owns this client. See the test below.
+ */
 const APP = {
-  GOOGLE_ADS_DEVELOPER_TOKEN: "dev-token",
   GOOGLE_ADS_CLIENT_ID: "client-id",
   GOOGLE_ADS_CLIENT_SECRET: "client-secret",
 } as const;
@@ -42,8 +50,7 @@ afterEach(() => vi.unstubAllEnvs());
 describe("isGoogleConfigured", () => {
   it("🔴 is true for a Model B install — no agency MCC anywhere", () => {
     /*
-     * The regression. Client sign-in needs the developer token and the OAuth
-     * client and nothing else: each account carries its own refresh token, and
+     * The regression. Client sign-in needs the OAuth client and nothing else: each account carries its own refresh token, and
      * `googleRefreshTokenFor` prefers it over the shared one.
      */
     env(APP);
@@ -62,7 +69,7 @@ describe("isGoogleConfigured", () => {
   it.each(Object.keys(APP) as Array<keyof typeof APP>)(
     "is false without %s",
     (missing) => {
-      // These three are what any call needs, either model. Missing one is a
+      // These two are what any call needs, either model. Missing one is a
       // genuine "cannot talk to Google", which is what the gate should mean.
       const partial = { ...APP } as Record<string, string | undefined>;
       delete partial[missing];
@@ -72,10 +79,24 @@ describe("isGoogleConfigured", () => {
   );
 
   it("treats an empty string as unset", () => {
-    // `GOOGLE_ADS_DEVELOPER_TOKEN=""` is how `.env.example` ships it, so the
-    // unconfigured state is empty strings rather than absent keys.
-    env({ ...APP, GOOGLE_ADS_DEVELOPER_TOKEN: "" });
+    // `.env.example` ships every key as an empty string, so the unconfigured
+    // state is empty strings rather than absent keys.
+    env({ ...APP, GOOGLE_ADS_CLIENT_SECRET: "" });
     expect(isGoogleConfigured()).toBe(false);
+  });
+
+  it("🔴 does not require a developer token — Google sunset them", () => {
+    /*
+     * Developer tokens were sunset on 2026-09-09; a token in the header is
+     * "optional and ignored by the API servers". Gating on one kept a correctly
+     * configured install reporting "not configured" and hid the Connect button.
+     */
+    env({ ...APP, GOOGLE_ADS_DEVELOPER_TOKEN: undefined });
+    expect(isGoogleConfigured()).toBe(true);
+    expect(isGoogleConnectConfigured()).toBe(true);
+    // And an old one left in the environment changes nothing either way.
+    env({ ...APP, GOOGLE_ADS_DEVELOPER_TOKEN: "legacy-token" });
+    expect(isGoogleConfigured()).toBe(true);
   });
 });
 
@@ -106,11 +127,10 @@ describe("isAgencyGoogleConfigured", () => {
   });
 
   it("still needs the app credentials underneath", () => {
-    // An agency token without a developer token cannot make a call, so this
-    // must not report a working Model A.
+    // An agency token without the OAuth client secret cannot be exchanged for
+    // an access token, so this must not report a working Model A.
     env({
       GOOGLE_ADS_CLIENT_ID: "client-id",
-      GOOGLE_ADS_CLIENT_SECRET: "client-secret",
       GOOGLE_ADS_REFRESH_TOKEN: "refresh",
       GOOGLE_ADS_LOGIN_CUSTOMER_ID: "1234567890",
     });

@@ -205,7 +205,17 @@ function isDeveloperTokenProblem(text: string): boolean {
      * sentence is unambiguous and is what distinguishes "ours to fix" from
      * "yours to fix".
      */
-    /only approved for use with test accounts/i.test(text)
+    /only approved for use with test accounts/i.test(text) ||
+    /*
+     * The same stories under the names Google uses since it sunset developer
+     * tokens (2026-09-09) and moved access levels onto the Cloud project. v25
+     * returns `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` for a project still at
+     * Test access, and `MISSING_TOS` when nobody has accepted the Google Ads API
+     * terms on the Cloud Console "Google Ads API" page. Both are settings only
+     * we can change, and a customer who reconnects gets exactly the same answer.
+     */
+    /\bCLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION\b/.test(text) ||
+    /\bMISSING_TOS\b/.test(text)
   );
 }
 

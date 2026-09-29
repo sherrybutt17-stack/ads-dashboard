@@ -235,6 +235,24 @@ describe("removeGoogleAccount", () => {
     expect(await mod.listGoogleAccounts(CLIENT_A1, { includeRemoved: true })).toHaveLength(1);
   });
 
+  it("🔴 drops the stored refresh token, keeping the row", async () => {
+    /*
+     * The privacy policy promises disconnecting "removes its stored credential
+     * immediately". The row stays so historical spend keeps its owner; the
+     * credential does not, or a query that forgets the status filter still
+     * holds working access to an account we were asked to let go of.
+     */
+    await mod.addGoogleAccount(CLIENT_A1, "1234567890", "client-signin-token", "");
+    const [account] = await mod.listGoogleAccounts(CLIENT_A1);
+    expect(account.refreshTokenEncrypted).not.toBeNull();
+
+    await mod.removeGoogleAccount(CLIENT_A1, account.id);
+
+    const [after] = await mod.listGoogleAccounts(CLIENT_A1, { includeRemoved: true });
+    expect(after.status).toBe("removed");
+    expect(after.refreshTokenEncrypted).toBeNull();
+  });
+
   it("🔴 promotes another active account when the primary is removed", async () => {
     await mod.addGoogleAccount(CLIENT_A1, "1111111111");
     await mod.addGoogleAccount(CLIENT_A1, "2222222222");

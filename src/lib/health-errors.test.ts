@@ -217,6 +217,9 @@ describe("classifying upstream failures", () => {
       "DEVELOPER_TOKEN_PROHIBITED",
       "DEVELOPER_TOKEN_INVALID",
       "DEVELOPER_TOKEN_PARAMETER_MISSING",
+      // Their replacements since access moved onto the Cloud project.
+      "CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION",
+      "MISSING_TOS",
     ]) {
       const err = Object.assign(new Error(`Google Ads 403: ${code}`), {
         name: "GoogleAdsError",
@@ -235,7 +238,7 @@ describe("classifying upstream failures", () => {
     /*
      * The other half of the fix. Widening `not_configured` to swallow every 403
      * would hide a genuinely revoked account behind "contact support" — the
-     * failure this module was written to stop. Only the four named codes move.
+     * failure this module was written to stop. Only the named codes move.
      */
     const err = Object.assign(new Error("Google Ads 403 on customer 1234567890: denied"), {
       name: "GoogleAdsError",
