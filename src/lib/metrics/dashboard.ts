@@ -1173,6 +1173,12 @@ async function loadCreatives(
  * Takes the same client and platform as `loadDashboard` and re-derives the
  * filter rather than accepting one, so the two entry points cannot drift into
  * counting different leads.
+ *
+ * 🔴 Stage columns here use `reached` counting — "got at least this far,
+ * counted once, in the period they first got there" — while `loadDashboard`
+ * keeps `entered`. Deliberate (the Reports tab only, by request): a lead moved
+ * straight from New Lead to Appointment Booked counts as contacted in these
+ * tables, and not on the Overview tiles. See `StageCounting` in `queries.ts`.
  */
 export async function loadDeferredTables(
   client: Client,
@@ -1196,6 +1202,8 @@ export async function loadDeferredTables(
             undefined,
             filter,
             platform,
+            false,
+            "reached",
           ),
         ),
       ),
@@ -1206,6 +1214,8 @@ export async function loadDeferredTables(
         undefined,
         filter,
         platform,
+        false,
+        "reached",
       ),
       getPeriodMetrics(
         client.id,
@@ -1214,6 +1224,8 @@ export async function loadDeferredTables(
         undefined,
         filter,
         platform,
+        false,
+        "reached",
       ),
       (async () => {
         const w = trailingWindowInclusive(14, tz);
@@ -1225,11 +1237,12 @@ export async function loadDeferredTables(
           undefined,
           filter,
           platform,
+          "reached",
         );
       })(),
       Promise.all(
         trailingMonths(12, tz).map((m) =>
-          getPeriodMetrics(client.id, m, m.label, undefined, filter, platform),
+          getPeriodMetrics(client.id, m, m.label, undefined, filter, platform, false, "reached"),
         ),
       ),
     ]);

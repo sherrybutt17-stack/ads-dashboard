@@ -191,6 +191,47 @@ export function definitionFor(key: string): MetricDefinition | null {
 }
 
 /**
+ * The Reports tab's four tables count stages as "reached this stage or further"
+ * (`StageCounting` in `queries.ts`), so their column definitions for those
+ * stages must say so. Everywhere else keeps `METRIC_DEFINITIONS`.
+ *
+ * Static text — `queries.ts` pulls in the database and this module is imported
+ * by client components — so `definitions.test.ts` holds the two in step.
+ */
+const REACHED_COUNTING =
+  "Counts each lead once, in the period they FIRST got at least this far — this stage or any later one. A lead moved straight from New Lead to Appointment Booked still counts as contacted here. (The Overview tab counts only leads entering this exact stage, so its figures can be lower.)";
+
+export const REPORT_TABLE_DEFINITIONS: Record<string, MetricDefinition> = {
+  contacted: {
+    what: "Leads the team got at least as far as contacting.",
+    formula:
+      "Distinct paid leads first reaching Contacted or any later stage: Appointment Booked, Showed, No Show or Closed / Won.",
+    caveat: REACHED_COUNTING,
+  },
+  appointment_booked: {
+    what: "Leads who got at least as far as booking an appointment.",
+    formula:
+      "Distinct paid leads first reaching Appointment Booked or any later stage: Showed, No Show or Closed / Won.",
+    caveat: REACHED_COUNTING,
+  },
+  showed: {
+    what: "Booked leads who got at least as far as turning up.",
+    formula: "Distinct paid leads first reaching Showed or Closed / Won.",
+    caveat: REACHED_COUNTING,
+  },
+  closed_won: {
+    what: "Deals closed.",
+    formula: "Distinct paid leads first reaching Closed / Won.",
+    caveat: REACHED_COUNTING,
+  },
+};
+
+/** Column definitions for the Reports tab's tables. */
+export function reportTableDefinitionFor(key: string): MetricDefinition | null {
+  return REPORT_TABLE_DEFINITIONS[key] ?? definitionFor(key);
+}
+
+/**
  * The metrics a REPORT actually puts in front of a reader, in reading order.
  *
  * ── Why this list is short, and why it is a list ──────────────────────

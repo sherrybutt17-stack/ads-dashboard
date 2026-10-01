@@ -11,7 +11,9 @@ import {
   type FunnelCounts,
   type AdTotals,
 } from "@/lib/metrics/compute";
-import { definitionFor } from "@/lib/metrics/definitions";
+// The REPORT variant: these tables count stages as "reached or further". See
+// `REPORT_TABLE_DEFINITIONS`.
+import { reportTableDefinitionFor } from "@/lib/metrics/definitions";
 // COLUMNS / valueFor / changesBetween live in lib/ because SERVER components
 // call them. Importing a plain function out of this "use client" module and
 // invoking it server-side throws at render — it passes typecheck and passes
@@ -66,7 +68,7 @@ function ColumnDefinitions() {
       {open && (
         <dl className="grid gap-x-6 gap-y-2.5 pb-4 sm:grid-cols-2 xl:grid-cols-3">
           {COLUMNS.map((c) => {
-            const def = definitionFor(c.key);
+            const def = reportTableDefinitionFor(c.key);
             if (!def) return null;
             return (
               <div key={c.key}>
@@ -181,7 +183,7 @@ export function MetricsTable({
                   {firstColumnLabel}
                 </th>
                 {COLUMNS.map((c) => {
-                  const def = definitionFor(c.key);
+                  const def = reportTableDefinitionFor(c.key);
                   return (
                     <th
                       key={c.key}

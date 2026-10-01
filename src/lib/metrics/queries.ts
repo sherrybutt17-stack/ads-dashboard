@@ -266,6 +266,109 @@ function campaignIdColumn(platform: AdPlatform): SQL {
 }
 
 /**
+ * How a stage is counted.
+ *
+ * - `entered` — distinct leads ENTERING that exact stage during the window.
+ *   What every dashboard tile, the funnel and the health checks use.
+ * - `reached` — distinct leads who got AT LEAST that far (that stage or any
+ *   later one), each counted once, in the window in which they first got there.
+ *   Used by the Reports tab's four tables only.
+ *
+ * Why `reached` exists: teams skip stages. A lead dragged in GHL straight from
+ * New Lead to Appointment Booked never ENTERS "Contacted", so under `entered`
+ * the Reports tables showed 5 contacted against 33 appointments for the same
+ * 30 days — a funnel that widens downwards, which reads as broken. Someone who
+ * booked was, by definition, contacted; `reached` counts them there too.
+ *
+ * "First got there" rather than "any entry in the window" is what keeps a lead
+ * out of two months' Contacted: contacted in August and booked in September is
+ * August's contact and September's appointment, not a September contact too.
+ */
+export type StageCounting = "entered" | "reached";
+
+/**
+ * Under `reached` counting, the stages whose entry proves a lead got at least as
+ * far as the key. Follows `FUNNEL_PATH` (new → contacted → booked → showed →
+ * won); `no_show` implies a booking but not a show, so it counts towards
+ * contacted and booked only.
+ *
+ * Stages NOT listed keep `entered` counting: `new_lead` (the lead count — and
+ * the cost-per-lead divisor — must stay "new leads that arrived"), and the exits
+ * `no_show`, `lost` and `disqualified`, which are not steps anything passes
+ * through.
+ */
+export const REACHED_VIA = {
+  contacted: ["contacted", "appointment_booked", "showed", "no_show", "closed_won"],
+  appointment_booked: ["appointment_booked", "showed", "no_show", "closed_won"],
+  showed: ["showed", "closed_won"],
+  closed_won: ["closed_won"],
+} as const satisfies Partial<Record<keyof FunnelCounts, readonly CanonicalStage[]>>;
+
+export type ReachedStage = keyof typeof REACHED_VIA;
+export const REACHED_STAGES = Object.keys(REACHED_VIA) as ReachedStage[];
+
+/**
+ * Per lead, the first moment it reached each `REACHED_VIA` stage — over ALL
+ * history, not just the window, so "first" means first ever. Same client,
+ * paid-lead filter and campaign scope as the `entered` queries, so the two
+ * counting modes describe the same population.
+ */
+function firstReachedCte(
+  clientId: string,
+  campaignIds: string[] | undefined,
+  filter: PaidLeadFilter,
+  platform: AdPlatform,
+): SQL {
+  const paid = platformLeadPredicate(platform, filter);
+  const needsJoin = paid !== null || Boolean(campaignIds?.length);
+  const clauses: SQL[] = [
+    sql`st.client_id = ${clientId}`,
+    sql`st.to_canonical IS NOT NULL`,
+  ];
+  if (paid) clauses.push(paid);
+  if (campaignIds?.length) {
+    clauses.push(sql`${campaignIdColumn(platform)} = ANY(${campaignIds})`);
+  }
+  const firsts = REACHED_STAGES.map(
+    (stage) =>
+      sql`MIN(st.changed_at) FILTER (WHERE st.to_canonical::text IN (${sql.join(
+        REACHED_VIA[stage].map((s) => sql`${s}`),
+        sql`, `,
+      )})) AS ${sql.raw(stage)}`,
+  );
+  return sql`
+    firsts AS (
+      SELECT st.opportunity_id, ${sql.join(firsts, sql`, `)}
+      FROM stage_transitions st
+      ${needsJoin ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
+      WHERE ${sql.join(clauses, sql` AND `)}
+      GROUP BY st.opportunity_id
+    )`;
+}
+
+/** `reached` counts for one window: leads whose first arrival fell inside it. */
+async function getReachedCounts(
+  clientId: string,
+  window: DateWindow,
+  campaignIds: string[] | undefined,
+  filter: PaidLeadFilter,
+  platform: AdPlatform,
+): Promise<Record<ReachedStage, number>> {
+  const counts = REACHED_STAGES.map(
+    (stage) =>
+      sql`COUNT(*) FILTER (WHERE ${sql.raw(stage)} >= ${window.startUtc} AND ${sql.raw(stage)} < ${window.endUtc})::int AS ${sql.raw(stage)}`,
+  );
+  const res = await db.execute<Record<ReachedStage, number>>(sql`
+    WITH ${firstReachedCte(clientId, campaignIds, filter, platform)}
+    SELECT ${sql.join(counts, sql`, `)} FROM firsts
+  `);
+  const row = resultRows<Record<ReachedStage, number>>(res)[0];
+  const out = {} as Record<ReachedStage, number>;
+  for (const stage of REACHED_STAGES) out[stage] = Number(row?.[stage]) || 0;
+  return out;
+}
+
+/**
  * Funnel counts for a window, from the append-only ledger.
  *
  * COUNT(DISTINCT opportunity_id), not COUNT(*), and this distinction is
@@ -289,6 +392,7 @@ export async function getFunnelCounts(
   campaignIds?: string[],
   filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
   platform: AdPlatform = "meta",
+  counting: StageCounting = "entered",
 ): Promise<FunnelCounts> {
   const paid = platformLeadPredicate(platform, filter);
   const needsJoin = paid !== null || Boolean(campaignIds?.length);
@@ -316,6 +420,9 @@ export async function getFunnelCounts(
   const out: FunnelCounts = { ...EMPTY_FUNNEL };
   for (const r of resultRows<{ stage: string; count: number }>(rows)) {
     if (r.stage) out[r.stage as keyof FunnelCounts] = Number(r.count) || 0;
+  }
+  if (counting === "reached") {
+    Object.assign(out, await getReachedCounts(clientId, window, campaignIds, filter, platform));
   }
 
   /*
@@ -723,9 +830,10 @@ export async function getPeriodMetrics(
   filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
   platform: AdPlatform = "meta",
   includeRevenue = false,
+  counting: StageCounting = "entered",
 ): Promise<PeriodMetrics> {
   const [funnel, ads, revenue] = await Promise.all([
-    getFunnelCounts(clientId, window, campaignIds, filter, platform),
+    getFunnelCounts(clientId, window, campaignIds, filter, platform, counting),
     getAdTotals(clientId, window, campaignIds, platform),
     includeRevenue
       ? getRevenue(clientId, window, campaignIds, filter, platform)
@@ -766,6 +874,7 @@ export async function getDailySeries(
   campaignIds?: string[],
   filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
   platform: AdPlatform = "meta",
+  counting: StageCounting = "entered",
 ): Promise<DailyPoint[]> {
   /*
    * Per-day ad spend for the selected platform only. Each platform is its own
@@ -856,7 +965,29 @@ export async function getDailySeries(
     }
   };
 
-  const [, funnelRows] = await Promise.all([
+  /*
+   * `reached` counting, bucketed into the client's local day of each lead's
+   * FIRST arrival at the stage. Only run when asked for: the dashboard's trend
+   * and sparklines keep `entered` counting.
+   */
+  const loadReached = async () => {
+    if (counting !== "reached") return [];
+    const arrivals = REACHED_STAGES.map(
+      (stage) => sql`SELECT ${stage}::text AS stage, ${sql.raw(stage)} AS at FROM firsts`,
+    );
+    const res = await db.execute<{ dateKey: string; stage: string; count: number }>(sql`
+      WITH ${firstReachedCte(clientId, campaignIds, filter, platform)}
+      SELECT to_char((a.at AT TIME ZONE ${tz})::date, 'YYYY-MM-DD') AS "dateKey",
+             a.stage,
+             COUNT(*)::int AS count
+      FROM (${sql.join(arrivals, sql` UNION ALL `)}) a
+      WHERE a.at >= ${window.startUtc} AND a.at < ${window.endUtc}
+      GROUP BY 1, 2
+    `);
+    return resultRows<{ dateKey: string; stage: string; count: number }>(res);
+  };
+
+  const [, funnelRows, reachedRows] = await Promise.all([
     loadAds(),
 
     /*
@@ -890,6 +1021,7 @@ export async function getDailySeries(
       `);
       return resultRows<{ dateKey: string; stage: string; count: number }>(res);
     })(),
+    loadReached(),
   ]);
 
   const funnelByDate = new Map<string, FunnelCounts>();
@@ -898,6 +1030,18 @@ export async function getDailySeries(
     const existing = funnelByDate.get(key) ?? { ...EMPTY_FUNNEL };
     if (r.stage) existing[r.stage as keyof FunnelCounts] = Number(r.count) || 0;
     funnelByDate.set(key, existing);
+  }
+  if (counting === "reached") {
+    // The entered counts for these stages are replaced outright, not topped up
+    // — a day whose only contacted entry was a lead first contacted last week
+    // must read 0 here, not keep the entered figure.
+    for (const f of funnelByDate.values()) for (const s of REACHED_STAGES) f[s] = 0;
+    for (const r of reachedRows) {
+      const key = String(r.dateKey);
+      const existing = funnelByDate.get(key) ?? { ...EMPTY_FUNNEL };
+      existing[r.stage as ReachedStage] = Number(r.count) || 0;
+      funnelByDate.set(key, existing);
+    }
   }
 
   // Emit a row for EVERY day in the window, including days with no activity —
