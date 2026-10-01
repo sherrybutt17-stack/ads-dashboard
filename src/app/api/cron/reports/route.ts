@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       skipped: "email not configured",
-      hint: "Set RESEND_API_KEY and REPORT_FROM to enable scheduled reports.",
+      hint: "Set RESEND_API_KEY and REPORT_FROM (or RESEND_FROM) to enable scheduled reports.",
     });
   }
 

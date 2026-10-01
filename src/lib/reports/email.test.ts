@@ -43,6 +43,21 @@ describe("configuration", () => {
     expect(emailConfigured()).toBe(false);
   });
 
+  it("accepts RESEND_FROM when REPORT_FROM is not set", () => {
+    // The name a deployment was actually configured with; it used to read as
+    // "email not configured" despite a verified sender being present.
+    delete process.env.REPORT_FROM;
+    process.env.RESEND_FROM = "Growth Guild <noreply@send.example.com>";
+    expect(emailConfig()?.from).toBe("Growth Guild <noreply@send.example.com>");
+    delete process.env.RESEND_FROM;
+  });
+
+  it("prefers REPORT_FROM when both are set", () => {
+    process.env.RESEND_FROM = "other@send.example.com";
+    expect(emailConfig()?.from).toBe("reports@growthguild.us");
+    delete process.env.RESEND_FROM;
+  });
+
   it("honours a URL override", () => {
     process.env.RESEND_API_URL = "https://relay.internal/send";
     expect(emailConfig()?.url).toBe("https://relay.internal/send");

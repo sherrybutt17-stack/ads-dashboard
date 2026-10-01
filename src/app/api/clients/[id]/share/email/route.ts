@@ -124,7 +124,7 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          "Email is not configured on this deployment. Set RESEND_API_KEY and REPORT_FROM.",
+          "Email is not configured on this deployment. Set RESEND_API_KEY and REPORT_FROM (or RESEND_FROM).",
       },
       { status: 501 },
     );

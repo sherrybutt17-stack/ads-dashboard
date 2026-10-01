@@ -35,9 +35,20 @@ export interface EmailConfig {
 
 const DEFAULT_URL = "https://api.resend.com/emails";
 
+/**
+ * The sender address. `REPORT_FROM` is the documented name; `RESEND_FROM` is
+ * accepted too, because it is the name people reach for next to
+ * `RESEND_API_KEY` — and a deployment configured that way used to report
+ * "email not configured" with a perfectly good, verified sender sitting in its
+ * environment, which nothing on screen could explain.
+ */
+function senderAddress(): string | undefined {
+  return process.env.REPORT_FROM || process.env.RESEND_FROM || undefined;
+}
+
 export function emailConfig(): EmailConfig | null {
   const key = process.env.RESEND_API_KEY;
-  const from = process.env.REPORT_FROM;
+  const from = senderAddress();
   if (!key || !from) return null;
   return {
     key,
