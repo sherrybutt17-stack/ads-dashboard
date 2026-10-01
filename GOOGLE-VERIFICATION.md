@@ -105,38 +105,98 @@ a justification that does not match the home page is a rejection.)
 
 ## Demo video — shot list
 
-Record in one continuous take, **full browser window with the address bar
-visible throughout**, and upload to YouTube as *Unlisted*. Reviewers check that
-the client ID in the URL matches the project they are reviewing; a video cropped
-to the page content is the single most common reason for rejection.
+**Claude Code / browser automation cannot record this.** Google's sign-in needs
+the staff member's own passkey, Google blocks sign-in from automated browsers,
+and automation captures the page without the address bar — which is the one
+thing the reviewer checks. Record it yourself with the OS recorder (macOS:
+Cmd+Shift+5 → *Record Entire Screen*, Options → *Show Mouse Clicks*, microphone
+on if narrating). Editing is allowed — Google suggests adding call-outs — but
+never cut the consent screen or the grant.
 
-Set the Google consent screen's **language to English** (bottom-left toggle)
-before recording.
+What Google checks (sensitive-scope page and "Examples of Common Issues"):
+the consent flow in **English**; the consent screen showing the app name
+**Growth Guild**; the **OAuth client ID** (`client_id=85350514831-…`) readable
+in the address bar *on the consent screen*; the same app and branding as the
+submission; the complete consent screen with only the `adwords` scope; every
+consent flow; and the scope's data **being used** in the app. No length limit —
+6–8 minutes is realistic. Narration is optional but helps.
 
-1. **`https://dash.growthguild.us/about`** — show the home page, scroll through
-   "What we ask Google for, and why", then follow the footer links to the
-   privacy policy and terms. This proves the three links on the consent screen
-   are real pages describing this app.
-2. **Sign in** to the dashboard at `https://dash.growthguild.us` and open a
-   client's setup page. Narrate that this is the agency's own staff signing in.
-3. **Click Continue with Google.** Show the data-access notice under the
-   button, then pause a beat on the consent screen so the address bar is
-   legible — the `client_id=` parameter must be readable — and so the app name
-   and requested scope are on screen.
-4. **Grant access**, and let the redirect land back in the app.
-5. **Show the account picker** that follows, and attach one Google Ads account.
-6. **Show the data in use** — the client's dashboard rendering Google spend,
-   clicks and conversions next to the CRM funnel. This is the step reviewers
-   most often find missing: they need to see the scope's data actually being
-   used for the purpose described, not just granted.
-7. **Show revocation** — the disconnect control in the dashboard, and mention
-   that a user can also revoke from their Google account settings.
-8. **Show the second consent flow** — Google requires every flow to be shown.
-   The wizard also offers *Sign in with Google again* (reconnect); click it and
-   let the consent screen appear once more.
+### Before you press record
 
-Keep it under about five minutes. Do not edit out the consent screen or the URL
-bar, and do not speed up the grant step.
+- [ ] Branding **verified and published**, audience **In production**, one Web
+      client only, redirect URI only `…/api/oauth/google/callback` (no
+      Playground, no localhost). Unpublished branding shows the domain instead
+      of "Growth Guild" on the consent screen — a rejection.
+- [ ] Vercel production has the new `GOOGLE_ADS_CLIENT_ID`/`_SECRET`, and no
+      `GOOGLE_ADS_API_VERSION=v22`.
+- [ ] **Hide other clients.** The account picker lists *every* account the
+      Google login can reach (the agency login reaches 250+ businesses), with
+      names and IDs, before you can filter. Either sign in with a Google user
+      that can reach only the demo account, or blur the picker in editing.
+- [ ] **Rehearse off camera, same day, same client and account:** Continue
+      with Google → attach an account that had spend in the last 30 days → wait
+      2–3 minutes → open `/c/<slug>?platform=google` and confirm non-zero spend
+      with no red/amber banner, and that the consent screen said "Growth Guild"
+      with `client_id=85350514831-…`. Then **Remove** it. The metrics are kept,
+      so on camera the dashboard fills instantly (the first-sync backfill runs
+      only once per client). Attach through the picker only — the manual
+      *Customer ID → Verify & add* path starts no backfill.
+- [ ] Chrome: a clean profile, English UI, bookmarks bar hidden, one tab,
+      right-click the address bar → **Always show full URLs**, window at least
+      1280 px wide (below 1024 px the *Connections* sidebar disappears).
+- [ ] Mac: Do Not Disturb on, Slack/Mail quit. Record 10 s as a test and check
+      the address bar is legible.
+- [ ] **Sign out** of the dashboard.
+
+### Shot list
+
+1. **`https://dash.growthguild.us/about`** — scroll through the page, hold on
+   *What we ask Google for, and why* (the `adwords` scope, "read-only in
+   practice"). Footer → **Privacy policy**: hold on *Google user data,
+   specifically* and the **Limited Use** paragraph. Footer → **Terms of
+   service**: hold on *Connected accounts*.
+2. **Type** `https://dash.growthguild.us/c/<slug>/setup` in the address bar
+   (not `/` — the client list shows every client). The login page appears;
+   sign in and you land straight on *Setup & connections*.
+3. Scroll to **Connect Google Ads (optional)** and stop — don't scroll further
+   (webhook URLs, report recipients). Hold on the **Continue with Google**
+   button and the *What we access: read-only…* notice under it.
+4. Click **Continue with Google**. The first URL's `clientId=` is our internal
+   record, not Google's. Pick the Google account.
+5. *Google hasn't verified this app* → **Advanced** → **Go to Growth Guild
+   (unsafe)**. Don't cut it.
+6. **Consent screen — the key shot.** Check the language (bottom left) says
+   English. Hold ~5 s on **Growth Guild** and the Google Ads scope. Click into
+   the address bar and move along until **`client_id=85350514831-…`** is
+   readable; hold ~5 s. Google's wording for this scope is broad — say the app
+   only reads. Click **Continue**.
+7. Back on setup: *Which of these belong to this client?* Tick the demo
+   account → **Attach 1 account**. Show the connected row (name, *primary*,
+   id, red **Remove**).
+8. **Second consent flow.** Press **Cmd+R** while `?googleStash=` is still in
+   the URL: the used sign-in shows red text and **Sign in with Google again**.
+   Click it and go through the Google screens again (hold on the name, scope
+   and `client_id` again). When the picker returns, don't attach — click the
+   header link **← <Client name>**. (*Sign in with Google again* only exists
+   on an expired or used sign-in; there is no other reconnect control.)
+9. **Data in use.** The dashboard opens on *Facebook* — click **Google** in the
+   *Facebook | Google* switch (`?platform=google`). Show *Overview* (Ad spend,
+   Cost per lead, *Spend and leads over time*), **Ads** (*Campaign breakdown*
+   — "Google spend joined to CRM outcomes by campaign attribution") and
+   **Reports** (Spend, CTR, CPM, CPC). **Never open Leads** (names and phone
+   numbers). If it says *Fetching your Google history*, wait and reload.
+10. **Revocation in the app.** Sidebar **Connections** → *Connect Google Ads*
+    → red **Remove** → OK on *Remove this Google Ads account? Metrics already
+    pulled are kept.* This deletes the stored Google token.
+11. **Revocation at Google.** Open `https://myaccount.google.com/permissions`,
+    show **Growth Guild** and its remove-access control. Stop recording.
+
+### After recording
+
+Upload in YouTube Studio as **Unlisted** (never Private), open the link in a
+signed-out window to confirm it plays, then paste it into Google Auth Platform
+→ Data Access → *YouTube link*, with the justification above. Have a test login
+and steps ready in case the reviewer asks to try the app.
 
 ---
 
