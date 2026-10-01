@@ -207,12 +207,179 @@ describe("signing in", () => {
 
   it("accepts the new password after a reset, and not the old one", async () => {
     const user = await make();
-    await mod.setUserPassword(user.id, "a brand new passphrase");
+    expect(await mod.setPasswordFromLink(user, "a brand new passphrase")).toBe(true);
     expect(await mod.verifyCredentials("dana@example.com", "a brand new passphrase"))
       .not.toBeNull();
     expect(
       await mod.verifyCredentials("dana@example.com", "correct horse battery staple"),
     ).toBeNull();
+  });
+});
+
+describe("🔴 a login made with a password can sign in", () => {
+  /*
+   * The lockout this fixes. Sign-in refuses an unconfirmed address, and
+   * `createUser` used to leave `email_verified_at` null — so every login made
+   * on the Users page was refused with "confirm your email", and because the
+   * first account also retired the shared password, nobody could get back in.
+   */
+  it("is stamped confirmed when an operator supplied the password", async () => {
+    const user = await make();
+    expect(user.emailVerifiedAt).not.toBeNull();
+  });
+});
+
+describe("invites — a login with no password yet", () => {
+  const invite = (over: Partial<Parameters<typeof mod.createUser>[0]> = {}) =>
+    make({ password: undefined, ...over });
+
+  it("is unconfirmed until the person accepts", async () => {
+    const user = await invite();
+    expect(user.emailVerifiedAt).toBeNull();
+    expect(user.lastLoginAt).toBeNull();
+  });
+
+  it("🔴 cannot be signed into with any password before it is accepted", async () => {
+    // The random password is hashed like any other, so no input matches it —
+    // including the empty string, which a careless "no password" would accept.
+    const user = await invite();
+    expect(user.passwordHash).toMatch(/^scrypt\$/);
+    for (const guess of ["", " ", "password", "undefined", "null"]) {
+      expect(await mod.verifyCredentials("dana@example.com", guess), guess).toBeNull();
+    }
+  });
+
+  it("an empty password is an invite too, not an account with a blank password", async () => {
+    const user = await make({ password: "" });
+    expect(user.emailVerifiedAt).toBeNull();
+    expect(await mod.verifyCredentials("dana@example.com", "")).toBeNull();
+  });
+
+  it("is listed as pending until accepted, and not after", async () => {
+    const user = await invite();
+    const before = await mod.listUsersForAgency(AGENCY_A);
+    expect(before.find((u) => u.id === user.id)?.pending).toBe(true);
+
+    await mod.setPasswordFromLink(user, "a chosen passphrase");
+    const after = await mod.listUsersForAgency(AGENCY_A);
+    expect(after.find((u) => u.id === user.id)?.pending).toBe(false);
+  });
+});
+
+describe("setPasswordFromLink", () => {
+  it("sets the password and confirms the address in one write", async () => {
+    const user = await make({ password: undefined });
+    expect(await mod.setPasswordFromLink(user, "a chosen passphrase")).toBe(true);
+    const after = await mod.getUserById(user.id);
+    expect(after?.emailVerifiedAt).not.toBeNull();
+    expect(await mod.verifyCredentials("dana@example.com", "a chosen passphrase")).not.toBeNull();
+  });
+
+  it("🔴 lets only one of two racing submits win", async () => {
+    /*
+     * Both submits verified the link against the same hash before either
+     * wrote. Without the compare-and-set the second would silently replace
+     * the first person's password; with it, the second is told it was used.
+     */
+    const user = await make({ password: undefined });
+    expect(await mod.setPasswordFromLink(user, "first passphrase here")).toBe(true);
+    expect(await mod.setPasswordFromLink(user, "second passphrase here")).toBe(false);
+    expect(await mod.verifyCredentials("dana@example.com", "first passphrase here")).not.toBeNull();
+    expect(await mod.verifyCredentials("dana@example.com", "second passphrase here")).toBeNull();
+  });
+
+  it("keeps an existing confirmation date rather than overwriting it", async () => {
+    const user = await make();
+    const confirmed = user.emailVerifiedAt!.getTime();
+    await mod.setPasswordFromLink(user, "another passphrase");
+    expect((await mod.getUserById(user.id))?.emailVerifiedAt?.getTime()).toBe(confirmed);
+  });
+});
+
+describe("rotateInvite", () => {
+  it("gives a waiting invite a new random password", async () => {
+    const user = await make({ password: undefined });
+    const rotated = await mod.rotateInvite(user.id);
+    expect(rotated?.passwordHash).toMatch(/^scrypt\$/);
+    expect(rotated?.passwordHash).not.toBe(user.passwordHash);
+  });
+
+  it("🔴 refuses a login that is already in use — it would lock its owner out", async () => {
+    const user = await make();
+    expect(await mod.rotateInvite(user.id)).toBeNull();
+    expect((await mod.getUserById(user.id))?.passwordHash).toBe(user.passwordHash);
+    expect(
+      await mod.verifyCredentials("dana@example.com", "correct horse battery staple"),
+    ).not.toBeNull();
+  });
+
+  it("refuses an accepted invite", async () => {
+    const user = await make({ password: undefined });
+    await mod.setPasswordFromLink(user, "a chosen passphrase");
+    expect(await mod.rotateInvite(user.id)).toBeNull();
+  });
+});
+
+describe("🔴 countActivatedOperators — when the shared password retires", () => {
+  /*
+   * The shared password admits an anonymous session only while this is zero.
+   * It used to count ROWS, which made ordinary events lock the team out: an
+   * invite nobody had accepted, a stranger's sign-up, and — the one the user
+   * named — a client setting up their login before anyone on the team had.
+   */
+  const BOOTSTRAP = "00000000-0000-0000-0000-000000000001";
+  const teammate = (role: "superadmin" | "staff" | "agency", over = {}) =>
+    make({ agencyId: BOOTSTRAP, email: `${role}@team.example`, role, ...over });
+
+  it("is zero for an empty table", async () => {
+    expect(await mod.countActivatedOperators()).toBe(0);
+  });
+
+  it("🔴 does not count a team invite nobody has accepted", async () => {
+    await teammate("superadmin", { password: undefined });
+    expect(await mod.countActivatedOperators()).toBe(0);
+  });
+
+  it("counts a team invite once it is accepted", async () => {
+    const user = await teammate("superadmin", { password: undefined });
+    await mod.setPasswordFromLink(user, "a chosen passphrase");
+    expect(await mod.countActivatedOperators()).toBe(1);
+  });
+
+  it("counts each operator role of this deployment's own agency", async () => {
+    await teammate("superadmin");
+    await teammate("staff");
+    await teammate("agency");
+    expect(await mod.countActivatedOperators()).toBe(3);
+  });
+
+  it("🔴 does not count a client, even one who has set up — a client cannot open Users", async () => {
+    // Any agency's client — none of them can manage logins.
+    const client = await make({ password: undefined });
+    await mod.setPasswordFromLink(client, "client's own passphrase");
+    expect((await mod.getUserById(client.id))?.emailVerifiedAt).not.toBeNull();
+    expect(await mod.countActivatedOperators()).toBe(0);
+  });
+
+  it("🔴 does not count another agency's operator, confirmed or not", async () => {
+    // A stranger completing the public /signup runs THEIR agency, not ours.
+    await make({ agencyId: AGENCY_B, email: "owner@stranger.example", role: "agency" });
+    await run(
+      `INSERT INTO users (agency_id, email, password_hash, role)
+       VALUES ('${AGENCY_B}', 'unconfirmed@stranger.example', 'scrypt$1$aa$bb', 'agency')`,
+    );
+    expect(await mod.countActivatedOperators()).toBe(0);
+  });
+
+  it("🔴 still counts a disabled operator — disabling everyone must not reopen the door", async () => {
+    /*
+     * The anonymous session sees everything and cannot be revoked. Turning
+     * every account off is not a reason to hand it out again; the way back
+     * from that is DASHBOARD_BOOTSTRAP_EMAIL, which names who it acts as.
+     */
+    const user = await teammate("superadmin");
+    await mod.setUserStatus(user.id, "disabled");
+    expect(await mod.countActivatedOperators()).toBe(1);
   });
 });
 

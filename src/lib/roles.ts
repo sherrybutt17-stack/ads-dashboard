@@ -42,6 +42,29 @@ export function assignableRoles(creator: UserRole | undefined): UserRole[] {
 }
 
 /**
+ * May someone holding `caller` manage an existing login holding `target` —
+ * disable it, remove it, change its dashboards, or send it a password link?
+ *
+ * 🔴 The same downward rule as creation, and the reason it has to be.
+ *
+ * `assignableRoles` stopped an `agency` operator from MAKING a `superadmin`.
+ * Nothing stopped them from taking one over: the Users page let any operator
+ * reset the password of any login in their agency, so an agency operator could
+ * set a password on the superadmin sharing their agency, sign in as them, and
+ * read every tenant in the database. Escalation by "reset password" instead of
+ * by "create user" — the same escape through a different button.
+ *
+ * Managing a login is at least as powerful as creating it, so it gets the same
+ * answer.
+ */
+export function mayAdminister(
+  caller: UserRole | undefined,
+  target: UserRole,
+): boolean {
+  return assignableRoles(caller).includes(target);
+}
+
+/**
  * Does this role operate an agency's book, rather than hold one dashboard?
  *
  * ── 🔴 Why this is here and not spelled out at each call site ─────────────

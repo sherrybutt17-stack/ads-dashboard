@@ -40,6 +40,8 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "completing a reset cannot require the session you have lost; the HMAC-signed token in the body IS the credential, it covers the user's current password hash so it expires the instant it is used, and it is rate-limited",
   "auth/signup/route.ts":
     "self-serve sign-up cannot require a session; rate-limited to 3/min, writes inside one transaction so a half-made agency cannot exist, and issues NO session — the account it creates cannot be signed into until the address is confirmed",
+  "auth/invite/route.ts":
+    "accepting an invite cannot require a session — the invitee has no password yet; the HMAC-signed token in the body IS the credential, its signature covers the login's current password hash so it expires the instant a password is set, the write is a compare-and-set on that hash so two racing submits cannot both win, it issues NO session, and it is rate-limited",
   "auth/verify/route.ts":
     "confirming an address cannot require the session it unlocks; the HMAC-signed token in the body IS the credential, its signature covers email_verified_at so it expires the instant it is used, and it is rate-limited",
   "logout/route.ts": "clearing your own cookie requires no privilege",
@@ -288,6 +290,8 @@ const PUBLIC_PREFIX_REASONS: Record<string, string> = {
     "choosing a new password from an emailed link; the page renders only a form, and the HMAC-signed token is verified server-side on submit. The signature covers the user's current password hash, so a link stops verifying the instant the password changes — single-use without a tokens table",
   "/signup":
     "creating an account cannot require one; rate-limited to 3/min, and the account it creates cannot hold a session until the address is confirmed",
+  "/invite":
+    "choosing a password for a login someone else made; the invitee has none yet, so cannot present a session. The page renders only a form, and the HMAC-signed token is verified server-side on submit. The signature covers the login's current password hash, so a link stops verifying the instant a password is set",
   "/verify":
     "confirming an address cannot require the session that confirmation unlocks; the page renders only a button, and the HMAC-signed token is verified server-side on submit. The signature covers email_verified_at, so a link stops verifying the instant it is used",
   "/r/":

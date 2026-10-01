@@ -22,9 +22,22 @@ export interface UserRow {
   role: UserRole;
   name: string | null;
   status: "active" | "disabled";
+  /** Invited and not yet set up. */
+  pending: boolean;
   lastLoginAt: string | null;
   createdAt: string;
   clients: Array<{ id: string; name: string; slug: string }>;
+}
+
+/** What `/api/users` and `/api/users/[id]/invite` hand back — `IssuedLink`. */
+interface IssuedLink {
+  kind: "invite" | "password";
+  url: string;
+  expiresAt: string;
+  /** "7 days", "24 hours" — from the server, so it matches the email. */
+  lifetime: string;
+  emailed: boolean;
+  emailProblem: string | null;
 }
 
 const inputStyle = {
@@ -34,15 +47,29 @@ const inputStyle = {
 } as const;
 
 /**
- * Display order for the role buttons, narrowest first.
+ * The roles the invite form offers, narrowest first.
  *
  * A constant rather than the enum's own order, because the enum is ordered by
  * when each value was added and the form should read from least to most
  * privilege. Roles the caller may not assign are filtered out, never disabled —
  * a greyed button invites a support question about a permission the operator
  * cannot be granted.
+ *
+ * `staff` is left out on purpose. It is the pre-tenancy name for exactly what
+ * `superadmin` means today — every check treats the two alike — and it is on
+ * its way out of the codebase. Offering both asks the operator a question with
+ * no answer. Existing `staff` logins still show and work.
  */
-const ROLE_ORDER: UserRole[] = ["client", "agency", "staff", "superadmin"];
+const ROLE_ORDER: UserRole[] = ["client", "agency", "superadmin"];
+
+const ROLE_HELP: Record<UserRole, string> = {
+  client: "Sees only the dashboards you pick. Can't change any setup.",
+  agency:
+    "Runs your agency: every client, connections, setup and the client logins.",
+  superadmin:
+    "Everything, for every agency on this deployment, including the audit log and other admins.",
+  staff: "Legacy full access — the same as Superadmin.",
+};
 
 /** Only a `client` login is scoped to named dashboards; every other role is not. */
 function needsClients(role: UserRole): boolean {
@@ -53,23 +80,48 @@ export function UsersManager({
   users,
   clients,
   assignable,
+  currentUserId,
+  emailReady,
 }: {
   users: UserRow[];
   clients: ClientOpt[];
-  /** Which roles this operator may hand out — from `assignableRoles`. */
+  /**
+   * Which roles this operator may hand out — from `assignableRoles`. Also who
+   * they may MANAGE: the server applies the same rule (`mayAdminister`), so a
+   * row whose role is not in here gets no action buttons that would only 403.
+   */
   assignable: UserRole[];
+  /** To mark "you" and withhold the buttons that would lock you out. */
+  currentUserId: string;
+  /** Whether invites can go by email at all, so the form can say so up front. */
+  emailReady: boolean;
 }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
   const roleOptions = ROLE_ORDER.filter((r) => assignable.includes(r));
-  // Default to the narrowest role offered, so the safest option is the one a
-  // distracted operator submits.
-  const [role, setRole] = useState<UserRole>(roleOptions[0] ?? "client");
+  /*
+   * On the shared password, nobody on the team has a login yet — and until one
+   * does, any invite but your own is a step towards being locked out (see
+   * `countActivatedOperators`). So that session starts on the WIDEST role, the
+   * one you need for yourself. Everyone else starts on the narrowest, so the
+   * safest option is the one a distracted operator submits.
+   */
+  const firstRun = currentUserId === "shared";
+  const defaultRole: UserRole =
+    (firstRun ? roleOptions[roleOptions.length - 1] : roleOptions[0]) ?? "client";
+  const [role, setRole] = useState<UserRole>(defaultRole);
   const [clientIds, setClientIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Errors from a row's buttons, shown beside the list rather than in the form.
+  const [rowMsg, setRowMsg] = useState<string | null>(null);
+  // The row whose link is being made. One at a time: a second click would
+  // rotate the invite again and kill the link the first click is fetching.
+  const [linking, setLinking] = useState<string | null>(null);
+  const [issued, setIssued] = useState<{ email: string; link: IssuedLink } | null>(
+    null,
+  );
 
   function toggleClient(id: string) {
     setClientIds((prev) =>
@@ -77,19 +129,10 @@ export function UsersManager({
     );
   }
 
-  function generate() {
-    const bytes = new Uint8Array(12);
-    crypto.getRandomValues(bytes);
-    setPassword(
-      btoa(String.fromCharCode(...bytes))
-        .replace(/[+/=]/g, "")
-        .slice(0, 14),
-    );
-  }
-
-  async function create() {
+  async function invite() {
     setBusy(true);
     setMsg(null);
+    setIssued(null);
     try {
       const res = await fetch("/api/users", {
         method: "POST",
@@ -97,67 +140,90 @@ export function UsersManager({
         body: JSON.stringify({
           email,
           name: name || undefined,
-          password,
           role,
           clientIds: needsClients(role) ? clientIds : undefined,
         }),
       });
       const body = await res.json().catch(() => null);
-      if (res.ok) {
-        setMsg({
-          ok: true,
-          text: `Created. Share these credentials — ${email} / ${password}`,
-        });
+      if (res.ok && body?.link) {
+        setIssued({ email: body.user?.email ?? email, link: body.link });
         setEmail("");
         setName("");
-        setPassword("");
         setClientIds([]);
+        // Back to the narrowest role, or the next invite inherits "Superadmin".
+        setRole(roleOptions[0] ?? "client");
+        router.refresh();
+      } else if (res.ok) {
+        setMsg({ ok: false, text: "The login was made, but no link came back. Use “New invite link” on it below." });
         router.refresh();
       } else {
-        setMsg({ ok: false, text: body?.error ?? "Failed to create user" });
+        setMsg({ ok: false, text: body?.error ?? "Couldn't send the invite." });
       }
+    } catch {
+      setMsg({ ok: false, text: "Couldn't reach the server. Check your connection and try again." });
     } finally {
       setBusy(false);
     }
   }
 
-  async function resetPassword(u: UserRow) {
-    const pw = prompt(`New password for ${u.email} (min 8 characters):`);
-    if (!pw) return;
-    if (pw.length < 8) {
-      alert("Password must be at least 8 characters.");
+  async function sendLink(u: UserRow) {
+    if (linking) return;
+    if (
+      !u.pending &&
+      !confirm(
+        `Send ${u.email} a link to choose a new password? Their current password keeps working until they use it.`,
+      )
+    )
       return;
+    setRowMsg(null);
+    setIssued(null);
+    setLinking(u.id);
+    try {
+      const res = await fetch(`/api/users/${u.id}/invite`, { method: "POST" });
+      const body = await res.json().catch(() => null);
+      if (res.ok && body?.link) {
+        setIssued({ email: u.email, link: body.link });
+        // Scrolled to, because the panel renders above the list the click was in.
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        setRowMsg(body?.error ?? "Couldn't create a link.");
+      }
+      router.refresh();
+    } catch {
+      setRowMsg("Couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setLinking(null);
     }
-    const res = await fetch(`/api/users/${u.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: pw }),
-    });
-    if (res.ok) alert(`Password updated. Share: ${u.email} / ${pw}`);
-    router.refresh();
   }
 
   async function toggleStatus(u: UserRow) {
-    await fetch(`/api/users/${u.id}`, {
+    const res = await fetch(`/api/users/${u.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         status: u.status === "active" ? "disabled" : "active",
       }),
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setRowMsg(body?.error ?? "Couldn't change that login.");
+    }
     router.refresh();
   }
 
   async function remove(u: UserRow) {
     if (!confirm(`Remove ${u.email}? They will lose access immediately.`))
       return;
-    await fetch(`/api/users/${u.id}`, { method: "DELETE" });
+    const res = await fetch(`/api/users/${u.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      setRowMsg(body?.error ?? "Couldn't remove that login.");
+    }
     router.refresh();
   }
 
-  const canCreate =
-    email.trim() !== "" &&
-    password.length >= 8 &&
+  const canInvite =
+    /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim()) &&
     // Only a client login needs dashboards picked. Keying this off `!== "staff"`
     // made the agency and superadmin roles unsubmittable, because there is no
     // client list to satisfy for a role that is not scoped to one.
@@ -165,17 +231,43 @@ export function UsersManager({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Create */}
+      {issued && (
+        <LinkPanel
+          email={issued.email}
+          link={issued.link}
+          onClose={() => setIssued(null)}
+        />
+      )}
+
+      {firstRun && (
+        <section
+          className="card p-4 text-[13px] leading-relaxed"
+          style={{ borderColor: "var(--status-warning)", color: "var(--text-secondary)" }}
+        >
+          <strong style={{ color: "var(--text-primary)" }}>
+            You&rsquo;re signed in with the temporary shared password.
+          </strong>{" "}
+          Invite yourself first as <strong>Superadmin</strong>, open your link and
+          choose your password. The shared password stops working as soon as
+          someone on the team has set up a login — so do yours before anyone
+          else&rsquo;s, and keep your link until you have used it.
+        </section>
+      )}
+
+      {/* Invite */}
       <section className="card p-5">
         <h2
           className="text-sm font-semibold"
           style={{ color: "var(--text-primary)" }}
         >
-          Create a login
+          Invite someone
         </h2>
         <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
-          A client login sees only the dashboards you select. Every other role
-          sees your whole book.
+          They get a link to choose their own password, so you never send or see
+          one.{" "}
+          {emailReady
+            ? "We email them the link, and show it here too in case the email doesn't arrive."
+            : "Email isn't set up yet, so you'll get the link here to send them yourself."}
         </p>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -184,36 +276,14 @@ export function UsersManager({
             type="email"
             value={email}
             onChange={setEmail}
-            placeholder="client@brand.com"
+            placeholder="name@company.com"
           />
           <Field
             label="Name (optional)"
             value={name}
             onChange={setName}
-            placeholder="Jane at Brand"
+            placeholder="Jane Smith"
           />
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-end gap-3">
-          <div className="min-w-[220px] flex-1">
-            <Field
-              label="Password"
-              value={password}
-              onChange={setPassword}
-              placeholder="min 8 characters"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={generate}
-            className="rounded-[8px] border px-3 py-2 text-[13px] font-medium"
-            style={{
-              borderColor: "var(--border-strong)",
-              color: "var(--text-secondary)",
-            }}
-          >
-            Generate
-          </button>
         </div>
 
         <div className="mt-3">
@@ -223,12 +293,13 @@ export function UsersManager({
           >
             Role
           </span>
-          <div className="mt-1 flex gap-2">
+          <div className="mt-1 flex flex-wrap gap-2">
             {roleOptions.map((r) => (
               <button
                 key={r}
                 type="button"
                 onClick={() => setRole(r)}
+                aria-pressed={role === r}
                 className="rounded-[8px] border px-3 py-1.5 text-[13px] font-medium capitalize"
                 style={{
                   borderColor:
@@ -241,6 +312,9 @@ export function UsersManager({
               </button>
             ))}
           </div>
+          <p className="mt-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
+            {ROLE_HELP[role]}
+          </p>
         </div>
 
         {needsClients(role) && (
@@ -256,7 +330,7 @@ export function UsersManager({
                 className="mt-1 text-xs"
                 style={{ color: "var(--status-warning)" }}
               >
-                No clients yet — add a client first, then create their login.
+                No clients yet — add a client first, then invite their login.
               </p>
             ) : (
               <div className="mt-1 flex flex-wrap gap-2">
@@ -267,6 +341,7 @@ export function UsersManager({
                       key={c.id}
                       type="button"
                       onClick={() => toggleClient(c.id)}
+                      aria-pressed={on}
                       className="rounded-full border px-3 py-1 text-[13px]"
                       style={{
                         borderColor: on
@@ -292,11 +367,11 @@ export function UsersManager({
 
         <button
           type="button"
-          onClick={create}
-          disabled={busy || !canCreate}
+          onClick={invite}
+          disabled={busy || !canInvite}
           className="mt-4 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
         >
-          {busy ? "Creating…" : "Create login"}
+          {busy ? "Sending…" : "Send invite"}
         </button>
 
         {msg && (
@@ -320,6 +395,11 @@ export function UsersManager({
           >
             Logins ({users.length})
           </h2>
+          {rowMsg && (
+            <p className="mt-1 text-xs" style={{ color: "var(--status-critical)" }}>
+              {rowMsg}
+            </p>
+          )}
         </div>
         <div
           className="table-scroll border-t"
@@ -341,98 +421,122 @@ export function UsersManager({
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
-                <tr
-                  key={u.id}
-                  className="border-t"
-                  style={{ borderColor: "var(--border)" }}
-                >
-                  <td className="px-4 py-2.5">
-                    <div style={{ color: "var(--text-primary)" }}>
-                      {u.email}
-                    </div>
-                    {u.name && (
-                      <div
-                        className="text-[11px]"
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        {u.name}
+              {users.map((u) => {
+                const self = u.id === currentUserId;
+                const manageable = assignable.includes(u.role);
+                return (
+                  <tr
+                    key={u.id}
+                    className="border-t"
+                    style={{ borderColor: "var(--border)" }}
+                  >
+                    <td className="px-4 py-2.5">
+                      <div style={{ color: "var(--text-primary)" }}>
+                        {u.email}
+                        {self && (
+                          <span
+                            className="ml-1.5 text-[11px]"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            (you)
+                          </span>
+                        )}
                       </div>
-                    )}
-                    {u.status === "disabled" && (
-                      <span
-                        className="mt-0.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium"
-                        style={{
-                          background:
-                            "color-mix(in srgb, var(--status-critical) 16%, transparent)",
-                          color: "var(--status-critical)",
-                        }}
-                      >
-                        disabled
-                      </span>
-                    )}
-                  </td>
-                  <td
-                    className="px-4 py-2.5 capitalize"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {u.role}
-                  </td>
-                  <td
-                    className="px-4 py-2.5"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {/*
-                      An operator role is not scoped to named dashboards, so it
-                      sees the whole book. Reading `=== "staff"` showed an
-                      agency admin a bare dash here — which renders as "access
-                      to nothing" for someone who in fact sees everything.
-                    */}
-                    {!needsClients(u.role)
-                      ? "All"
-                      : u.clients.length === 0
-                        ? DASH
-                        : u.clients.map((c) => c.name).join(", ")}
-                  </td>
-                  <td
-                    className="px-4 py-2.5"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {u.lastLoginAt
-                      ? new Date(u.lastLoginAt).toLocaleDateString("en-US", {
-                          timeZone: "UTC",
-                          month: "short",
-                          day: "numeric",
-                        })
-                      : "never"}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                      <button
-                        onClick={() => resetPassword(u)}
-                        className="hover:underline"
-                        style={{ color: "var(--text-secondary)" }}
-                      >
-                        Reset password
-                      </button>
-                      <button
-                        onClick={() => toggleStatus(u)}
-                        className="hover:underline"
-                        style={{ color: "var(--text-secondary)" }}
-                      >
-                        {u.status === "active" ? "Disable" : "Enable"}
-                      </button>
-                      <button
-                        onClick={() => remove(u)}
-                        className="hover:underline"
-                        style={{ color: "var(--status-critical)" }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                      {u.name && (
+                        <div
+                          className="text-[11px]"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          {u.name}
+                        </div>
+                      )}
+                      {u.pending && u.status === "active" && (
+                        <Badge tone="var(--status-warning)">invited — not set up yet</Badge>
+                      )}
+                      {u.status === "disabled" && (
+                        <Badge tone="var(--status-critical)">disabled</Badge>
+                      )}
+                    </td>
+                    <td
+                      className="px-4 py-2.5 capitalize"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {u.role}
+                    </td>
+                    <td
+                      className="px-4 py-2.5"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {/*
+                        An operator role is not scoped to named dashboards, so it
+                        sees the whole book. Reading `=== "staff"` showed an
+                        agency admin a bare dash here — which renders as "access
+                        to nothing" for someone who in fact sees everything.
+                      */}
+                      {!needsClients(u.role)
+                        ? "All"
+                        : u.clients.length === 0
+                          ? DASH
+                          : u.clients.map((c) => c.name).join(", ")}
+                    </td>
+                    <td
+                      className="px-4 py-2.5"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      {u.lastLoginAt
+                        ? new Date(u.lastLoginAt).toLocaleDateString("en-US", {
+                            timeZone: "UTC",
+                            month: "short",
+                            day: "numeric",
+                          })
+                        : "never"}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {manageable ? (
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                          {u.status === "active" && (
+                            <button
+                              onClick={() => sendLink(u)}
+                              disabled={linking !== null}
+                              className="hover:underline disabled:opacity-50"
+                              style={{ color: "var(--text-secondary)" }}
+                            >
+                              {linking === u.id
+                                ? "Creating…"
+                                : u.pending
+                                  ? "New invite link"
+                                  : "Send password link"}
+                            </button>
+                          )}
+                          {/* Nobody disables or removes themselves — see the route. */}
+                          {!self && (
+                            <>
+                              <button
+                                onClick={() => toggleStatus(u)}
+                                className="hover:underline"
+                                style={{ color: "var(--text-secondary)" }}
+                              >
+                                {u.status === "active" ? "Disable" : "Enable"}
+                              </button>
+                              <button
+                                onClick={() => remove(u)}
+                                className="hover:underline"
+                                style={{ color: "var(--status-critical)" }}
+                              >
+                                Remove
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                          {DASH}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {users.length === 0 && (
                 <tr>
                   <td
@@ -440,7 +544,7 @@ export function UsersManager({
                     className="px-4 py-8 text-center text-sm"
                     style={{ color: "var(--text-muted)" }}
                   >
-                    No logins yet. Create one above.
+                    No logins yet. Invite yourself first, above.
                   </td>
                 </tr>
               )}
@@ -449,6 +553,108 @@ export function UsersManager({
         </div>
       </section>
     </div>
+  );
+}
+
+/**
+ * The link just minted, to copy — and whether the email went.
+ *
+ * Shown even when the email was sent: the invitee may say it never arrived,
+ * and the operator can then paste the same link into a chat. It carries no
+ * password, works once, and expires, which is the whole difference from what
+ * used to be pasted there.
+ */
+function LinkPanel({
+  email,
+  link,
+  onClose,
+}: {
+  email: string;
+  link: IssuedLink;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const what = link.kind === "invite" ? "invite" : "password link";
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopied(true);
+    } catch {
+      // Clipboard is permission-gated in some contexts. The URL is on screen
+      // and selectable, so this is a convenience failing, not the feature.
+    }
+  }
+
+  return (
+    <section
+      className="card p-5"
+      style={{
+        borderColor: link.emailed ? "var(--delta-good)" : "var(--status-warning)",
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+            {link.emailed
+              ? `${link.kind === "invite" ? "Invite" : "Password link"} emailed to ${email}`
+              : `Send this ${what} to ${email}`}
+          </h2>
+          {link.emailProblem && (
+            <p className="mt-1 text-xs" style={{ color: "var(--status-warning)" }}>
+              {link.emailProblem} Copy the link below and send it to them on
+              WhatsApp, Slack or your own email.
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-xs hover:underline"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Done
+        </button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          readOnly
+          value={link.url}
+          onFocus={(e) => e.currentTarget.select()}
+          aria-label="Invite link"
+          className="min-w-0 flex-1 rounded-[8px] border px-3 py-2 font-mono text-[12px]"
+          style={inputStyle}
+        />
+        <button
+          type="button"
+          onClick={copy}
+          className="btn-accent rounded-[8px] px-3 py-2 text-[13px] font-medium"
+        >
+          {copied ? "Copied" : "Copy link"}
+        </button>
+      </div>
+      <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+        Works once, for {link.lifetime}. It lets them choose their own password — you
+        never see it. Anyone holding the link can use it, so send it only to{" "}
+        {email}.
+        {link.kind === "invite" && " Sending a new invite link kills this one."}
+      </p>
+    </section>
+  );
+}
+
+function Badge({ tone, children }: { tone: string; children: React.ReactNode }) {
+  return (
+    <span
+      className="mt-0.5 mr-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium"
+      style={{
+        background: `color-mix(in srgb, ${tone} 16%, transparent)`,
+        color: tone,
+      }}
+    >
+      {children}
+    </span>
   );
 }
 

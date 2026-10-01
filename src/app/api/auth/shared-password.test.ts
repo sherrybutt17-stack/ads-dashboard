@@ -37,19 +37,23 @@ describe("shared-password bootstrap", () => {
     expect(CODE.length).toBeGreaterThan(1000);
   });
 
-  it("🔴 mints the identity-less session only when there are no users", () => {
+  it("🔴 mints the identity-less session only when nobody can sign in", () => {
     /*
-     * The phantom is defensible in exactly one situation: an empty `users`
-     * table, where there is nothing to bind to and no way to create the first
+     * The phantom is defensible in exactly one situation: no login anyone can
+     * use, where there is nothing to bind to and no way to create the first
      * account without getting in. Every occurrence must sit behind that check
      * or behind the dev-only branch.
+     *
+     * "A team login works", not "a row exists" — `countActivatedOperators`
+     * ignores unaccepted invites, other agencies' sign-ups and clients, each of
+     * which used to close this door on the team. Pinned in `users.test.ts`.
      */
     const phantom = [...CODE.matchAll(/userId: "shared"/g)];
     expect(phantom.length).toBe(2); // the dev branch, and the first-run branch
 
     // The production one is guarded by an emptiness check.
-    expect(CODE).toMatch(/\(await countUsers\(\)\) === 0/);
-    const firstRun = CODE.indexOf("(await countUsers()) === 0");
+    expect(CODE).toMatch(/\(await countActivatedOperators\(\)\) === 0/);
+    const firstRun = CODE.indexOf("(await countActivatedOperators()) === 0");
     const nextPhantom = CODE.indexOf('userId: "shared"', firstRun);
     expect(nextPhantom).toBeGreaterThan(firstRun);
     expect(nextPhantom - firstRun).toBeLessThan(200);
@@ -60,7 +64,7 @@ describe("shared-password bootstrap", () => {
     // an operator who bound the password to a user would still get an
     // anonymous session on a database that happens to have no users.
     const bound = CODE.indexOf("await bootstrapUser()");
-    const firstRun = CODE.indexOf("(await countUsers()) === 0");
+    const firstRun = CODE.indexOf("(await countActivatedOperators()) === 0");
     expect(bound).toBeGreaterThan(-1);
     expect(firstRun).toBeGreaterThan(bound);
   });
@@ -110,5 +114,17 @@ describe("shared-password bootstrap", () => {
     // it is either an operator who needs telling, or somebody who should not
     // have it.
     expect(CODE).toMatch(/auth\.shared_refused/);
+  });
+
+  it("🔴 does not un-pend an invite the shared password is bound to", () => {
+    /*
+     * A bound login that has not accepted its invite must keep looking like
+     * one, or its leaked link can no longer be killed by "New invite link".
+     */
+    const bound = CODE.slice(CODE.indexOf("const bound = await bootstrapUser()"));
+    expect(bound).toMatch(/if \(bound\.emailVerifiedAt\) await touchLastLogin\(bound\.id\)/);
+    expect(bound.slice(0, bound.indexOf("countActivatedOperators"))).not.toMatch(
+      /^\s*await touchLastLogin\(bound\.id\)/m,
+    );
   });
 });

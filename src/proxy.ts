@@ -63,6 +63,16 @@ const PUBLIC_PREFIXES = [
   "/signup",
   "/verify",
   /*
+   * Accepting an invite: choosing a password for a login someone else made.
+   * The invitee has no password yet, so they cannot present a session.
+   *
+   * Same shape as `/reset`: the page renders a form and nothing else, and the
+   * HMAC-signed token is verified server-side on submit by `/api/auth/invite`.
+   * The signature covers the login's current password hash, so a link stops
+   * verifying the instant a password is set. See `lib/invites.ts`.
+   */
+  "/invite",
+  /*
    * Shared reports. The recipient is a client's board member or accountant who
    * has no login and should not need one — the unguessable, expiring, revocable
    * token in the URL IS the credential, and the page verifies it against a

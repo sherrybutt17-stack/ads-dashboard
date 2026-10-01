@@ -6,6 +6,7 @@ import { assignableRoles } from "@/lib/roles";
 import { listClientsForSession } from "@/lib/clients";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UsersManager } from "@/components/UsersManager";
+import { emailConfig, senderProblem } from "@/lib/reports/email";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,10 @@ export default async function UsersPage() {
     listUsersForAgency(session!.agencyId),
     listClientsForSession(session),
   ]);
+
+  // Said on the form before anyone presses Send, not discovered afterwards.
+  const mail = emailConfig();
+  const emailReady = Boolean(mail && !senderProblem(mail.from));
 
   return (
     <div className="min-h-full">
@@ -54,12 +59,15 @@ export default async function UsersPage() {
            * one that omits it.
            */
           assignable={assignableRoles(session!.role)}
+          currentUserId={session!.userId}
+          emailReady={emailReady}
           users={users.map((u) => ({
             id: u.id,
             email: u.email,
             role: u.role,
             name: u.name,
             status: u.status,
+            pending: u.pending,
             lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
             createdAt: u.createdAt.toISOString(),
             clients: u.clients,

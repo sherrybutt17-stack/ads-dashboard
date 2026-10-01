@@ -14,7 +14,7 @@ import {
   allowedSlugsForUser,
   touchLastLogin,
   getUserByEmail,
-  countUsers,
+  countActivatedOperators,
 } from "@/lib/users";
 
 export const runtime = "nodejs";
@@ -210,15 +210,31 @@ export async function POST(req: NextRequest) {
           role: bound.role,
           slugs,
         };
-        await touchLastLogin(bound.id);
+        /*
+         * 🔴 Not for a login still waiting on its invite.
+         *
+         * Binding to an unaccepted invite is legitimate — it is the env-only
+         * way back in if the door closed before anyone on the team accepted.
+         * But stamping `last_login_at` would make the invite stop LOOKING
+         * pending (`isPendingInvite`): the Users page would offer "Send
+         * password link" instead of "New invite link", `rotateInvite` would
+         * refuse it, and the original 7-day link — possibly pasted into the
+         * wrong chat — could no longer be killed.
+         */
+        if (bound.emailVerifiedAt) await touchLastLogin(bound.id);
         auditMeta = { shared: true, boundTo: bound.email, role: bound.role };
-      } else if ((await countUsers()) === 0) {
+      } else if ((await countActivatedOperators()) === 0) {
         /*
          * 2. Genuine first run. There is no account to bind to and no way to
          *    create one without getting in, so the phantom is the only door —
-         *    but it closes by itself the moment an account exists, and it
-         *    expires in hours rather than in a month, because nothing can
-         *    revoke a session with no row behind it.
+         *    but it closes by itself the moment somebody can sign in with their
+         *    own password, and it expires in hours rather than in a month,
+         *    because nothing can revoke a session with no row behind it.
+         *
+         *    🔴 "A team login works", not "a row exists". An unaccepted invite,
+         *    a stranger's `/signup`, or a client who set up first used to close
+         *    this door too — locking the team out of the only way in. See
+         *    `countActivatedOperators`.
          */
         payload = { userId: "shared", ...SHARED_BOOTSTRAP };
         sessionTtlMs = BOOTSTRAP_SESSION_TTL_MS;

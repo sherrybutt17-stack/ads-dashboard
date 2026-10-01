@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assignableRoles, isOperatorRole, isPlatformRole } from "./roles";
+import { assignableRoles, isOperatorRole, isPlatformRole, mayAdminister } from "./roles";
 import { userRoleEnum, type UserRole } from "@/db/schema";
 import { SESSION_ROLES } from "./session";
 
@@ -142,6 +142,48 @@ describe("tier predicates", () => {
     for (const bogus of [undefined, "", "admin", "STAFF"]) {
       expect(isOperatorRole(bogus)).toBe(false);
       expect(isPlatformRole(bogus)).toBe(false);
+    }
+  });
+});
+
+describe("🔴 mayAdminister — managing a login is as powerful as creating it", () => {
+  /*
+   * The escalation it closes: an `agency` operator could not CREATE a
+   * superadmin, but could reset the password of the superadmin in their own
+   * agency and sign in as them. Taking over a login must need the same rank as
+   * making one.
+   */
+  it("refuses an agency operator any platform login", () => {
+    expect(mayAdminister("agency", "superadmin")).toBe(false);
+    expect(mayAdminister("agency", "staff")).toBe(false);
+  });
+
+  it("lets an agency operator manage their own tier and clients", () => {
+    expect(mayAdminister("agency", "agency")).toBe(true);
+    expect(mayAdminister("agency", "client")).toBe(true);
+  });
+
+  it("lets the platform tier manage everyone", () => {
+    for (const caller of ["superadmin", "staff"] as const) {
+      for (const target of ["superadmin", "staff", "agency", "client"] as const) {
+        expect(mayAdminister(caller, target), `${caller} → ${target}`).toBe(true);
+      }
+    }
+  });
+
+  it("gives a client, or nobody, nothing to manage", () => {
+    for (const target of ["superadmin", "staff", "agency", "client"] as const) {
+      expect(mayAdminister("client", target)).toBe(false);
+      expect(mayAdminister(undefined, target)).toBe(false);
+    }
+  });
+
+  it("agrees with assignableRoles everywhere, so the two cannot drift", () => {
+    const roles = ["superadmin", "staff", "agency", "client"] as const;
+    for (const caller of [...roles, undefined]) {
+      for (const target of roles) {
+        expect(mayAdminister(caller, target)).toBe(assignableRoles(caller).includes(target));
+      }
     }
   });
 });

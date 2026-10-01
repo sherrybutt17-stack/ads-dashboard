@@ -3,11 +3,14 @@
 import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { safeNextPath } from "@/lib/safe-next";
 
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const [email, setEmail] = useState("");
+  // Pre-filled after accepting an invite or a password link, which knows it.
+  const prefilled = params.get("email") ?? "";
+  const [email, setEmail] = useState(prefilled);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,11 +29,10 @@ function LoginForm() {
       if (!res.ok) {
         throw new Error(body?.error ?? "Sign in failed");
       }
-      // Only follow a same-origin path — never an absolute/protocol-relative URL
-      // (`//evil.com`, `https://…`, `/\evil`), which would turn login into an
-      // open-redirect phishing hop.
-      const next = params.get("next");
-      const safeNext = next && /^\/(?![/\\])/.test(next) ? next : null;
+      // Only follow a same-origin path — never somewhere else, which would turn
+      // sign-in into an open-redirect phishing hop. See `safeNextPath` for why
+      // a pattern on the string was not enough.
+      const safeNext = safeNextPath(params.get("next"), window.location.origin);
       router.push(safeNext || body?.redirect || "/");
       router.refresh();
     } catch (err) {
@@ -79,7 +81,7 @@ function LoginForm() {
         Sign in
       </h1>
       <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-        Use the email and password you were given.
+        Sign in with your email and password.
       </p>
 
       <label className="mt-4 block">
@@ -91,7 +93,7 @@ function LoginForm() {
         </span>
         <input
           type="email"
-          autoFocus
+          autoFocus={!prefilled}
           autoComplete="username"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -110,6 +112,8 @@ function LoginForm() {
         </span>
         <input
           type="password"
+          // Straight to the password when the address came pre-filled.
+          autoFocus={Boolean(prefilled)}
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}

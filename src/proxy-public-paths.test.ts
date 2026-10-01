@@ -28,6 +28,8 @@ describe("paths that must be public", () => {
     ["/reset", "the reset form, token verified on submit"],
     ["/signup", "creates the account"],
     ["/verify", "the account cannot be signed into yet"],
+    ["/invite", "the invitee has no password yet"],
+    ["/api/auth/invite", "accepting it, token verified on submit"],
     ["/r/sometoken", "share link — the token IS the credential"],
     ["/render/abc", "the headless renderer arrives with no session"],
     ["/about", "Google's reviewer must reach it"],
@@ -78,6 +80,8 @@ describe("🔴 an entry never exempts a path that merely starts with its name", 
     ["/forgotten-clients", "/forgot"],
     ["/reports/r/leak", "/r/"],
     ["/icon.svg.map", "/icon.svg"],
+    ["/invites", "/invite"],
+    ["/invite-admin", "/invite"],
   ])("%s is private despite looking like %s", (path) => {
     expect(isPublicPath(path)).toBe(false);
   });

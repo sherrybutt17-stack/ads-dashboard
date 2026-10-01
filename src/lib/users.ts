@@ -1,6 +1,14 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import { and, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { users, userClients, clients, type User, type UserRole } from "@/db/schema";
+import {
+  users,
+  userClients,
+  clients,
+  BOOTSTRAP_AGENCY_ID,
+  type User,
+  type UserRole,
+} from "@/db/schema";
 import { hashPassword, verifyPassword } from "@/lib/crypto";
 
 /**
@@ -19,7 +27,15 @@ export interface CreateUserInput {
    */
   agencyId: string;
   email: string;
-  password: string;
+  /**
+   * Omit to create an INVITE: the login gets a random password nobody knows
+   * and an unconfirmed address, and the person sets their own password through
+   * an invite link (`lib/invites.ts`), which also confirms the address.
+   *
+   * Supplied, the account is usable at once and its address is stamped
+   * confirmed — see `emailVerifiedAt` below for why that is not a shortcut.
+   */
+  password?: string;
   /**
    * 🔴 Callers must not pass this straight from a request body.
    *
@@ -87,9 +103,26 @@ export async function createUser(input: CreateUserInput): Promise<User> {
       .values({
         agencyId: input.agencyId,
         email,
-        passwordHash: hashPassword(input.password),
+        passwordHash: hashPassword(input.password || unusablePassword()),
         role: input.role,
         name: input.name?.trim() || null,
+        /*
+         * 🔴 Stamped when a password is supplied, and this is the fix for a
+         * lockout rather than a convenience.
+         *
+         * Sign-in refuses any account whose address is unconfirmed, and this
+         * used to leave the column null — so every login made on the Users page
+         * was refused with "confirm your email" and had no link to confirm it
+         * with. Because making the first account also retires the shared
+         * password, following the setup instructions locked the whole team out.
+         *
+         * A login made by an operator who typed in the person's password was
+         * made by someone who knows them: the same reasoning that let the
+         * tenancy migration stamp every hand-made account that predated it. An
+         * invite (no password) stays unconfirmed until the person proves the
+         * inbox by accepting it.
+         */
+        emailVerifiedAt: input.password ? new Date() : null,
       })
       .returning();
 
@@ -162,6 +195,30 @@ export async function allowedSlugsForUser(userId: string): Promise<string[]> {
   return rows.map((r) => r.slug);
 }
 
+/** Names of the dashboards a client login opens — for the invite email. */
+export async function allowedClientNamesForUser(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ name: clients.name })
+    .from(userClients)
+    .innerJoin(clients, eq(clients.id, userClients.clientId))
+    .where(eq(userClients.userId, userId))
+    .orderBy(clients.name);
+  return rows.map((r) => r.name);
+}
+
+/**
+ * How to name the person sending an invite, or null to name the agency instead.
+ *
+ * Null for the first-run shared session, which has no row and no name — and for
+ * a login with no name set, because an email address in "x@y.com set up a login
+ * for you" reads like spam where the agency's name does not.
+ */
+export async function inviterNameFor(userId: string): Promise<string | null> {
+  if (userId === "shared") return null;
+  const u = await getUserById(userId);
+  return u?.name?.trim() || null;
+}
+
 export async function touchLastLogin(userId: string): Promise<void> {
   await db
     .update(users)
@@ -177,6 +234,8 @@ export interface UserView {
   status: "active" | "disabled";
   lastLoginAt: Date | null;
   createdAt: Date;
+  /** Invited and not yet set up — see `isPendingInvite` in `lib/invites.ts`. */
+  pending: boolean;
   clients: Array<{ id: string; name: string; slug: string }>;
 }
 
@@ -223,18 +282,10 @@ export async function listUsersForAgency(agencyId: string): Promise<UserView[]> 
     status: u.status,
     lastLoginAt: u.lastLoginAt,
     createdAt: u.createdAt,
+    // Spelled out rather than imported: `invites.ts` imports this module.
+    pending: !u.emailVerifiedAt && !u.lastLoginAt,
     clients: byUser.get(u.id) ?? [],
   }));
-}
-
-export async function setUserPassword(
-  userId: string,
-  password: string,
-): Promise<void> {
-  await db
-    .update(users)
-    .set({ passwordHash: hashPassword(password), updatedAt: new Date() })
-    .where(eq(users.id, userId));
 }
 
 export async function setUserStatus(
@@ -283,9 +334,117 @@ export async function deleteUser(userId: string): Promise<void> {
   await db.delete(users).where(eq(users.id, userId));
 }
 
-export async function countUsers(): Promise<number> {
-  const rows = await db.select({ id: users.id }).from(users);
-  return rows.length;
+/**
+ * How many team logins have ever been usable — the shared password's
+ * first-run test.
+ *
+ * 🔴 Not a count of rows, and the difference is three lockouts.
+ *
+ * The shared password admits an anonymous session only while the team has no
+ * other way in. Counting ROWS answered a different question, and got it wrong
+ * in every direction that matters:
+ *
+ *   · An invite is a row. Inviting yourself retired the shared password before
+ *     you had accepted — lose the link, and nobody could get back in.
+ *   · `/signup` is public and creates a row. Any visitor creating an agency
+ *     switched the shared password off for the team that runs this deployment.
+ *   · A CLIENT is a row. A client accepting their invite before anyone on the
+ *     team had accepted theirs left the only working login one that cannot
+ *     open the Users page — the "make a client login first and you are locked
+ *     out" trap, moved from creation to acceptance rather than removed.
+ *
+ * So the line is: a confirmed address (somebody completed set-up and can sign
+ * in with their own password) on a login that can run THIS deployment's own
+ * agency — a platform role, or an `agency` operator of the bootstrap agency.
+ * Clients and other agencies' operators never count: neither gives the team a
+ * way back in.
+ *
+ * Disabled logins still count, deliberately. Disabling everyone must not
+ * reopen an anonymous, unrevocable, see-everything door; the way back from that
+ * is `DASHBOARD_BOOTSTRAP_EMAIL`, which binds the password to a named person.
+ */
+export async function countActivatedOperators(): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(users)
+    .where(
+      and(
+        isNotNull(users.emailVerifiedAt),
+        or(
+          inArray(users.role, ["staff", "superadmin"]),
+          and(eq(users.role, "agency"), eq(users.agencyId, BOOTSTRAP_AGENCY_ID)),
+        ),
+      ),
+    );
+  return Number(row?.n ?? 0);
+}
+
+/**
+ * A password nobody knows, for a login that has been invited but not set up.
+ *
+ * Hashed like any other, so `verifyCredentials` needs no special case — there is
+ * simply no input that matches. 32 random bytes: not guessable, and never
+ * stored or shown in plain form anywhere.
+ */
+function unusablePassword(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+/**
+ * Give an invite a fresh random password, which kills every link sent for it.
+ *
+ * Invite links are signed over the password hash, so this is what "send a new
+ * invite" means mechanically: the old link — lost, forwarded, sitting in the
+ * wrong inbox — stops verifying the moment this runs.
+ *
+ * 🔴 Only for a login that has never been set up. Run against a working account
+ * it would silently lock its owner out; the WHERE clause refuses rather than
+ * trusting every caller to have checked first.
+ */
+export async function rotateInvite(userId: string): Promise<User | null> {
+  const [user] = await db
+    .update(users)
+    .set({ passwordHash: hashPassword(unusablePassword()), updatedAt: new Date() })
+    .where(
+      and(
+        eq(users.id, userId),
+        sql`${users.emailVerifiedAt} IS NULL`,
+        sql`${users.lastLoginAt} IS NULL`,
+      ),
+    )
+    .returning();
+  return user ?? null;
+}
+
+/**
+ * Set a password through an invite or password link, and confirm the address.
+ *
+ * 🔴 Compare-and-set on the hash the link was verified against.
+ *
+ * The link is single-use because its signature covers the current hash — but
+ * "verify, then write" leaves a gap: two submits of the same link racing (a
+ * double-click, a second tab) both verify before either writes, and the second
+ * silently replaces the first person's password. Requiring the hash to be the
+ * one that was verified makes the write itself the single-use check. Returns
+ * false when the link lost that race, i.e. it has already been used.
+ *
+ * The address is confirmed because the link reached the inbox it was sent to.
+ * An existing confirmation date is kept, not overwritten.
+ */
+export async function setPasswordFromLink(
+  user: Pick<User, "id" | "passwordHash">,
+  password: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(users)
+    .set({
+      passwordHash: hashPassword(password),
+      emailVerifiedAt: sql`COALESCE(${users.emailVerifiedAt}, now())`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
+    .returning({ id: users.id });
+  return rows.length === 1;
 }
 
 /** Stamp an address as proved. Idempotent — re-verifying is not an error. */

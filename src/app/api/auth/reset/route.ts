@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { setUserPassword } from "@/lib/users";
+import { setPasswordFromLink } from "@/lib/users";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import * as audit from "@/lib/audit";
 import { verifyResetToken } from "@/lib/password-reset";
@@ -58,7 +58,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  await setUserPassword(found.user.id, password);
+  /*
+   * Compare-and-set on the hash the link was verified against, so two submits of
+   * one link cannot both win — and the address is confirmed, because the link
+   * was delivered to it. That second part closes a dead end: someone whose
+   * sign-up confirmation never arrived, or an invitee who used "Forgot your
+   * password?" instead of their invite, used to set a password here and then be
+   * refused at sign-in for an unconfirmed address, with nothing left to click.
+   */
+  if (!(await setPasswordFromLink(found.user, password))) {
+    return NextResponse.json({ ok: false, error: MESSAGES.used }, { status: 400 });
+  }
 
   void audit.record({
     action: "auth.reset_completed",

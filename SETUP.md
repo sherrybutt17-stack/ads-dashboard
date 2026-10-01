@@ -384,10 +384,41 @@ localhost.
    front of the project is invisible to that fallback, so set it explicitly.
 4. Set `DASHBOARD_PASSWORD`. **Without it the dashboard is publicly readable.**
    To use it, sign in with the **email field left blank** and this password.
-   It is accepted only while the deployment has no user accounts, or when it is
-   bound to a named one — so create real staff logins early, after which it
-   stops working as a shared key. The login page deliberately does not mention
-   it: that page is public, and it is where Google's OAuth reviewer lands.
+   It is accepted only until somebody has a working login of their own, or when
+   it is bound to a named one with `DASHBOARD_BOOTSTRAP_EMAIL`. The login page
+   deliberately does not mention it: that page is public, and it is where
+   Google's OAuth reviewer lands.
+
+### First logins — invite yourself first
+
+Nobody types a password for anyone else. **Users → Invite someone** makes the
+login and produces a one-time link; the person opens it and chooses their own
+password. The link is emailed when email works (§5d), and is always shown on
+screen with a **Copy link** button, so invites work before the sending domain
+is verified — paste it into WhatsApp or Slack yourself.
+
+1. Sign in with the shared password (blank email).
+2. Open **Users**, invite **yourself** as **Superadmin**, copy the link.
+3. Open the link, choose your password, then sign in with your email.
+   **From this moment the shared password stops working.** It closes the
+   first time someone on the team — a Superadmin, or an Agency login of this
+   agency — has set up their own login. Sending an invite does not close it,
+   and neither does a client setting up theirs, so a lost link or a client who
+   is quicker than you never locks you out.
+4. Invite the rest of the team the same way, then each client as **Client**,
+   ticking the dashboards they may see.
+
+| Role | Sees |
+|---|---|
+| Client | Only the dashboards ticked for them. No setup. |
+| Agency | The whole agency: every client, setup, connections, client logins. |
+| Superadmin | Everything on the deployment, every agency, plus the audit log. |
+
+Invite links work once and expire after **7 days**; **New invite link** on a
+waiting login replaces it and kills the old one. For someone already set up,
+**Send password link** sends a 24-hour link to choose a new password; their
+current password keeps working until they use it. Nobody can disable or remove
+their own login, and an Agency login cannot manage a Superadmin.
 
 ### Cron — the nightly reconcile
 
