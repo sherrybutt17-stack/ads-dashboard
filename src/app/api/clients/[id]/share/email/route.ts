@@ -6,6 +6,7 @@ import { record as recordAudit, requestContext } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   mintShareLink,
+  relabelShareLink,
   shareUrlFor,
   SHARE_TTL_DAYS,
   DEFAULT_SHARE_TTL_DAYS,
@@ -246,6 +247,18 @@ export async function POST(
      */
     const e = err as EmailError;
     console.error("[share-email] send failed:", err);
+    /*
+     * 🔴 Relabelled, because the label is how the operator finds this link
+     * again — and "Emailed — cfo@…" on a link that was never emailed sends them
+     * hunting through the CFO's inbox for something that is not there, or
+     * worse, revoking the wrong link later. Best-effort: a failed rename must
+     * not hide the send failure the operator is about to be told about.
+     */
+    await relabelShareLink(
+      row.id,
+      client.id,
+      `Email failed — ${label?.trim() || to[0]}`.slice(0, 120),
+    ).catch(() => {});
     /*
      * The link is live even though the email is not, so it is audited here
      * too. Otherwise a working bearer link exists that no audit entry

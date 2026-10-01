@@ -291,6 +291,35 @@ describe("sendScheduledReport — failure", () => {
  * Refusals before anything is claimed
  * ------------------------------------------------------------------ */
 
+describe("sendScheduledReport — no public address", () => {
+  it("🔴 refuses to email a link that would not open, and says why", async () => {
+    /*
+     * A production deployment that cannot work out its own URL used to email
+     * `/r/<token>` — a relative path, which opens nothing in an inbox — and
+     * record the report as sent.
+     */
+    const env = process.env as Record<string, string | undefined>;
+    const saved = { url: env.NEXT_PUBLIC_APP_URL, node: env.NODE_ENV };
+    delete env.NEXT_PUBLIC_APP_URL;
+    delete env.VERCEL_PROJECT_PRODUCTION_URL;
+    delete env.VERCEL_URL;
+    env.NODE_ENV = "production";
+    try {
+      const res = await mod.sendScheduledReport(client(), schedule(), NOW);
+      expect(res.sent).toBe(false);
+      expect(sent).toHaveLength(0);
+      // Refused before a link was minted, so no live link is left behind.
+      expect((await run(`SELECT count(*)::int n FROM share_links`)).rows[0].n).toBe(0);
+      expect(String((await schedRow()).last_error)).toMatch(/NEXT_PUBLIC_APP_URL/);
+      // And the period is retried once the address is set.
+      expect((await schedRow()).last_sent_period).toBeNull();
+    } finally {
+      env.NEXT_PUBLIC_APP_URL = saved.url;
+      env.NODE_ENV = saved.node;
+    }
+  });
+});
+
 describe("sendScheduledReport — refusals", () => {
   it("does nothing when email is not configured", async () => {
     configured = false;

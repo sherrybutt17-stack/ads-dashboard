@@ -6,7 +6,7 @@ import { getClientBranding } from "@/lib/branding-store";
 import { sendEmail, emailConfigured, EmailError } from "./email";
 import { isDue, type Cadence, type Period } from "./schedule";
 import { renderReportEmail } from "./template";
-import { appBaseUrlOr } from "@/lib/app-url";
+import { appBaseUrl } from "@/lib/app-url";
 
 /**
  * Sending one client their report.
@@ -112,6 +112,25 @@ export async function sendScheduledReport(
   if (!sendRow) return { sent: false, reason: "already claimed by another run" };
 
   try {
+    /*
+     * 🔴 Refused before a link is minted, rather than emailing `/r/<token>`.
+     *
+     * This used `appBaseUrlOr("")`, so a deployment that could not work out its
+     * own public address emailed a client a bare relative path — a link that
+     * opens nothing — and recorded the report as sent. Throwing here lands in
+     * the catch below: the period is marked failed, the reason shows on the
+     * schedule panel, and the next run retries once the address is set. Same
+     * rule the ad-hoc "Email this report" route already applies.
+     */
+    const base = appBaseUrl();
+    if (!base) {
+      throw new EmailError(
+        "This deployment's public URL could not be determined, so an emailed link would not open. Set NEXT_PUBLIC_APP_URL.",
+        501,
+        true,
+      );
+    }
+
     const { token, row: link } = await mintShareLink({
       clientId: client.id,
       rangeStart: period.startKey,
@@ -123,7 +142,6 @@ export async function sendScheduledReport(
     });
 
     const branding = await getClientBranding(client.id);
-    const base = appBaseUrlOr("");
     const url = `${base}/r/${token}`;
 
     const mail = renderReportEmail({

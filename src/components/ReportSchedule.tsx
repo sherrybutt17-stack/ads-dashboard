@@ -208,7 +208,7 @@ export function ReportSchedule({
               <strong style={{ color: "var(--text-primary)" }}>
                 Email is not configured.
               </strong>{" "}
-              Set <code>RESEND_API_KEY</code> and <code>REPORT_FROM</code> to
+              Set <code>RESEND_API_KEY</code> and <code>RESEND_FROM</code> (or <code>REPORT_FROM</code>) to
               enable this. Everything else on this page works without it.
             </>
           ) : (

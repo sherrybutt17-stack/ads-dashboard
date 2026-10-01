@@ -244,6 +244,22 @@ export async function revokeShareLink(
 }
 
 /**
+ * Rename a link — used to stop a link reading "Emailed — …" when the email
+ * never left. Scoped by `clientId` as well as `id`, for the same reason as
+ * `revokeShareLink`.
+ */
+export async function relabelShareLink(
+  id: string,
+  clientId: string,
+  label: string,
+): Promise<void> {
+  await db
+    .update(shareLinks)
+    .set({ label })
+    .where(and(eq(shareLinks.id, id), eq(shareLinks.clientId, clientId)));
+}
+
+/**
  * The absolute URL an operator copies.
  *
  * Same env var as `webhookUrlFor`, so the deployment has one place to say what

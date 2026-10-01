@@ -373,7 +373,7 @@ export function ShareReport({
                 >
                   Email is not configured on this deployment, so nothing can be
                   sent from here. Set <code>RESEND_API_KEY</code> and{" "}
-                  <code>REPORT_FROM</code>, then reload. You can still create a
+                  <code>RESEND_FROM</code>, then reload. You can still create a
                   link and send it yourself.
                 </p>
               )}
