@@ -7,6 +7,7 @@ import { UsersManager } from "@/components/UsersManager";
 import { emailConfig, senderProblem } from "@/lib/reports/email";
 import { AgencyShell } from "@/components/AgencyShell";
 import { PageTitle } from "@/components/PageTitle";
+import { getAgencySettings } from "@/lib/branding-store";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +15,12 @@ export default async function UsersPage() {
   const session = await getSessionUser();
   if (!isAgencyOperator(session)) redirect("/");
 
-  const [users, clientRows] = await Promise.all([
+  const [users, clientRows, agency] = await Promise.all([
     listUsersForAgency(session!.agencyId),
     listClientsForSession(session),
+    // The sidebar wears the agency's own name, as on the client list —
+    // without it this page alone read "Dashboard". Never throws.
+    getAgencySettings(session!.agencyId),
   ]);
 
   // Said on the form before anyone presses Send, not discovered afterwards.
@@ -24,7 +28,7 @@ export default async function UsersPage() {
   const emailReady = Boolean(mail && !senderProblem(mail.from));
 
   return (
-    <AgencyShell session={session}>
+    <AgencyShell session={session} brandName={agency.agencyName}>
       <main className="mx-auto w-full max-w-[1100px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <PageTitle
           title="Users &amp; access"

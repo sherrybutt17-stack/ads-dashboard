@@ -6,6 +6,7 @@ import { getSessionUser, isAgencyOperator } from "@/lib/auth";
 import { DASH } from "@/lib/metrics/compute";
 import { AgencyShell } from "@/components/AgencyShell";
 import { PageTitle } from "@/components/PageTitle";
+import { getAgencySettings } from "@/lib/branding-store";
 
 export const dynamic = "force-dynamic";
 
@@ -111,12 +112,14 @@ export default async function AuditPage({
 
   const { cat } = await searchParams;
   const category = CATEGORIES.some((c) => c.key === cat) ? (cat ?? "") : "";
-  const entries = await listAuditEntries(session, {
-    category: category || undefined,
-  });
+  const [entries, agency] = await Promise.all([
+    listAuditEntries(session, { category: category || undefined }),
+    // The sidebar wears the agency's own name, as on the client list.
+    getAgencySettings(session!.agencyId),
+  ]);
 
   return (
-    <AgencyShell session={session}>
+    <AgencyShell session={session} brandName={agency.agencyName}>
       <main className="mx-auto w-full max-w-[1100px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <PageTitle title="Audit log" subtitle="Times are UTC" />
 

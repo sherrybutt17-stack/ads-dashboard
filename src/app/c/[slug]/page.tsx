@@ -714,7 +714,14 @@ export default async function ClientDashboard({
           )}
         </header>
 
-        <main className="mx-auto flex max-w-[1400px] flex-col gap-6 px-4 py-7 sm:px-6">
+        {/*
+          🔴 `w-full min-w-0`, like every other page's <main>. The frame is a
+          flex column and `mx-auto` turns off stretch, so without a width this
+          column sizes to its widest content — the Reports tab's moving-averages
+          table is ~1400px — and pushes past the frame, which clips the right
+          side of the KPI cards instead of letting the table scroll in its box.
+        */}
+        <main className="mx-auto flex w-full min-w-0 max-w-[1400px] flex-col gap-6 px-4 py-7 sm:px-6">
           {/* Diagnostic banners are operator concerns and link to Setup, which a
             client can't reach — staff only. They sit outside the section
             registry deliberately: "your webhook is dead" is not something a
