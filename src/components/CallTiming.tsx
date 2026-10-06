@@ -71,7 +71,7 @@ export function CallTimingPanel({ report }: { report: CallTimingReport }) {
     <section className="card p-5" aria-label="When calls connect">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             When calls connect
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -89,7 +89,7 @@ export function CallTimingPanel({ report }: { report: CallTimingReport }) {
 
       {/* ── The claim ─────────────────────────────────────────────────── */}
       <div
-        className="mt-4 rounded-[10px] border px-3 py-2.5 text-[13px] leading-relaxed"
+        className="mt-4 rounded-[var(--radius)] border px-3 py-2.5 text-[13px] leading-relaxed"
         style={{
           borderColor: "var(--border)",
           background: "var(--surface-1)",

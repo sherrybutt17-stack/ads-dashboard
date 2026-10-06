@@ -6,6 +6,7 @@ import { pipelineStages } from "@/db/schema";
 import { getClientForSession } from "@/lib/clients";
 import { getSessionUser } from "@/lib/auth";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { AppShell } from "@/components/AppShell";
 
 export const dynamic = "force-dynamic";
 
@@ -79,14 +80,16 @@ export default async function OAuthResultPage({
   const accent = ok ? "var(--status-good)" : "var(--status-critical)";
 
   return (
-    <div className="min-h-screen" style={{ background: "var(--surface-page)" }}>
-      <header className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="mx-auto flex max-w-[900px] items-center justify-end px-4 py-4 sm:px-6">
+    <AppShell>
+      {/* See the glass block in globals.css. `.glass-bar` owns the bottom
+          hairline, so there is no `border-b` here. */}
+      <header className="glass-bar sticky top-0 z-20">
+        <div className="mx-auto flex w-full max-w-[900px] items-center justify-end px-4 py-3.5 sm:px-6">
           <ThemeToggle />
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-[520px] flex-col items-center px-4 pt-16 sm:pt-24">
+      <main className="mx-auto flex w-full max-w-[520px] flex-1 flex-col items-center px-4 pt-16 pb-16 sm:pt-24">
         <div
           className="flex h-16 w-16 items-center justify-center rounded-full"
           style={{
@@ -124,7 +127,7 @@ export default async function OAuthResultPage({
         </div>
 
         <h1
-          className="mt-6 text-center text-[22px] font-semibold"
+          className="mt-6 text-center text-[24px] leading-tight font-semibold tracking-[-0.02em]"
           style={{ color: "var(--text-primary)" }}
         >
           {ok ? "GoHighLevel connected" : "Connection didn’t finish"}
@@ -156,7 +159,7 @@ export default async function OAuthResultPage({
 
         {/* Detail card */}
         <div
-          className="card mt-8 w-full p-5"
+          className="card mt-8 w-full p-5 sm:p-6"
           style={{ borderColor: "var(--border)" }}
         >
           {ok ? (
@@ -194,14 +197,13 @@ export default async function OAuthResultPage({
             <>
               <Link
                 href={`/c/${slug}/setup`}
-                className="flex-1 rounded-[10px] px-4 py-2.5 text-center text-[14px] font-medium text-white"
-                style={{ background: "var(--accent)" }}
+                className="btn-accent flex-1"
               >
                 {unmapped > 0 ? "Map stages & finish setup" : "Finish setup"}
               </Link>
               <Link
                 href={`/c/${slug}`}
-                className="flex-1 rounded-[10px] border px-4 py-2.5 text-center text-[14px] font-medium"
+                className="flex-1 rounded-[var(--radius)] border px-4 py-2.5 text-center text-[13px] font-medium"
                 style={{
                   borderColor: "var(--border-strong)",
                   color: "var(--text-secondary)",
@@ -213,8 +215,7 @@ export default async function OAuthResultPage({
           ) : ok ? (
             <Link
               href="/"
-              className="flex-1 rounded-[10px] px-4 py-2.5 text-center text-[14px] font-medium text-white"
-              style={{ background: "var(--accent)" }}
+              className="btn-accent flex-1"
             >
               Back to clients
             </Link>
@@ -222,14 +223,13 @@ export default async function OAuthResultPage({
             <>
               <Link
                 href={slug ? `/c/${slug}/setup` : "/"}
-                className="flex-1 rounded-[10px] px-4 py-2.5 text-center text-[14px] font-medium text-white"
-                style={{ background: "var(--accent)" }}
+                className="btn-accent flex-1"
               >
                 Back to setup
               </Link>
               <Link
                 href="/"
-                className="flex-1 rounded-[10px] border px-4 py-2.5 text-center text-[14px] font-medium"
+                className="flex-1 rounded-[var(--radius)] border px-4 py-2.5 text-center text-[13px] font-medium"
                 style={{
                   borderColor: "var(--border-strong)",
                   color: "var(--text-secondary)",
@@ -241,7 +241,7 @@ export default async function OAuthResultPage({
           )}
         </div>
       </main>
-    </div>
+    </AppShell>
   );
 }
 

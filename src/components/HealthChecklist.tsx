@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import type { HealthLevel, HealthReport } from "@/lib/health";
 import { Icon, type IconName } from "./Icon";
 
@@ -38,7 +38,7 @@ export function HealthBadge({ level }: { level: HealthLevel }) {
     >
       <span
         aria-hidden="true"
-        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-white"
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[var(--status-ink)]"
         style={{ background: m.color }}
       >
         <Icon name={m.icon} size={9} style={{ strokeWidth: 3 }} />
@@ -81,7 +81,7 @@ export function HealthChecklist({
         <div>
           <h2
             className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
           >
             Connection health
           </h2>
@@ -92,7 +92,7 @@ export function HealthChecklist({
         <button
           onClick={retest}
           disabled={loading}
-          className="shrink-0 rounded-[8px] border px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50"
+          className="shrink-0 rounded-[var(--radius-sm)] border px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50"
           style={{
             borderColor: "var(--border-strong)",
             color: "var(--text-secondary)",
@@ -104,12 +104,8 @@ export function HealthChecklist({
 
       {error && (
         <p
-          className="mb-3 rounded-[8px] px-3 py-2 text-xs"
-          style={{
-            color: "var(--status-critical)",
-            background:
-              "color-mix(in srgb, var(--status-critical) 10%, transparent)",
-          }}
+          className="tint-badge mb-3 rounded-[var(--radius-sm)] px-3 py-2 text-xs"
+          style={{ "--tint": "var(--status-critical)" } as CSSProperties}
         >
           {error}
         </p>
@@ -123,7 +119,7 @@ export function HealthChecklist({
         ) : (
           <div className="flex flex-col gap-2">
             {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="skeleton h-11 w-full" />
+              <div key={i} className="skeleton h-11 w-full rounded-[var(--radius)]" />
             ))}
           </div>
         )
@@ -139,7 +135,7 @@ export function HealthChecklist({
               >
                 <span
                   aria-hidden="true"
-                  className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-white"
+                  className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[var(--status-ink)]"
                   style={{ background: m.color }}
                 >
                   <Icon name={m.icon} size={10} style={{ strokeWidth: 3 }} />

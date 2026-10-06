@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -6,8 +5,8 @@ import { agencies } from "@/db/schema";
 import { getSessionUser, isAgencyOperator } from "@/lib/auth";
 import { getAgencySettings } from "@/lib/branding-store";
 import { AgencySettingsForm } from "@/components/AgencySettingsForm";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { Icon } from "@/components/Icon";
+import { AgencyShell } from "@/components/AgencyShell";
+import { PageTitle } from "@/components/PageTitle";
 
 export const dynamic = "force-dynamic";
 
@@ -40,29 +39,10 @@ export default async function AgencySettingsPage() {
   const settings = await getAgencySettings(session!.agencyId);
 
   return (
-    <div className="min-h-full">
-      <header className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="mx-auto flex max-w-[720px] items-center gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0 flex-1">
-            <Link
-              href="/"
-              className="inline-flex items-center gap-1 text-xs hover:underline"
-              style={{ color: "var(--text-muted)" }}
-            >
-              <Icon name="arrowLeft" size={12} /> Clients
-            </Link>
-            <h1
-              className="text-lg font-semibold"
-              style={{ color: "var(--text-primary)" }}
-            >
-              {agency.name}
-            </h1>
-          </div>
-          <ThemeToggle />
-        </div>
-      </header>
+    <AgencyShell session={session} brandName={agency.name}>
+      <main className="mx-auto w-full max-w-[720px] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <PageTitle title="Settings" subtitle={agency.name} />
 
-      <main className="mx-auto flex max-w-[720px] flex-col gap-5 px-4 py-6 sm:px-6">
         <AgencySettingsForm tenantName={agency.name} initial={settings} />
 
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -72,6 +52,6 @@ export default async function AgencySettingsPage() {
           reports you send them.
         </p>
       </main>
-    </div>
+    </AgencyShell>
   );
 }

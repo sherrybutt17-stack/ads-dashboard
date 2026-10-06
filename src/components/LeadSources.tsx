@@ -12,6 +12,7 @@ import {
 } from "@/lib/metrics/lead-sources";
 import { DataState } from "@/components/DataState";
 import { Icon } from "@/components/Icon";
+import { CategoryChart } from "@/components/CategoryChart";
 
 /**
  * Where leads actually come from — the page they were standing on, the form
@@ -23,9 +24,15 @@ import { Icon } from "@/components/Icon";
  * capture points — and making them look like two unrelated features would hide
  * that they can be read together.
  *
- * The bar encodes LEADS, one hue, magnitude only. No categorical palette is
- * involved: every row is the same kind of thing, so giving rows different hues
- * would imply an identity distinction that does not exist.
+ * The IN-TABLE bar encodes LEADS, one hue, magnitude only — every row is the
+ * same kind of thing, and giving those bars different hues would imply an
+ * identity distinction that does not exist.
+ *
+ * The chart above the table is a different case and is allowed the categorical
+ * ramp. There the colour is not a claim about kind: it is the only link between
+ * a mark and its name, because a slice or a bar in a free-standing chart has no
+ * row label sitting beside it. Inside the table the label is already there, so
+ * a hue would be decoration; in the chart it is the index.
  */
 
 /** Rows before "show all". A busy account can carry dozens of URLs. */
@@ -52,7 +59,7 @@ export function LeadSources({ data }: { data: LeadSourceReport }) {
     <section className="card overflow-hidden" aria-label="Which pages and forms bring leads">
       <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             Which pages and forms bring leads
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -62,7 +69,7 @@ export function LeadSources({ data }: { data: LeadSourceReport }) {
 
         {/* Filters in one row above the table, per the interaction spec. */}
         <div
-          className="flex rounded-md p-0.5"
+          className="flex rounded-[var(--radius-sm)] p-0.5"
           style={{ background: "var(--surface-2)" }}
           role="tablist"
           aria-label="Group leads by"
@@ -77,7 +84,7 @@ export function LeadSources({ data }: { data: LeadSourceReport }) {
                 setDimension(d);
                 setExpanded(false);
               }}
-              className="rounded px-2.5 py-1 text-[11px] font-medium transition-colors"
+              className="rounded-[var(--radius-xs)] px-2.5 py-1 text-[11px] font-medium transition-colors"
               style={
                 d === dimension
                   ? { background: "var(--surface-1)", color: "var(--text-primary)" }
@@ -136,7 +143,32 @@ export function LeadSources({ data }: { data: LeadSourceReport }) {
             )}
           </div>
 
-          <table className="w-full text-[12px]">
+          {/*
+            The same leads, as a shape. Reads `group.rows` and not the visible
+            `rows`, so collapsing the table to eight does not quietly redraw the
+            chart around a smaller total — the chart folds its own tail, which
+            is labelled, where the table's cut is labelled "show all".
+          */}
+          <CategoryChart
+            storageKey="leadSources"
+            measure="Leads"
+            format={{ kind: "count" }}
+            height={200}
+            data={group.rows.map((r) => ({
+              key: r.value,
+              label: r.value,
+              value: r.leads,
+              /*
+               * The residual row is "no landing page recorded" — an absence of
+               * a source, not a source. Grey for the same reason the folded
+               * tail is grey: it is not one of the entities being compared.
+               */
+              ...(r.isResidual ? { color: "var(--text-muted)" } : {}),
+            }))}
+            empty={`No ${DIMENSION_LABEL[dimension].toLowerCase()} carried leads in this period`}
+          />
+
+          <table className="mt-4 w-full text-[12px]">
             {/*
               A real <caption> rather than a note underneath, so a screen reader
               meets the two caveats BEFORE the rows they qualify — the same

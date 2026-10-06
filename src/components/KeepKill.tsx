@@ -6,6 +6,7 @@ import {
 } from "@/lib/metrics/keepkill";
 import { formatCurrency, DASH } from "@/lib/metrics/compute";
 import { Icon } from "@/components/Icon";
+import { CategoryChart, type CategoryDatum } from "@/components/CategoryChart";
 
 /**
  * Keep / kill — what the engine concluded, and why.
@@ -31,6 +32,47 @@ const STYLE: Record<Verdict, { color: string; icon: "alert" | "check" | "help" |
 
 /** Verdicts worth a row of their own; the rest collapse into a count. */
 const NOTABLE: Verdict[] = ["kill", "scale", "watch", "too_early"];
+
+/**
+ * Severity order, so the chart's bars read left-to-right as act-now to
+ * leave-alone. `sort={false}` below relies on this: ranking the bars by money
+ * would put whichever verdict happens to hold the biggest budget first, and the
+ * order would then change every time a campaign's spend did.
+ */
+const VERDICT_ORDER: readonly Verdict[] = [
+  "kill",
+  "watch",
+  "scale",
+  "keep",
+  "too_early",
+  "no_benchmark",
+];
+
+/**
+ * How much money is sitting behind each recommendation.
+ *
+ * 🔴 The measure is SPEND, not a count of campaigns. "Three campaigns to
+ * consider stopping" is a fact about the list; "£4,200 in campaigns to consider
+ * stopping" is the reason to read it. A count also flatters small tests — five
+ * £20 experiments outweigh one £5,000 campaign on that scale, which inverts the
+ * priority the card exists to set.
+ *
+ * Colours come from the status palette, passed per datum, for the reason
+ * `CategoryDatum.color` documents: these categories are states, and they are
+ * already painted in the list directly below.
+ */
+function spendByVerdict(assessments: readonly Assessment[]): CategoryDatum[] {
+  const totals = new Map<Verdict, number>();
+  for (const a of assessments) {
+    totals.set(a.verdict, (totals.get(a.verdict) ?? 0) + a.spend);
+  }
+  return VERDICT_ORDER.filter((v) => (totals.get(v) ?? 0) > 0).map((v) => ({
+    key: v,
+    label: VERDICT_LABEL[v],
+    value: totals.get(v) ?? 0,
+    color: STYLE[v].color,
+  }));
+}
 
 function Row({ a, currency }: { a: Assessment; currency: string }) {
   const s = STYLE[a.verdict];
@@ -78,7 +120,7 @@ export function KeepKill({
   return (
     <section className="card p-5" aria-label="Keep or stop">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Keep or stop
         </h2>
         <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
@@ -97,6 +139,18 @@ export function KeepKill({
       <p className="mt-1.5 text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
         {stageReason}
       </p>
+
+      {stage === null ? null : (
+        <CategoryChart
+          storageKey="keepkill.verdicts"
+          measure="Spend"
+          format={{ kind: "money", currency }}
+          data={spendByVerdict(assessments)}
+          height={180}
+          sort={false}
+          empty="No campaign carried enough spend to judge"
+        />
+      )}
 
       {stage === null ? null : notable.length > 0 ? (
         <>

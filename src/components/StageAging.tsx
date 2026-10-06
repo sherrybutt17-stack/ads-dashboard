@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import {
   MAX_LISTED,
   type AgingLead,
@@ -9,6 +9,7 @@ import {
 } from "@/lib/metrics/aging";
 import { formatCurrency, formatNumber } from "@/lib/metrics/compute";
 import { Icon } from "@/components/Icon";
+import { CategoryChart } from "@/components/CategoryChart";
 
 /**
  * Leads that have stopped moving — a call list, not a report.
@@ -32,7 +33,7 @@ function StageChip({ s, active, onClick }: { s: StageAge; active: boolean; onCli
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className="rounded-[7px] px-2.5 py-1 text-[12px] font-medium transition-colors"
+      className="rounded-[var(--radius-xs)] px-2.5 py-1 text-[12px] font-medium transition-colors"
       style={{
         background: active ? "var(--surface-1)" : "transparent",
         color: active
@@ -77,11 +78,8 @@ function LeadRow({ lead, campaignNames }: { lead: AgingLead; campaignNames: Reco
            */}
           {lead.everCalled === false && (
             <span
-              className="shrink-0 rounded-[5px] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase"
-              style={{
-                background: "color-mix(in srgb, var(--status-critical) 14%, transparent)",
-                color: "var(--status-critical)",
-              }}
+              className="tint-badge shrink-0 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase"
+              style={{ "--tint": "var(--status-critical)" } as CSSProperties}
             >
               never called
             </span>
@@ -212,7 +210,7 @@ export function StageAgingPanel({
   const header = (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
       <div>
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Leads that have stopped moving
         </h2>
         <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -222,7 +220,7 @@ export function StageAgingPanel({
       </div>
       {data.totalAging > 0 && (
         <div
-          className="flex flex-wrap gap-1 rounded-[9px] p-0.5"
+          className="flex flex-wrap gap-1 rounded-[var(--radius-sm)] p-0.5"
           style={{ background: "var(--surface-2)" }}
           role="group"
           aria-label="Stage"
@@ -292,7 +290,7 @@ export function StageAgingPanel({
       {header}
 
       <div
-        className="mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[10px] p-3.5"
+        className="mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[var(--radius)] p-3.5"
         style={{ background: "var(--surface-2)" }}
       >
         {/*
@@ -319,6 +317,35 @@ export function StageAgingPanel({
             </>
           )}
         </span>
+      </div>
+
+      {/*
+        Where the queue actually is, before the queue itself.
+
+        `sort={false}` keeps pipeline order. Ranking these by size would sort
+        the funnel by backlog, and "appointments" sitting left of "new lead"
+        because it has more overdue rows is a picture of nothing.
+
+        A stalled stage is drawn grey rather than given a hue of its own. Its
+        leads are counted — leaving them out would contradict the table — but it
+        is not a call list, and colouring it like the stages that are would make
+        the tallest bar on the panel the one there is nothing to do about.
+      */}
+      <div className="mt-4">
+        <CategoryChart
+          storageKey="stageAging"
+          measure="Overdue leads"
+          format={{ kind: "count" }}
+          height={170}
+          sort={false}
+          data={withAging.map((s) => ({
+            key: s.stage,
+            label: s.label,
+            value: s.aging,
+            ...(s.stalled ? { color: "var(--text-muted)" } : {}),
+          }))}
+          empty="No stage is holding an overdue lead"
+        />
       </div>
 
       <div className="mt-4 max-h-[420px] overflow-y-auto">

@@ -1,18 +1,20 @@
-import Link from "next/link";
 import { listClientsForSession } from "@/lib/clients";
 import { listAdAccounts } from "@/lib/meta/accounts";
 import { quickHealth } from "@/lib/health";
 import { getSessionUser, isAgencyOperator } from "@/lib/auth";
-import { HealthBadge } from "@/components/HealthChecklist";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { AddClientButton } from "@/components/AddClientButton";
-import { RemoveClient } from "@/components/RemoveClient";
-import { SignOut } from "@/components/SignOut";
 import { BookRollupPanel } from "@/components/BookRollup";
+import { BookKpis } from "@/components/BookKpis";
+import { PageTitle } from "@/components/PageTitle";
 import { BookPacingPanel } from "@/components/BookPacing";
-import { ChurnChip, ChurnRiskPanel } from "@/components/ChurnRisk";
+import { ChurnRiskPanel } from "@/components/ChurnRisk";
+import { ClientCards } from "@/components/ClientCards";
+import { getClientBranding } from "@/lib/branding-store";
+import { accentFor } from "@/lib/branding";
 import { loadBook, loadChurn } from "@/lib/metrics/book";
 import { loadBookPacing } from "@/lib/book-pacing-load";
+import { AgencyShell } from "@/components/AgencyShell";
+import { getAgencySettings } from "@/lib/branding-store";
 
 export const dynamic = "force-dynamic";
 
@@ -65,9 +67,30 @@ export default async function ClientsPage() {
     (churn?.report.flagged ?? []).map((c) => [c.slug, c.level]),
   );
 
+  /*
+   * The sidebar wears the agency's own name. `getAgencySettings` never throws —
+   * branding is chrome and must not be able to take down a page of real numbers
+   * — so a settings-table failure costs the word above the nav, nothing else.
+   */
+  const brandName = session
+    ? ((await getAgencySettings(session.agencyId)).agencyName ?? null)
+    : null;
+
   const clients = await Promise.all(
     visible.map(async (c) => {
-      const accounts = await listAdAccounts(c.id);
+      const [accounts, branding] = await Promise.all([
+        listAdAccounts(c.id),
+        /*
+         * The card wears the client's OWN accent — the same colour their
+         * dashboard is painted in — so a card and the page it opens are
+         * recognisably the same place. `getClientBranding` never throws and
+         * falls back to `NO_BRANDING`, which `accentFor` turns into the
+         * generated accent for this client id: a colour still follows the
+         * client, never their position in the list, so archiving one never
+         * repaints the rest.
+         */
+        getClientBranding(c.id),
+      ]);
       const label =
         accounts.length === 0
           ? "Meta not connected"
@@ -83,64 +106,47 @@ export default async function ClientsPage() {
         firstWebhookAt: c.firstWebhookAt,
         // No webhookUrl: this list renders for client-role users too, and the
         // token in it is the GHL shared secret. Nothing here rendered it.
+        adAccounts: accounts.length,
+        ghlConnected: Boolean(c.ghlLocationId),
+        accent: accentFor(c.id, branding),
         health: await quickHealth(c),
         churn: churnLevel.get(c.slug),
       };
     }),
   );
 
-  return (
-    <div className="min-h-full">
-      <header className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="mx-auto flex max-w-[1100px] items-center gap-3 px-4 py-4 sm:px-6">
-          <div className="flex flex-1 items-center gap-2.5">
-            <div
-              aria-hidden="true"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[13px] font-bold text-white"
-              style={{
-                background: "linear-gradient(135deg, #4a97ee 0%, #1c5cab 100%)",
-                boxShadow:
-                  "0 2px 8px -2px rgba(28, 92, 171, 0.5), inset 0 1px 0 rgba(255,255,255,0.25)",
-              }}
-            >
-              ◆
-            </div>
-            <h1
-              className="text-lg font-semibold"
-              style={{ color: "var(--text-primary)" }}
-            >
-              {staff ? "Clients" : "Your dashboards"}
-            </h1>
-          </div>
-          {staff && (
-            <>
-              <Link
-                href="/users"
-                className="btn-ghost rounded-[9px] px-3 py-2 text-[13px] font-medium"
-              >
-                Users
-              </Link>
-              <Link
-                href="/audit"
-                className="btn-ghost rounded-[9px] px-3 py-2 text-[13px] font-medium"
-              >
-                Audit log
-              </Link>
-              <Link
-                href="/settings"
-                className="btn-ghost rounded-[9px] px-3 py-2 text-[13px] font-medium"
-              >
-                Settings
-              </Link>
-              <AddClientButton />
-            </>
-          )}
-          <SignOut />
-          <ThemeToggle />
-        </div>
-      </header>
+  /*
+   * 🔴 One currency, or no cards. `byCurrency` groups the book by the currency
+   * spend was priced in, and stacking a headline number on top of two of them
+   * would be adding dollars to pounds — the panel below deliberately breaks
+   * those out for exactly that reason, and a KPI row that quietly summed them
+   * would undo it in the most prominent place on the page.
+   */
+  const headline =
+    book && book.rollup.singleCurrency && book.rollup.byCurrency.length === 1
+      ? book.rollup.byCurrency[0]
+      : null;
 
-      <main className="mx-auto max-w-[1100px] px-4 py-6 sm:px-6">
+  const subtitle = staff
+    ? `${clients.length} active ${clients.length === 1 ? "client" : "clients"}${
+        book ? ` · last ${book.days} days` : ""
+      }`
+    : `${clients.length} ${clients.length === 1 ? "dashboard" : "dashboards"} shared with your account`;
+
+  return (
+    <AgencyShell
+      session={session}
+      brandName={brandName}
+      action={<AddClientButton />}
+    >
+      <main className="mx-auto w-full max-w-[1100px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <PageTitle
+          title={staff ? "Clients" : "Your dashboards"}
+          subtitle={subtitle}
+        />
+
+        {headline && book && <BookKpis t={headline} days={book.days} />}
+
         {clients.length === 0 ? (
           <EmptyState staff={staff} />
         ) : (
@@ -167,69 +173,11 @@ export default async function ClientsPage() {
             {churn && (
               <ChurnRiskPanel report={churn.report} error={churn.error} />
             )}
-            <ul className="flex flex-col gap-3">
-              {clients.map((c) => (
-                /*
-                  🔴 The remove control is a SIBLING of the link, not a child.
-                  A button inside an anchor is invalid HTML and, worse, clicking
-                  it would follow the link — so a destructive action would open
-                  the dashboard instead of asking anything.
-                */
-                <li key={c.id} className="relative">
-                  <Link
-                    href={`/c/${c.slug}`}
-                    className={`card card-interactive flex flex-wrap items-center gap-4 p-4${
-                      staff ? " pr-24" : ""
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className="truncate font-semibold"
-                        style={{ color: "var(--text-primary)" }}
-                      >
-                        {c.name}
-                      </div>
-                      <div
-                        className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs"
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        <span>{c.ghlLocationName ?? "GHL not connected"}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>{c.metaLabel}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      {/* Mirrors the panel above, so a flagged client is
-                        findable in the list without scrolling back up. */}
-                      <ChurnChip level={c.churn} />
-                      {!c.firstWebhookAt && (
-                        <span
-                          className="text-xs font-medium"
-                          style={{ color: "var(--status-critical)" }}
-                        >
-                          No events yet
-                        </span>
-                      )}
-                      <HealthBadge level={c.health} />
-                    </div>
-                  </Link>
-                  {staff && (
-                    <div className="absolute top-1/2 right-4 -translate-y-1/2">
-                      <RemoveClient
-                        variant="row"
-                        clientId={c.id}
-                        clientName={c.name}
-                      />
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <ClientCards clients={clients} staff={staff} />
           </>
         )}
       </main>
-    </div>
+    </AgencyShell>
   );
 }
 
@@ -237,12 +185,12 @@ function EmptyState({ staff }: { staff: boolean }) {
   if (!staff) {
     return (
       <div
-        className="rounded-[14px] border border-dashed p-10 text-center"
+        className="rounded-[var(--radius-lg)] border border-dashed p-10 text-center"
         style={{ borderColor: "var(--border-strong)" }}
       >
         <h2
           className="text-base font-semibold"
-          style={{ color: "var(--text-primary)" }}
+          style={{ color: "var(--section-ink, var(--text-primary))" }}
         >
           No dashboards yet
         </h2>
@@ -256,25 +204,27 @@ function EmptyState({ staff }: { staff: boolean }) {
       </div>
     );
   }
+  /*
+   * The staff version is a pitch, so it gets the hero panel; the viewer version
+   * above is a dead end they cannot act on, and dressing "ask someone else" up
+   * as an offer would be the wrong tone entirely.
+   */
   return (
-    <div
-      className="rounded-[14px] border border-dashed p-10 text-center"
-      style={{ borderColor: "var(--border-strong)" }}
-    >
-      <h2
-        className="text-base font-semibold"
-        style={{ color: "var(--text-primary)" }}
-      >
+    <div className="card-hero flex flex-col items-start gap-1 px-8 py-10 sm:px-10">
+      <span className="eyebrow" style={{ color: "rgba(255,255,255,0.72)" }}>
+        Get started
+      </span>
+      <h2 className="text-[24px] leading-tight font-semibold tracking-[-0.02em]">
         No clients yet
       </h2>
       <p
-        className="mx-auto mt-2 max-w-md text-sm"
-        style={{ color: "var(--text-secondary)" }}
+        className="mt-2 max-w-[52ch] text-sm leading-relaxed"
+        style={{ color: "rgba(255,255,255,0.82)" }}
       >
         Add your first client to connect their GoHighLevel sub-account and Meta
         ad account. The setup wizard verifies each connection before saving it.
       </p>
-      <div className="mt-5 flex justify-center">
+      <div className="mt-6">
         <AddClientButton />
       </div>
     </div>

@@ -1,9 +1,11 @@
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { listAuditEntries, type AuditView } from "@/lib/audit";
 import { getSessionUser, isAgencyOperator } from "@/lib/auth";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { DASH } from "@/lib/metrics/compute";
+import { AgencyShell } from "@/components/AgencyShell";
+import { PageTitle } from "@/components/PageTitle";
 
 export const dynamic = "force-dynamic";
 
@@ -32,20 +34,35 @@ function eventTone(action: string): {
   return { tone: "neutral" };
 }
 
-function pillStyle(tone: "neutral" | "warning" | "critical") {
+/**
+ * The critical pill is a .tint-badge — critical ink on a wash of itself, which
+ * only stays readable because the class derives the ink rather than reusing the
+ * raw token. The other two put --text-secondary on their ground, so they are
+ * ordinary fills and keep their own styles.
+ */
+function pill(tone: "neutral" | "warning" | "critical"): {
+  className: string;
+  style: CSSProperties;
+} {
   if (tone === "critical") {
     return {
-      background: "color-mix(in srgb, var(--status-critical) 16%, transparent)",
-      color: "var(--status-critical)",
+      className: "tint-badge",
+      style: { "--tint": "var(--status-critical)" } as CSSProperties,
     };
   }
   if (tone === "warning") {
     return {
-      background: "color-mix(in srgb, var(--status-warning) 20%, transparent)",
-      color: "var(--text-secondary)",
+      className: "",
+      style: {
+        background: "color-mix(in srgb, var(--status-warning) 20%, transparent)",
+        color: "var(--text-secondary)",
+      },
     };
   }
-  return { background: "var(--surface-2)", color: "var(--text-secondary)" };
+  return {
+    className: "",
+    style: { background: "var(--surface-2)", color: "var(--text-secondary)" },
+  };
 }
 
 function fmtUtc(at: Date): string {
@@ -99,29 +116,10 @@ export default async function AuditPage({
   });
 
   return (
-    <div className="min-h-full">
-      <header className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="mx-auto flex max-w-[1100px] items-center gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0 flex-1">
-            <Link
-              href="/"
-              className="text-xs hover:underline"
-              style={{ color: "var(--text-muted)" }}
-            >
-              ← Clients
-            </Link>
-            <h1
-              className="text-lg font-semibold"
-              style={{ color: "var(--text-primary)" }}
-            >
-              Audit log
-            </h1>
-          </div>
-          <ThemeToggle />
-        </div>
-      </header>
+    <AgencyShell session={session}>
+      <main className="mx-auto w-full max-w-[1100px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <PageTitle title="Audit log" subtitle="Times are UTC" />
 
-      <main className="mx-auto max-w-[1100px] px-4 py-6 sm:px-6">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {CATEGORIES.map((c) => {
             const active = category === c.key;
@@ -130,14 +128,7 @@ export default async function AuditPage({
                 key={c.key || "all"}
                 href={c.key ? `/audit?cat=${c.key}` : "/audit"}
                 aria-current={active ? "page" : undefined}
-                className="rounded-full border px-3 py-1 text-[13px] font-medium transition-colors"
-                style={{
-                  borderColor: active
-                    ? "var(--series-1)"
-                    : "var(--border-strong)",
-                  background: active ? "var(--series-1)" : "transparent",
-                  color: active ? "#fff" : "var(--text-secondary)",
-                }}
+                className="chip font-medium"
               >
                 {c.label}
               </Link>
@@ -154,7 +145,7 @@ export default async function AuditPage({
 
         {entries.length === 0 ? (
           <div
-            className="rounded-[14px] border border-dashed p-10 text-center text-sm"
+            className="rounded-[var(--radius-lg)] border border-dashed p-10 text-center text-sm"
             style={{
               borderColor: "var(--border-strong)",
               color: "var(--text-secondary)",
@@ -197,7 +188,7 @@ export default async function AuditPage({
           Times are UTC. Showing the {entries.length} most recent entries.
         </p>
       </main>
-    </div>
+    </AgencyShell>
   );
 }
 
@@ -222,8 +213,8 @@ function Row({ e }: { e: AuditView }) {
       </td>
       <td className="px-4 py-2.5">
         <span
-          className="inline-block rounded-full px-2 py-0.5 text-[11px] font-medium"
-          style={pillStyle(tone)}
+          className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${pill(tone).className}`}
+          style={pill(tone).style}
         >
           {e.action}
         </span>

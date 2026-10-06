@@ -131,3 +131,47 @@ describe("React server/client boundary", () => {
     expect(violations).toEqual([]);
   });
 });
+
+/*
+ * 🔴 `"use client"` must be the FIRST statement in the file.
+ *
+ * Same family as the bug above, same blindness, worse blast radius. Adding a
+ * `import type { CSSProperties } from "react";` line ABOVE the directive to
+ * four components took EVERY route to a 500 — and `tsc --noEmit` passed, and
+ * all 2862 tests passed, because nothing in the suite renders a module across
+ * the RSC boundary. The only signal was the dev server, and a dev server that
+ * was already showing unrelated HMR noise.
+ *
+ * Note the trap in `isClient` above: its `m` flag matches the directive on ANY
+ * of the first few lines, so a file with a misplaced directive still reads as
+ * a client module here. That is correct for THAT test's purpose and useless
+ * for this one, which is why this checks position rather than presence.
+ */
+describe("the use client directive", () => {
+  const directive = files.filter((f) => /^\s*["']use client["']/m.test(f.src.slice(0, 400)));
+
+  it("finds the client modules it is checking", () => {
+    // Without this, a broken walk turns the check below into a no-op.
+    expect(directive.length).toBeGreaterThan(5);
+  });
+
+  it("🔴 is the first statement, before any import", () => {
+    const bad: string[] = [];
+    for (const f of directive) {
+      // Comments and blank lines may precede it; nothing else may.
+      const first = f.src
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l && !l.startsWith("//") && !l.startsWith("/*") && !l.startsWith("*"));
+      if (first && !/^["']use client["']/.test(first)) {
+        bad.push(`${f.rel} begins with: ${first}`);
+      }
+    }
+    expect(
+      bad,
+      '"use client" must come before every import, or Next.js treats the module ' +
+        "as a server component and the route 500s:\n  " +
+        bad.join("\n  "),
+    ).toEqual([]);
+  });
+});

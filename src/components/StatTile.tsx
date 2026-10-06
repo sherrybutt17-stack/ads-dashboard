@@ -183,8 +183,10 @@ export function StatTile({
       }`}
     >
       <span
-        className="flex items-center gap-1 text-[10.5px] font-semibold tracking-[0.08em] uppercase"
-        style={{ color: emphasis ? "var(--accent)" : "var(--text-muted)" }}
+        className={`flex items-center gap-1 text-[10.5px] font-semibold tracking-[0.08em] uppercase${
+          emphasis ? " accent-text" : ""
+        }`}
+        style={emphasis ? undefined : { color: "var(--text-muted)" }}
       >
         {label}
         {/* The denominator, one tap away. BOOK/SHOW/CLOSE % share a row and

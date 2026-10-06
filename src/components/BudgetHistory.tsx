@@ -1,4 +1,5 @@
 import { Icon } from "./Icon";
+import { CategoryChart } from "@/components/CategoryChart";
 import { formatCurrency, DASH } from "@/lib/metrics/compute";
 import type { BudgetHistory, DeliveryMonth } from "@/lib/metrics/budget-history";
 
@@ -49,7 +50,7 @@ export function BudgetHistoryPanel({
   return (
     <section className="card p-5">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Budget delivery
         </h2>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -64,6 +65,34 @@ export function BudgetHistoryPanel({
         months — {pct(history.deliveredOverall)}. The month in progress is shown
         but not scored.
       </p>
+
+      {/*
+        The record as a shape: one bar per month, painted by its verdict, so a
+        run of short months is a run of amber rather than four rows to notice.
+
+        `sort={false}` and `maxSlices` past the ramp: this is a time series, and
+        both defaults would damage it. Ranking by size scrambles the calendar,
+        and folding the tail would put "Other" where the oldest months belong —
+        on a twelve-month record that is half the panel. Both are safe here
+        because every bar carries its own colour; see `CategoryDatum.color`.
+      */}
+      <div className="mt-4">
+        <CategoryChart
+          storageKey="budgetDelivery"
+          measure="Placed"
+          format={{ kind: "money", currency }}
+          height={190}
+          sort={false}
+          maxSlices={history.months.length}
+          data={history.months.map((m) => ({
+            key: m.monthKey,
+            label: m.label,
+            value: m.spend,
+            color: VERDICT[m.verdict].token,
+          }))}
+          empty="No month has been recorded yet"
+        />
+      </div>
 
       <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[26rem] text-sm">

@@ -100,14 +100,14 @@ export function MetricInfo({
             id={panelId}
             role="dialog"
             aria-label={`${label} — definition`}
-            className="fixed z-50 block rounded-[10px] p-3 text-left normal-case"
+            // `.glass-panel` supplies the ground, the edge and the shadow —
+            // it floats over the page, which is one of the three places the
+            // blur is worth what it costs. See globals.css.
+            className="glass-panel fixed z-50 block rounded-[var(--radius)] p-3 text-left normal-case"
             style={{
               top: at.top,
               left: at.left,
               width: PANEL_W,
-              background: "var(--surface-raised)",
-              border: "1px solid var(--border-strong)",
-              boxShadow: "var(--shadow-overlay)",
               // The tile's label sets uppercase + letter-spacing; prose inherits
               // it and becomes unreadable without this reset.
               letterSpacing: "normal",
@@ -127,7 +127,7 @@ export function MetricInfo({
               {def.what}
             </span>
             <span
-              className="mt-2 block rounded-[6px] px-2 py-1 font-mono text-[11px] leading-relaxed"
+              className="mt-2 block rounded-[var(--radius-xs)] px-2 py-1 font-mono text-[11px] leading-relaxed"
               style={{
                 background: "var(--surface-2)",
                 color: "var(--text-secondary)",

@@ -58,7 +58,7 @@ export function Funnel({
       <div className="mb-1 flex items-baseline justify-between gap-3">
         <h2
           className="text-sm font-semibold"
-          style={{ color: "var(--text-primary)" }}
+          style={{ color: "var(--section-ink, var(--text-primary))" }}
         >
           Pipeline funnel
         </h2>
@@ -90,7 +90,7 @@ export function Funnel({
 
                   <div className="min-w-0">
                     <div
-                      className="h-8 rounded-r-[5px] transition-[width] duration-500"
+                      className="h-8 rounded-r-[4px] transition-[width] duration-500"
                       style={{
                         width: `${Math.max(pctOfTop * 100, step.count > 0 ? 2 : 0)}%`,
                         // Top-lit sheen over the ordinal step — dimension, not a
@@ -203,7 +203,7 @@ function ExitStat({ label, value }: { label: string; value: number }) {
 function EmptyFunnel() {
   return (
     <div
-      className="mt-4 rounded-[10px] border border-dashed p-6 text-center"
+      className="mt-4 rounded-[var(--radius)] border border-dashed p-6 text-center"
       style={{ borderColor: "var(--border-strong)" }}
     >
       <p

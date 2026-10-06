@@ -140,7 +140,7 @@ export function ChannelMixPanel({
 }) {
   const header = (
     <div>
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Is the advertising adding anything?
       </h2>
       <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -175,7 +175,7 @@ export function ChannelMixPanel({
       {/* --- 1 · Can this be believed? --------------------------------- */}
       {trust.level !== "usable" && (
         <div
-          className="mt-4 flex items-start gap-2.5 rounded-[10px] p-3.5"
+          className="mt-4 flex items-start gap-2.5 rounded-[var(--radius)] p-3.5"
           style={{
             background:
               trust.level === "broken"

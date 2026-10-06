@@ -99,7 +99,7 @@ export function DuplicateLeads({
   return (
     <section className="card p-5" aria-label="Duplicate leads">
       <div>
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           The same person, more than once
         </h2>
         <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -111,7 +111,7 @@ export function DuplicateLeads({
 
       {/* ── Coverage, first and at full weight ───────────────────────── */}
       <p
-        className="mt-4 rounded-[10px] border px-3 py-2.5 text-[13px] leading-relaxed"
+        className="mt-4 rounded-[var(--radius)] border px-3 py-2.5 text-[13px] leading-relaxed"
         style={{
           borderColor: "var(--border)",
           background: "var(--surface-1)",

@@ -217,7 +217,7 @@ export function PipelineExplorer({
       <div className="flex flex-wrap items-baseline justify-between gap-2 p-5 pb-3">
         <h2
           className="text-sm font-semibold"
-          style={{ color: "var(--text-primary)" }}
+          style={{ color: "var(--section-ink, var(--text-primary))" }}
         >
           Where your leads are now
         </h2>
@@ -238,7 +238,7 @@ export function PipelineExplorer({
       {distribution.total === 0 ? (
         <div className="px-5 pb-5">
           <div
-            className="rounded-[10px] border border-dashed p-6 text-center"
+            className="rounded-[var(--radius)] border border-dashed p-6 text-center"
             style={{ borderColor: "var(--border-strong)" }}
           >
             <p
@@ -351,7 +351,7 @@ export function PipelineExplorer({
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search name, campaign, pipeline…"
-                className="w-full rounded-[8px] border px-3 py-1.5 text-[13px] sm:w-56"
+                className="w-full rounded-[var(--radius-sm)] border px-3 py-1.5 text-[13px] sm:w-56"
                 style={{
                   borderColor: "var(--border-strong)",
                   background: "var(--surface-1)",
@@ -499,20 +499,7 @@ function CampaignChip({
     <button
       onClick={onClick}
       aria-pressed={active}
-      className="inline-flex max-w-full items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-medium transition-colors"
-      style={
-        active
-          ? {
-              background: "var(--series-1)",
-              color: "#fff",
-              border: "1px solid var(--series-1)",
-            }
-          : {
-              background: "var(--surface-1)",
-              color: "var(--text-secondary)",
-              border: "1px solid var(--border-strong)",
-            }
-      }
+      className="chip inline-flex max-w-full items-center gap-1.5 font-medium"
     >
       {dot && !active && (
         <span
@@ -550,7 +537,7 @@ function StageRow({
     <button
       onClick={onClick}
       aria-pressed={active}
-      className="grid w-full items-center gap-3 rounded-[8px] px-2 py-1.5 text-left transition-colors"
+      className="grid w-full items-center gap-3 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors"
       style={{
         gridTemplateColumns: "minmax(96px, 150px) 1fr auto",
         background: active ? "var(--surface-2)" : "transparent",

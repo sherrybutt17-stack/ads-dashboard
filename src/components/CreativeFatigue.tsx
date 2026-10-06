@@ -11,6 +11,7 @@ import {
 import { formatCurrency, formatPercent } from "@/lib/metrics/compute";
 import { dayLabel } from "@/lib/dates";
 import { Icon } from "@/components/Icon";
+import { CategoryChart } from "@/components/CategoryChart";
 
 /**
  * Creative fatigue — the ads that used to work.
@@ -111,7 +112,7 @@ function Card({ f, currency }: { f: Finding; currency: string }) {
        * one must degrade to the placeholder rather than a torn image icon.
        */}
       <div
-        className="mt-0.5 flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded"
+        className="mt-0.5 flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius)]"
         style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}
       >
         {f.thumbnailUrl ? (
@@ -203,7 +204,7 @@ export function CreativeFatiguePanel({
   return (
     <section className="card p-5" aria-label="Creative fatigue">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Creative fatigue
         </h2>
         <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>
@@ -225,6 +226,42 @@ export function CreativeFatiguePanel({
         </p>
       ) : findings.length > 0 ? (
         <>
+          {/*
+            How much money is still going into the ads that stopped working.
+
+            🔴 The measure is RECENT SPEND, not a fatigue score. A score is a
+            number the reader cannot check and cannot argue with — which is the
+            thing this panel's header comment says it refuses to be. Spend is
+            the quantity the decision turns on: an asset that tired on £40 is a
+            note, the same decline on £4,000 is this week's job.
+
+            Severity colours, passed per bar, rather than the categorical ramp —
+            the cards below already paint these two states, and the reason is
+            the one in `CategoryDatum.color`. `sort={false}` keeps the engine's
+            own ordering, which is severity first; re-ranking by spend would put
+            a merely-watched asset above one that needs replacing.
+
+            Covers the findings SHOWN. The list is capped at five and says so
+            directly beneath, so the chart and the note it sits above agree.
+          */}
+          <div className="mt-3">
+            <CategoryChart
+              storageKey="creativeFatigue"
+              measure={`Spend, last ${RECENT_DAYS} days`}
+              format={{ kind: "money", currency }}
+              height={180}
+              sort={false}
+              maxSlices={findings.length}
+              data={findings.map((f) => ({
+                key: f.creativeKey,
+                label: f.name,
+                value: f.recentSpend,
+                color: SEVERITY[f.severity].color,
+              }))}
+              empty="No tired creative carried spend"
+            />
+          </div>
+
           <ul className="mt-1 divide-y" style={{ borderColor: "var(--border)" }}>
             {findings.map((f) => (
               <Card key={f.creativeKey} f={f} currency={currency} />

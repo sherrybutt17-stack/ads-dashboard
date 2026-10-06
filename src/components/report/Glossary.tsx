@@ -52,7 +52,7 @@ export function Glossary() {
       <h2
         id="glossary-heading"
         className="text-[13px] font-semibold"
-        style={{ color: "var(--text-primary)" }}
+        style={{ color: "var(--section-ink, var(--text-primary))" }}
       >
         How to read these numbers
       </h2>

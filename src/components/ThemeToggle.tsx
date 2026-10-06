@@ -51,7 +51,7 @@ export function ThemeToggle() {
   return (
     <button
       onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      className="btn-ghost flex items-center rounded-[8px] px-2.5 py-2"
+      className="btn-ghost flex items-center rounded-[var(--radius-sm)] px-2.5 py-2"
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
     >
       <Icon name={theme === "dark" ? "sun" : "moon"} size={15} />

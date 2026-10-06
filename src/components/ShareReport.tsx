@@ -44,7 +44,7 @@ const inputStyle = {
   background: "var(--surface-1)",
   color: "var(--text-primary)",
 } as const;
-const INPUT_CLASS = "w-full rounded-[8px] border px-3 py-2 text-[13px]";
+const INPUT_CLASS = "w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]";
 
 export function ShareReport({
   clientId,
@@ -149,7 +149,7 @@ export function ShareReport({
           // change to its dependencies.
           void load();
         }}
-        className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-1.5 text-[13px] font-medium transition-colors hover:opacity-80"
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-1.5 text-[13px] font-medium transition-colors hover:opacity-80"
         style={{
           borderColor: "var(--border-strong)",
           background: "var(--surface-2)",
@@ -181,7 +181,7 @@ export function ShareReport({
                 hint="Fixed permanently. The link will always show this period, not whatever is current when it is opened."
               >
                 <div
-                  className="tnum rounded-[8px] border px-3 py-2 text-[13px]"
+                  className="tnum rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
                   style={{
                     borderColor: "var(--border)",
                     background: "var(--surface-2)",
@@ -214,7 +214,7 @@ export function ShareReport({
                       type="button"
                       onClick={() => setTtlDays(d)}
                       aria-pressed={ttlDays === d}
-                      className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+                      className="rounded-[var(--radius-sm)] border px-3 py-1.5 text-[12px] font-medium"
                       style={{
                         borderColor:
                           ttlDays === d ? "var(--accent)" : "var(--border-strong)",
@@ -252,8 +252,8 @@ export function ShareReport({
                   type="button"
                   onClick={() => void create()}
                   disabled={busy}
-                  className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-                  style={{ background: "var(--brand, var(--series-1))" }}
+                  className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--accent-ink)] disabled:opacity-60"
+                  style={{ background: "var(--brand, var(--accent))" }}
                 >
                   {busy ? "Creating…" : "Create link"}
                 </button>
@@ -299,7 +299,7 @@ function MintedLink({
 }) {
   return (
     <div
-      className="rounded-[10px] border p-3"
+      className="rounded-[var(--radius)] border p-3"
       style={{ borderColor: "var(--border-strong)", background: "var(--surface-2)" }}
     >
       <div
@@ -309,7 +309,7 @@ function MintedLink({
         <Icon name="check" size={12} /> Link created
       </div>
       <code
-        className="block break-all rounded-[6px] px-2 py-1.5 text-[11px]"
+        className="block break-all rounded-[var(--radius-xs)] px-2 py-1.5 text-[11px]"
         style={{
           background: "var(--surface-1)",
           color: "var(--text-primary)",
@@ -322,7 +322,7 @@ function MintedLink({
         <button
           type="button"
           onClick={onCopy}
-          className="inline-flex items-center gap-1.5 rounded-[7px] border px-2.5 py-1 text-[12px] font-medium"
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-xs)] border px-2.5 py-1 text-[12px] font-medium"
           style={{
             borderColor: "var(--border-strong)",
             background: "var(--surface-1)",

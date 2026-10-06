@@ -84,7 +84,7 @@ export function DataState({
   return (
     <div
       role="status"
-      className={`flex flex-col items-center gap-1.5 rounded-[10px] border border-dashed text-center ${pad}`}
+      className={`flex flex-col items-center gap-1.5 rounded-[var(--radius)] border border-dashed text-center ${pad}`}
       style={{
         // Non-neutral states tint their border so the region reads as
         // "something is wrong here" from across the room, while the icon and
@@ -129,7 +129,7 @@ export function DataState({
       {fixHref && (
         <Link
           href={fixHref}
-          className="mt-1 rounded-[7px] border px-2.5 py-1 text-[11px] font-medium transition-colors hover:bg-[var(--surface-2)]"
+          className="mt-1 rounded-[var(--radius-xs)] border px-2.5 py-1 text-[11px] font-medium transition-colors hover:bg-[var(--surface-2)]"
           style={{
             borderColor: "var(--border-strong)",
             color: "var(--text-secondary)",
@@ -159,7 +159,7 @@ export function PipeNotice({ title, detail, tone = "neutral" }: DataStateProps) 
   return (
     <div
       role="status"
-      className="mb-2 flex items-start gap-2 rounded-[8px] px-2.5 py-1.5 text-[11px] leading-snug"
+      className="mb-2 flex items-start gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[11px] leading-snug"
       style={{
         background: `color-mix(in srgb, ${t.color} 8%, transparent)`,
         color: "var(--text-secondary)",

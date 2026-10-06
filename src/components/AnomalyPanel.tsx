@@ -84,7 +84,7 @@ export function AnomalyPanel({
   return (
     <section className="card p-5" aria-label="Unusual days">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Unusual days
         </h2>
         <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>

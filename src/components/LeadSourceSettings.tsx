@@ -90,7 +90,7 @@ export function LeadSourceSettings({
 
   return (
     <section className="card p-5">
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Which leads count as paid
       </h2>
       <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -102,7 +102,7 @@ export function LeadSourceSettings({
         {MODES.map((m) => (
           <label
             key={m.id}
-            className="flex cursor-pointer gap-3 rounded-[8px] p-2.5 transition-colors"
+            className="flex cursor-pointer gap-3 rounded-[var(--radius-sm)] p-2.5 transition-colors"
             style={{
               background: mode === m.id ? "var(--surface-2)" : "transparent",
             }}
@@ -144,7 +144,7 @@ export function LeadSourceSettings({
             value={tag}
             onChange={(e) => setTag(e.target.value)}
             placeholder="facebook-lead"
-            className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
+            className="mt-1 w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
             style={{
               borderColor: "var(--border-strong)",
               background: "var(--surface-1)",
@@ -163,7 +163,7 @@ export function LeadSourceSettings({
 
       {breakdown && breakdown.total > 0 && (
         <div
-          className="mt-4 rounded-[8px] border p-3"
+          className="mt-4 rounded-[var(--radius-sm)] border p-3"
           style={{ borderColor: "var(--border)" }}
         >
           <div
@@ -195,7 +195,7 @@ export function LeadSourceSettings({
         <button
           onClick={save}
           disabled={busy || !dirty}
-          className="btn-accent rounded-[8px] px-3 py-2 text-[13px] font-medium"
+          className="btn-accent"
         >
           {busy ? "Saving…" : "Save"}
         </button>

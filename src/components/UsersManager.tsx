@@ -1,7 +1,7 @@
 "use client";
 
 import type { UserRole } from "@/db/schema";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { DASH } from "@/lib/metrics/compute";
 
@@ -169,7 +169,7 @@ export function UsersManager({
       <section className="card p-5">
         <h2
           className="text-sm font-semibold"
-          style={{ color: "var(--text-primary)" }}
+          style={{ color: "var(--section-ink, var(--text-primary))" }}
         >
           Create a login
         </h2>
@@ -206,7 +206,7 @@ export function UsersManager({
           <button
             type="button"
             onClick={generate}
-            className="rounded-[8px] border px-3 py-2 text-[13px] font-medium"
+            className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
             style={{
               borderColor: "var(--border-strong)",
               color: "var(--text-secondary)",
@@ -229,13 +229,8 @@ export function UsersManager({
                 key={r}
                 type="button"
                 onClick={() => setRole(r)}
-                className="rounded-[8px] border px-3 py-1.5 text-[13px] font-medium capitalize"
-                style={{
-                  borderColor:
-                    role === r ? "var(--series-1)" : "var(--border-strong)",
-                  background: role === r ? "var(--series-1)" : "transparent",
-                  color: role === r ? "#fff" : "var(--text-secondary)",
-                }}
+                aria-pressed={role === r}
+                className="chip font-medium capitalize"
               >
                 {r}
               </button>
@@ -267,18 +262,8 @@ export function UsersManager({
                       key={c.id}
                       type="button"
                       onClick={() => toggleClient(c.id)}
-                      className="rounded-full border px-3 py-1 text-[13px]"
-                      style={{
-                        borderColor: on
-                          ? "var(--series-1)"
-                          : "var(--border-strong)",
-                        background: on
-                          ? "color-mix(in srgb, var(--series-1) 16%, transparent)"
-                          : "transparent",
-                        color: on
-                          ? "var(--text-primary)"
-                          : "var(--text-secondary)",
-                      }}
+                      aria-pressed={on}
+                      className="chip"
                     >
                       {on ? "✓ " : ""}
                       {c.name}
@@ -294,7 +279,7 @@ export function UsersManager({
           type="button"
           onClick={create}
           disabled={busy || !canCreate}
-          className="mt-4 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
+          className="btn-lime mt-4 disabled:opacity-50"
         >
           {busy ? "Creating…" : "Create login"}
         </button>
@@ -316,7 +301,7 @@ export function UsersManager({
         <div className="px-5 py-4">
           <h2
             className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
           >
             Logins ({users.length})
           </h2>
@@ -361,12 +346,8 @@ export function UsersManager({
                     )}
                     {u.status === "disabled" && (
                       <span
-                        className="mt-0.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium"
-                        style={{
-                          background:
-                            "color-mix(in srgb, var(--status-critical) 16%, transparent)",
-                          color: "var(--status-critical)",
-                        }}
+                        className="tint-badge mt-0.5 inline-block rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium"
+                        style={{ "--tint": "var(--status-critical)" } as CSSProperties}
                       >
                         disabled
                       </span>
@@ -478,7 +459,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
+        className="mt-1 w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
         style={inputStyle}
       />
     </label>

@@ -199,7 +199,7 @@ export function BookRollupPanel({
   return (
     <section className="card mb-6 p-5" aria-label="Across all clients">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Across all clients
         </h2>
         <span className="text-xs tabular-nums" style={{ color: "var(--text-muted)" }}>

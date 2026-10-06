@@ -22,7 +22,7 @@ const inputStyle = {
   background: "var(--surface-1)",
   color: "var(--text-primary)",
 } as const;
-const INPUT_CLASS = "w-full rounded-[8px] border px-3 py-2 text-[13px]";
+const INPUT_CLASS = "w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]";
 
 export function ClientBrandingForm({
   slug,
@@ -117,7 +117,7 @@ export function ClientBrandingForm({
 
   return (
     <section className="card p-5">
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Your branding
       </h2>
       <p className="mt-0.5 mb-4 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -128,7 +128,7 @@ export function ClientBrandingForm({
 
       {readOnly && (
         <div
-          className="mb-4 flex items-start gap-2 rounded-[8px] border p-3 text-xs"
+          className="mb-4 flex items-start gap-2 rounded-[var(--radius-sm)] border p-3 text-xs"
           style={{
             borderColor: "var(--border-strong)",
             background: "var(--surface-2)",
@@ -176,7 +176,7 @@ export function ClientBrandingForm({
             {brandColor.trim() && (
               <span
                 aria-hidden="true"
-                className="inline-block h-7 w-7 shrink-0 rounded-md border"
+                className="inline-block h-7 w-7 shrink-0 rounded-[var(--radius-xs)] border"
                 style={{
                   background: brandColor.trim(),
                   borderColor: "var(--border-strong)",
@@ -207,22 +207,25 @@ export function ClientBrandingForm({
               <img
                 src={`/api/c/${slug}/branding/logo?v=${logoVersion}`}
                 alt="Your current logo"
-                className="h-9 w-auto max-w-[180px] rounded border object-contain px-2 py-1"
+                className="h-9 w-auto max-w-[180px] rounded-[var(--radius-sm)] border object-contain px-2 py-1"
                 style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
               />
             )}
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              disabled={disabled}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void uploadLogo(f);
-              }}
-              className="text-xs"
-              style={{ color: "var(--text-secondary)" }}
-            />
+            {/* The real input, hidden but focusable — see `.file-button`. */}
+            <label className="file-button">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={disabled}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadLogo(f);
+                }}
+                className="sr-only"
+              />
+              {hasLogo ? "Replace logo" : "Choose a logo"}
+            </label>
             {hasLogo && !readOnly && (
               <button
                 type="button"
@@ -243,8 +246,8 @@ export function ClientBrandingForm({
               type="button"
               onClick={() => void save()}
               disabled={disabled}
-              className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-              style={{ background: "var(--brand, var(--series-1))" }}
+              className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--accent-ink)] disabled:opacity-60"
+              style={{ background: "var(--brand, var(--accent))" }}
             >
               {busy ? "Saving…" : "Save"}
             </button>

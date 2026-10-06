@@ -146,7 +146,12 @@ export function BudgetSettings({
 
   return (
     <section className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--card-bg)] p-5">
-      <h2 className="text-sm font-semibold text-[var(--text-primary)]">Monthly budget</h2>
+      <h2
+        className="text-sm font-semibold"
+        style={{ color: "var(--section-ink, var(--text-primary))" }}
+      >
+        Monthly budget
+      </h2>
       <p className="mt-1 text-xs text-[var(--text-muted)]">
         What this client agreed to spend per month, in {currency}. Pacing on the
         dashboard is measured against it. Each entry applies from its month

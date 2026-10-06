@@ -1,9 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   Area,
-  AreaChart,
+  Bar,
   CartesianGrid,
+  ComposedChart,
+  Line,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -87,6 +90,114 @@ interface Props {
   fixedWidth?: number;
 }
 
+/**
+ * Which mark the trend panels draw.
+ *
+ * All three answer the same question about the same numbers on the same scale;
+ * only the mark changes. That is the whole reason a switcher is safe here —
+ * nothing about the axes, the range or the aggregation moves with it, so no
+ * choice can make the chart say something the others do not.
+ *
+ * Area is the default because a filled shape reads as a continuous quantity
+ * over time, which daily spend is. Line is the honest choice when the reader
+ * cares about the shape of the change rather than the volume under it, and Bar
+ * is right when they want to read individual days off the chart — which a
+ * smoothed curve actively discourages.
+ */
+type ChartForm = "area" | "line" | "bar";
+
+const FORMS: readonly { id: ChartForm; label: string }[] = [
+  { id: "area", label: "Area" },
+  { id: "line", label: "Line" },
+  { id: "bar", label: "Bar" },
+];
+
+const FORM_KEY = "trend.chartForm";
+
+function isChartForm(v: unknown): v is ChartForm {
+  return v === "area" || v === "line" || v === "bar";
+}
+
+/**
+ * Remembered per viewer, in localStorage.
+ *
+ * Deliberately NOT read during the first render. The server has no localStorage
+ * and would render "area" regardless, so reading it synchronously on the client
+ * makes the two trees disagree and React discards the server HTML. Reading it
+ * in an effect costs one extra paint and cannot desync.
+ *
+ * Every access is wrapped: in a private window, or with site data blocked, the
+ * accessor throws rather than returning null, and an unreadable preference must
+ * not take the chart down with it.
+ */
+function useChartForm(): [ChartForm, (f: ChartForm) => void] {
+  const [form, setForm] = useState<ChartForm>("area");
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(FORM_KEY);
+      if (isChartForm(saved)) setForm(saved);
+    } catch {
+      /* unreadable storage is not an error worth showing anyone */
+    }
+  }, []);
+
+  const choose = (f: ChartForm) => {
+    setForm(f);
+    try {
+      window.localStorage.setItem(FORM_KEY, f);
+    } catch {
+      /* the choice still applies to this page; it just will not outlive it */
+    }
+  };
+
+  return [form, choose];
+}
+
+/**
+ * The switcher. Styled as the date presets are — `accent-fill` for the active
+ * segment — because it IS the same kind of control, and because the accent is
+ * what selection wears here. A series colour would say "this button is data".
+ */
+function FormSwitch({
+  value,
+  onChange,
+}: {
+  value: ChartForm;
+  onChange: (f: ChartForm) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Chart form"
+      className="flex items-center gap-0.5 rounded-[var(--radius-sm)] p-0.5"
+      style={{ background: "var(--surface-2)" }}
+    >
+      {FORMS.map((f) => {
+        const active = f.id === value;
+        return (
+          <button
+            key={f.id}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(f.id)}
+            className={`rounded-[var(--radius-xs)] px-2 py-1 text-[11px] font-semibold transition-colors${
+              active ? " accent-fill" : ""
+            }`}
+            style={
+              active
+                ? undefined
+                : { background: "transparent", color: "var(--text-secondary)" }
+            }
+          >
+            {f.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function TrendCharts({
   daily,
   prevDaily,
@@ -97,6 +208,8 @@ export function TrendCharts({
   annotations = [],
   fixedWidth,
 }: Props) {
+  const [form, setForm] = useChartForm();
+
   const data = daily.map((d, i) => ({
     date: d.dateKey,
     label: dayLabel(d.dateKey),
@@ -139,15 +252,25 @@ export function TrendCharts({
 
   return (
     <div className="card p-5">
-      <h2
-        className="mb-1 text-sm font-semibold"
-        style={{ color: "var(--text-primary)" }}
-      >
-        Spend and leads over time
-      </h2>
-      <p className="mb-4 text-xs" style={{ color: "var(--text-muted)" }}>
-        Separate scales, shared timeline — deliberately not overlaid
-      </p>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h2
+            className="mb-1 text-sm font-semibold"
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
+          >
+            Spend and leads over time
+          </h2>
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            Separate scales, shared timeline — deliberately not overlaid
+          </p>
+        </div>
+        {/*
+          Not on paper. `fixedWidth` is only ever set by the print/report
+          renderer, and a segmented control printed onto a report is three
+          dead buttons and a lie about what the reader can do with the page.
+        */}
+        {!fixedWidth && <FormSwitch value={form} onChange={setForm} />}
+      </div>
 
       <div className="flex flex-col gap-4">
         {spendEmpty ? (
@@ -161,6 +284,7 @@ export function TrendCharts({
             dataKey="spend"
             prevKey={hasPrev ? "prevSpend" : undefined}
             color="var(--series-1)"
+            form={form}
             format={(v) => formatCurrency(v, currency)}
             // Populated but the pipe is degraded: keep the numbers, qualify them.
             notice={spendState ?? undefined}
@@ -180,6 +304,7 @@ export function TrendCharts({
             dataKey="leads"
             prevKey={hasPrev ? "prevLeads" : undefined}
             color="var(--series-2)"
+            form={form}
             format={(v) => formatNumber(v)}
             notice={leadsState ?? undefined}
             fixedWidth={fixedWidth}
@@ -239,12 +364,21 @@ function PanelShell({
   );
 }
 
+/** 2px surface ring keeps the hover marker legible over the mark beneath it. */
+const ACTIVE_DOT = (color: string) => ({
+  r: 4,
+  fill: color,
+  stroke: "var(--surface-1)",
+  strokeWidth: 2,
+});
+
 function Panel({
   title,
   data,
   dataKey,
   prevKey,
   color,
+  form,
   format,
   notice,
   annotations = [],
@@ -255,6 +389,7 @@ function Panel({
   dataKey: string;
   prevKey?: string;
   color: string;
+  form: ChartForm;
   format: (v: number) => string;
   notice?: DataStateProps;
   annotations?: TrendAnnotation[];
@@ -291,8 +426,16 @@ function Panel({
             style={{ color: "var(--text-muted)" }}
           >
             <span className="flex items-center gap-1">
+              {/*
+                The key shows the mark that is actually on screen. A 2px rule
+                next to a bar chart names something the reader cannot find.
+              */}
               <span
-                className="inline-block h-[2px] w-3.5 rounded-full"
+                className={
+                  form === "bar"
+                    ? "inline-block h-2.5 w-2.5 rounded-[2px]"
+                    : "inline-block h-[2px] w-3.5 rounded-full"
+                }
                 style={{ background: color }}
               />
               This period
@@ -309,7 +452,7 @@ function Panel({
       </div>
       <div style={{ height: chartHeight }}>
         <SizedChart width={fixedWidth}>
-          <AreaChart
+          <ComposedChart
             data={data}
             margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
             /*
@@ -353,7 +496,7 @@ function Panel({
                 const prev = payload.find((p) => p.dataKey === prevKey)?.value;
                 return (
                   <div
-                    className="rounded-[8px] px-2.5 py-1.5 text-xs shadow-lg"
+                    className="rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs shadow-lg"
                     style={{
                       background: "var(--surface-raised)",
                       border: "1px solid var(--border-strong)",
@@ -376,36 +519,65 @@ function Panel({
                 );
               }}
             />
-            {/* Ghost first, so the current series draws on top of it. */}
+            {/*
+              Ghost first, so the current series draws on top of it.
+
+              Always a dashed line, whatever mark the current period wears. It
+              was already drawn as one — an `<Area>` with `fill="none"` IS a
+              line — and pinning it that way is what lets the switcher change
+              the current series without changing the thing it is compared to.
+              A ghost that changed shape alongside it would make the comparison
+              a moving target, and paired bars would read as two live series
+              rather than one and its shadow.
+            */}
             {prevKey && (
-              <Area
+              <Line
                 type="monotone"
                 dataKey={prevKey}
                 stroke="var(--text-muted)"
                 strokeWidth={1.25}
                 strokeDasharray="3 3"
-                fill="none"
                 dot={false}
                 activeDot={false}
                 isAnimationActive={false}
                 connectNulls
               />
             )}
-            <Area
-              type="monotone"
-              dataKey={dataKey}
-              stroke={color}
-              strokeWidth={2}
-              fill={`url(#${gradientId})`}
-              dot={false}
-              activeDot={{
-                r: 4,
-                fill: color,
-                // 2px surface ring keeps the marker legible over the line.
-                stroke: "var(--surface-1)",
-                strokeWidth: 2,
-              }}
-            />
+            {form === "area" && (
+              <Area
+                type="monotone"
+                dataKey={dataKey}
+                stroke={color}
+                strokeWidth={2}
+                fill={`url(#${gradientId})`}
+                dot={false}
+                activeDot={ACTIVE_DOT(color)}
+              />
+            )}
+            {form === "line" && (
+              <Line
+                type="monotone"
+                dataKey={dataKey}
+                stroke={color}
+                strokeWidth={2}
+                dot={false}
+                activeDot={ACTIVE_DOT(color)}
+              />
+            )}
+            {form === "bar" && (
+              <Bar
+                dataKey={dataKey}
+                fill={color}
+                /*
+                 * Rounded at the data end only, anchored to the baseline: a bar
+                 * rounded at the bottom too would lift off its own zero and
+                 * overstate every small value.
+                 */
+                radius={[4, 4, 0, 0]}
+                /* Thin marks. Thirty days at full width reads as a solid block. */
+                maxBarSize={18}
+              />
+            )}
             {/*
               Event marks, drawn LAST so they sit above the area fill.
 
@@ -429,7 +601,7 @@ function Panel({
                 }}
               />
             ))}
-          </AreaChart>
+          </ComposedChart>
         </SizedChart>
       </div>
 

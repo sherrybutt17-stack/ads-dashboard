@@ -1,3 +1,5 @@
+import net from "node:net";
+
 import { drizzle as drizzleNeon } from "drizzle-orm/neon-serverless";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { Pool as NeonPool } from "@neondatabase/serverless";
@@ -21,6 +23,25 @@ import * as schema from "./schema";
  * direct one (5432). Serverless functions open a connection per invocation and
  * will exhaust the direct connection limit under webhook load.
  */
+
+/*
+ * Node's happy-eyeballs (`autoSelectFamily`, on by default since Node 20) gives
+ * each resolved address only 250ms to connect. A managed Postgres endpoint
+ * resolves to six addresses and its TLS handshake takes ~2.7s from outside the
+ * provider's own region, so every address blows the budget in turn: a pool
+ * warming ten connections stalls for ~22s, and once the address list is
+ * exhausted the query dies with `AggregateError [ETIMEDOUT]` — which surfaces
+ * as "Failed query" on a page that opens several connections at once.
+ *
+ * Raising the per-attempt budget fixes both drivers, since the WebSocket
+ * transport dials through the same socket path. Happy-eyeballs itself stays on,
+ * so IPv6-to-IPv4 fallback still works; it just gets a realistic deadline.
+ * Only ever raised, never lowered, so an explicit larger value is left alone.
+ */
+const CONNECT_ATTEMPT_TIMEOUT_MS = 5_000;
+if (net.getDefaultAutoSelectFamilyAttemptTimeout() < CONNECT_ATTEMPT_TIMEOUT_MS) {
+  net.setDefaultAutoSelectFamilyAttemptTimeout(CONNECT_ATTEMPT_TIMEOUT_MS);
+}
 
 const globalForDb = globalThis as unknown as {
   db: ReturnType<typeof createDb> | undefined;

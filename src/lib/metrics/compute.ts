@@ -172,12 +172,67 @@ export function roasFrom(
   return div(rev.revenue, spend);
 }
 
+/**
+ * A stage-to-stage conversion rate, or null where the funnel says it cannot be
+ * one.
+ *
+ * The stages are nested — every appointment is a lead that booked, every show
+ * is an appointment that was attended — so a numerator larger than its
+ * denominator is not a very good rate. It is the pipeline reporting that the
+ * earlier stage is missing people the later one has, and the only honest output
+ * for a ratio whose denominator is the wrong population is no ratio at all.
+ */
+function stageRate(numerator: number, denominator: number): number | null {
+  if (denominator === 0) return null;
+  if (numerator > denominator) return null;
+  return div(numerator, denominator);
+}
+
+/**
+ * Which halves of the funnel are recording enough to divide by.
+ *
+ * Split in two because the two failures are independent and have different
+ * fixes. A book whose ads drive to a calendar loses the TOP (`new_lead`) and
+ * keeps every appointment; a book with an unmapped attendance stage loses the
+ * MIDDLE (`showed`) and keeps its wins. Nulling all four rates whenever either
+ * happens would hide three working numbers to report one broken one.
+ *
+ * Each test is "does a later stage outnumber an earlier one", which needs no
+ * configuration to evaluate and no threshold to tune: it is the funnel
+ * contradicting itself, read off the same counts the table renders.
+ *
+ * Exported because the UI has to explain the blank. A dash the reader cannot
+ * account for is its own kind of broken — worse than a wrong number, because
+ * there is nothing to act on — so `MetricsTable` asks this and prints the
+ * contradiction underneath the table in words.
+ */
+export interface FunnelCoherence {
+  /** `new_lead` is not short: no later stage outnumbers it. */
+  leadsRecorded: boolean;
+  /** `showed` is not short: nothing downstream of it outnumbers it. */
+  showsRecorded: boolean;
+}
+
+export function funnelCoherence(funnel: FunnelCounts): FunnelCoherence {
+  return {
+    leadsRecorded: funnel.appointment_booked <= funnel.new_lead,
+    /*
+     * Against wins only, deliberately. A no-show is a SIBLING of a show, not a
+     * later stage, so `no_show > showed` is an ordinary bad month and must not
+     * blank the rate. A win is strictly downstream: nobody closes a deal with
+     * someone who never turned up.
+     */
+    showsRecorded: funnel.closed_won <= funnel.showed,
+  };
+}
+
 export function derive(
   funnel: FunnelCounts,
   ads: AdTotals,
   revenue: RevenueTotals | null = null,
 ): DerivedMetrics {
   const { spend, impressions, linkClicks } = ads;
+  const { leadsRecorded, showsRecorded } = funnelCoherence(funnel);
   return {
     // Cost per stage — denominators come from the CRM ledger, which is the
     // source of truth for what actually happened downstream of the click.
@@ -200,15 +255,61 @@ export function derive(
     cpShow: costPer(spend, funnel.showed),
     cpWon: costPer(spend, funnel.closed_won),
 
-    // Stage-to-stage conversion.
-    bookPct: div(funnel.appointment_booked, funnel.new_lead),
-    showPct: div(funnel.showed, funnel.appointment_booked),
-    closePct: div(funnel.closed_won, funnel.showed),
+    /*
+     * Stage-to-stage conversion — suppressed when the funnel's own counts say
+     * the rate cannot mean what it reads.
+     *
+     * 🔴 These three shipped as bare divisions, and the live gg-ads book
+     * rendered this on the Reports tab:
+     *
+     *     Window   Leads  Appts  Shown  No Show  Won  |  Book %   Show %  Close %
+     *     30 Days      3     25      0        7    2  |  833.33%   0.00%        —
+     *     90 Days     30     40      0       18    4  |  133.33%   0.00%        —
+     *
+     * Every one of those percentages is arithmetically correct and none of
+     * them is true.
+     *
+     * A booking rate of 833% is not a spectacular month. Stages are NESTED —
+     * an appointment is a lead that booked — so appointments can never exceed
+     * leads, and when they do it means leads are entering the pipeline below
+     * its top. This client's ads drive to a calendar, so a paid lead lands in
+     * GoHighLevel already sitting in "Appointment Booked" and never passes
+     * through a stage mapped to `new_lead`. The denominator is simply not the
+     * population the numerator came from. `checkFunnelShape` in `health.ts`
+     * already raises this as amber; the table went on printing the number.
+     *
+     * A show rate of 0.00% against four closed deals is the same lie in the
+     * other direction. Nobody wins a deal with someone who never showed up, so
+     * `showed = 0, closed_won = 4` cannot be a business result — it is a stage
+     * that is not being recorded. On this book `showed` has exactly one GHL
+     * stage bound to it and not one transition has ever landed there, while
+     * 2,251 transitions sit in stages mapped to nothing at all. "Nobody showed
+     * up" and "a show can never be counted" are opposite findings, and 0.00%
+     * reports the first while the truth is the second.
+     *
+     * `MetricsTable` opens by stating the rule this restores: undefined values
+     * render as an em-dash, never as 0.00, because "the distinction between
+     * 'zero happened' and 'we cannot compute this' is the single most important
+     * thing these tables communicate". A dash sends the reader to the stage
+     * mapping. An 833% sends them nowhere, and a 0.00% sends them somewhere
+     * worse — chasing a show rate that no amount of selling can move.
+     *
+     * Suppressed, not clamped. Capping 833% at 100% would state something
+     * equally false with more confidence, and `funnelIsCoherent` below is what
+     * the UI reads to explain the blank rather than leaving it bare.
+     */
+    bookPct: leadsRecorded ? stageRate(funnel.appointment_booked, funnel.new_lead) : null,
+    showPct: showsRecorded ? stageRate(funnel.showed, funnel.appointment_booked) : null,
+    closePct: showsRecorded ? stageRate(funnel.closed_won, funnel.showed) : null,
 
     // Landing-page conversion: of the people who clicked through, how many
     // became a lead. This is the metric that exposed the real problem in the
     // source spreadsheet — click-to-lead fell from ~16% to ~3%.
-    optinPct: div(funnel.new_lead, linkClicks),
+    // Shares `bookPct`'s denominator, so it shares its fate: a lead count the
+    // funnel has already shown to be short understates this rate by the same
+    // factor. `health.ts` names opt-in rate explicitly among the figures that
+    // are unusable while the funnel's top is unmapped.
+    optinPct: leadsRecorded ? div(funnel.new_lead, linkClicks) : null,
 
     // Traffic economics. Derived from summed components, never averaged from
     // per-day ratios, which would weight a $1 day equally with a $1,000 day.

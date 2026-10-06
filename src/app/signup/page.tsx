@@ -3,6 +3,12 @@
 import Link from "next/link";
 import { useState } from "react";
 import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
+import {
+  AuthShell,
+  AuthHeading,
+  AuthField,
+  AuthError,
+} from "@/components/AuthShell";
 
 /**
  * Create an agency.
@@ -50,158 +56,94 @@ export default function SignupPage() {
 
   if (done) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <div className="card w-full max-w-sm p-6">
-          <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-            {done.sent ? "Check your inbox" : "Account created"}
-          </h1>
-          <p
-            className="mt-2 text-[13px] leading-relaxed"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            {done.sent ? (
-              <>
-                We sent a confirmation link to <strong>{email}</strong>. Open it
-                to finish setting up, then sign in. The link works for 24 hours.
-              </>
-            ) : (
-              /*
-               * This deployment cannot send email, so the address was accepted
-               * as-is. Saying "check your inbox" would be a lie the user could
-               * only discover by waiting.
-               */
-              <>
-                This server has no email configured, so <strong>{email}</strong>{" "}
-                was confirmed automatically. You can sign in now.
-              </>
-            )}
-          </p>
-          <Link
-            href="/login"
-            className="btn-accent mt-4 block w-full rounded-[8px] px-3 py-2 text-center text-[13px] font-medium"
-          >
-            Go to sign in
-          </Link>
-        </div>
-      </div>
+      <AuthShell pitch="Welcome aboard.">
+        <span className="badge badge-accent mb-4">
+          {done.sent ? "Confirmation sent" : "Ready"}
+        </span>
+        <AuthHeading title={done.sent ? "Check your inbox" : "Account created"}>
+          {done.sent ? (
+            <>
+              We sent a confirmation link to <strong>{email}</strong>. Open it to
+              finish setting up, then sign in. The link works for 24 hours.
+            </>
+          ) : (
+            /*
+             * This deployment cannot send email, so the address was accepted
+             * as-is. Saying "check your inbox" would be a lie the user could
+             * only discover by waiting.
+             */
+            <>
+              This server has no email configured, so <strong>{email}</strong>{" "}
+              was confirmed automatically. You can sign in now.
+            </>
+          )}
+        </AuthHeading>
+        <Link href="/login" className="btn-accent mt-5 w-full">
+          Go to sign in
+        </Link>
+      </AuthShell>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <div className="card w-full max-w-sm p-6">
-        <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-          Create your agency
-        </h1>
-        <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-          Join ad spend to what your CRM actually closed.
+    <AuthShell pitch="Join ad spend to what your CRM actually closed.">
+      <form onSubmit={submit}>
+        <AuthHeading title="Create your agency">
+          Four fields. The rest is set up once you&rsquo;re inside.
+        </AuthHeading>
+
+        <AuthField
+          label="Agency name"
+          required
+          autoFocus
+          value={agencyName}
+          onChange={(e) => setAgencyName(e.target.value)}
+          placeholder="Growth Guild"
+        />
+        <AuthField
+          label="Your name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Optional"
+        />
+        <AuthField
+          label="Email"
+          type="email"
+          required
+          autoComplete="username"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@agency.com"
+        />
+        <AuthField
+          label="Password"
+          type="password"
+          required
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+        />
+
+        {error && <AuthError>{error}</AuthError>}
+
+        <button
+          type="submit"
+          disabled={
+            busy || !agencyName || !email || password.length < MIN_PASSWORD_LENGTH
+          }
+          className="btn-accent mt-5 w-full"
+        >
+          {busy ? "Creating…" : "Create agency"}
+        </button>
+
+        <p className="mt-4 text-[12px]" style={{ color: "var(--text-secondary)" }}>
+          Already have an account?{" "}
+          <Link href="/login" className="hover:underline">
+            Sign in
+          </Link>
         </p>
-
-        <form onSubmit={submit}>
-          <Field
-            label="Agency name"
-            value={agencyName}
-            onChange={setAgencyName}
-            autoFocus
-            placeholder="Growth Guild"
-          />
-          <Field
-            label="Your name"
-            value={name}
-            onChange={setName}
-            required={false}
-            placeholder="Optional"
-          />
-          <Field
-            label="Email"
-            type="email"
-            autoComplete="username"
-            value={email}
-            onChange={setEmail}
-            placeholder="you@agency.com"
-          />
-          <Field
-            label="Password"
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={setPassword}
-            placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-          />
-
-          {error && (
-            <p className="mt-2 text-xs" style={{ color: "var(--status-critical)" }}>
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={
-              busy ||
-              !agencyName ||
-              !email ||
-              password.length < MIN_PASSWORD_LENGTH
-            }
-            className="btn-accent mt-4 w-full rounded-[8px] px-3 py-2 text-[13px] font-medium"
-          >
-            {busy ? "Creating…" : "Create agency"}
-          </button>
-
-          <p className="mt-3 text-[11px]" style={{ color: "var(--text-muted)" }}>
-            Already have an account?{" "}
-            <Link href="/login" className="hover:underline">
-              Sign in
-            </Link>
-          </p>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  type = "text",
-  required = true,
-  autoFocus = false,
-  autoComplete,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  type?: string;
-  required?: boolean;
-  autoFocus?: boolean;
-  autoComplete?: string;
-  placeholder?: string;
-}) {
-  return (
-    <label className="mt-4 block">
-      <span
-        className="text-[11px] font-medium tracking-wider uppercase"
-        style={{ color: "var(--text-muted)" }}
-      >
-        {label}
-      </span>
-      <input
-        type={type}
-        required={required}
-        autoFocus={autoFocus}
-        autoComplete={autoComplete}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
-        style={{
-          borderColor: "var(--border-strong)",
-          background: "var(--surface-1)",
-          color: "var(--text-primary)",
-        }}
-      />
-    </label>
+      </form>
+    </AuthShell>
   );
 }

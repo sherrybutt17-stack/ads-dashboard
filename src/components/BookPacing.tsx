@@ -45,7 +45,7 @@ export function BookPacingPanel({
   return (
     <section className="card p-5">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Budget commitment
         </h2>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>

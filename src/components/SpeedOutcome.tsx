@@ -206,8 +206,18 @@ function BucketTable({ stage }: { stage: StageOutcome }) {
                 <RateBar
                   row={b}
                   domain={domain}
+                  /*
+                    The bar encodes one rate, and the only thing its colour
+                    distinguishes is in-comparison from out — which the muted
+                    grey already carries. So the live colour is free to follow
+                    the section, matching the heading rule above the table.
+                    Falls back to spend blue wherever there is no section
+                    wrapper, i.e. the printed report.
+                  */
                   accent={
-                    b.inComparison ? "var(--series-1)" : "var(--text-muted)"
+                    b.inComparison
+                      ? "var(--section-band, var(--series-1))"
+                      : "var(--text-muted)"
                   }
                 />
               </td>
@@ -278,7 +288,7 @@ export function SpeedOutcomePanel({ data }: { data: SpeedOutcome }) {
 
   const selector = (
     <div
-      className="flex flex-wrap gap-1 rounded-[9px] p-0.5"
+      className="flex flex-wrap gap-1 rounded-[var(--radius-sm)] p-0.5"
       style={{ background: "var(--surface-2)" }}
       role="group"
       aria-label="Outcome"
@@ -292,7 +302,7 @@ export function SpeedOutcomePanel({ data }: { data: SpeedOutcome }) {
             type="button"
             onClick={() => setStageId(id)}
             aria-pressed={active}
-            className="rounded-[7px] px-2.5 py-1 text-[12px] font-medium transition-colors"
+            className="rounded-[var(--radius-xs)] px-2.5 py-1 text-[12px] font-medium transition-colors"
             style={{
               background: active ? "var(--surface-1)" : "transparent",
               color: active
@@ -313,7 +323,7 @@ export function SpeedOutcomePanel({ data }: { data: SpeedOutcome }) {
   const header = (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
       <div>
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Does answering faster {OUTCOME_QUESTION[stageId]}?
         </h2>
         <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -384,7 +394,7 @@ export function SpeedOutcomePanel({ data }: { data: SpeedOutcome }) {
 
       {/* --- The verdict, as a sentence ---------------------------------- */}
       <div
-        className="mt-4 flex items-start gap-2.5 rounded-[10px] p-3.5"
+        className="mt-4 flex items-start gap-2.5 rounded-[var(--radius)] p-3.5"
         style={{ background: "var(--surface-2)" }}
       >
         <span className="mt-0.5 shrink-0" style={{ color: tone.tone }}>

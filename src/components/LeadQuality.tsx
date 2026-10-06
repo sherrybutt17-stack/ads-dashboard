@@ -7,6 +7,7 @@ import {
 } from "@/lib/metrics/quality";
 import { OUTCOME_NOUN, OUTCOME_VERB } from "@/lib/metrics/speed-outcome";
 import { formatNumber, formatPercent } from "@/lib/metrics/compute";
+import { CategoryChart } from "@/components/CategoryChart";
 
 /**
  * What kinds of leads convert.
@@ -96,7 +97,7 @@ export function LeadQualityPanel({ report }: { report: QualityReport }) {
     <section className="card p-5" aria-label="What kinds of leads convert">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             What kinds of leads convert
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -113,7 +114,7 @@ export function LeadQualityPanel({ report }: { report: QualityReport }) {
 
       {judged === 0 ? (
         <p
-          className="mt-4 rounded-[10px] border px-3 py-2.5 text-[13px] leading-relaxed"
+          className="mt-4 rounded-[var(--radius)] border px-3 py-2.5 text-[13px] leading-relaxed"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -135,7 +136,7 @@ export function LeadQualityPanel({ report }: { report: QualityReport }) {
         <>
           {/* ── The findings, largest gap first ──────────────────────── */}
           <div
-            className="mt-4 rounded-[10px] border px-3 py-2.5 text-[13px] leading-relaxed"
+            className="mt-4 rounded-[var(--radius)] border px-3 py-2.5 text-[13px] leading-relaxed"
             style={{
               borderColor: "var(--border)",
               background: "var(--surface-1)",
@@ -178,6 +179,37 @@ export function LeadQualityPanel({ report }: { report: QualityReport }) {
                 >
                   {f.label}
                 </p>
+                {/*
+                  One chart per split, above its own rows.
+
+                  🔴 It plots LEADS, not the conversion rate the rows beside it
+                  are about. That is deliberate: a rate has no total, so a
+                  circle of rates divides a whole that does not exist, and bars
+                  of rates hide the thing that decides whether to believe any of
+                  them — how many leads each level is computed from. The panel's
+                  whole argument is that most splits do not have the volume to
+                  be called, and volume is exactly what this draws.
+
+                  Every feature shares one `storageKey`, against the usual rule
+                  of one per chart. These are four views of one split rendered
+                  side by side in a grid; switching one to a circle and leaving
+                  its three neighbours as bars would read as a rendering fault.
+                */}
+                <div className="mt-1.5">
+                  <CategoryChart
+                    storageKey="leadQuality"
+                    measure="Leads"
+                    format={{ kind: "count" }}
+                    height={150}
+                    data={f.levels.slice(0, 6).map((l) => ({
+                      key: l.key,
+                      label: l.label,
+                      value: l.leads,
+                    }))}
+                    empty={`No leads split by ${f.label.toLowerCase()}`}
+                  />
+                </div>
+
                 <ul className="mt-1.5 grid gap-1.5">
                   {f.levels.slice(0, 6).map((l) => (
                     <Row

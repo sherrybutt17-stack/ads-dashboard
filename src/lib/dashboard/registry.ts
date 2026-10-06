@@ -68,6 +68,29 @@ export const CADENCE_HINT: Record<SectionCadence, string | null> = {
     "The calendar month currently in progress. Not affected by the date range selected above.",
 };
 
+/**
+ * Which hue of the categorical ramp this section wears.
+ *
+ * 🔴 Wayfinding, not decoration, and NOT a data series.
+ *
+ * Every section used to be the same ink on the same card, so a tab of eight of
+ * them read as one undifferentiated document — the same failure the tabs were
+ * introduced to fix, one level down. The hue is assigned by SUBJECT: money is
+ * spend-blue wherever it appears, leads are lead-orange, speed-to-outcome is
+ * aqua. So "Campaign breakdown" and "Budget delivery" match because they are
+ * both about money, not because they happen to sit next to each other.
+ *
+ * Assigned, never cycled. There are 28 sections and 7 hues, and the repeats are
+ * the point: a reader who learns that blue means money learns it once. Cycling
+ * would make the colour mean position on the page, which is not information.
+ *
+ * `--series-8` (red) is deliberately absent. Red is a status colour here, and a
+ * red section heading reads as "this section is broken" — see status-contrast.
+ * The heading paints in `--series-N-ink`, never `--series-N`: the mark values
+ * fail as text, which series-ink.test.ts measures.
+ */
+export type SectionHue = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
 export interface SectionDef {
   id: SectionId;
   /** Name shown in a settings list. Not necessarily the on-page heading. */
@@ -126,16 +149,52 @@ export interface SectionDef {
    * load and taking 4–6 seconds to do it.
    */
   group: SectionGroup;
+  /** Subject-assigned hue for the heading rule and ink. See `SectionHue`. */
+  hue: SectionHue;
 }
 
-export type SectionGroup = "overview" | "ads" | "leads" | "reports";
+export type SectionGroup =
+  | "overview"
+  | "recommendations"
+  | "ads"
+  | "creatives"
+  | "money"
+  | "leads"
+  | "reports";
 
 /**
  * Tab order and labels.
  *
- * Named for the question each answers rather than the data it holds — "Ads"
- * over "Meta metrics" — because the reader arrives with a question, not a
- * schema.
+ * Named for the question each answers rather than the data it holds — "Where
+ * the money went" over "Spend breakdowns" — because the reader arrives with a
+ * question, not a schema.
+ *
+ * Seven tabs, not four. The split from four happened because "Ads" had become
+ * a bucket: campaign spend, creative performance, creative fatigue, landing
+ * pages, placement breakdowns and the keep/stop verdicts all sat under one
+ * label, which is the same undifferentiated pile the tabs were introduced to
+ * break up — just one level down. Each of the three new tabs answers a
+ * question a reader actually arrives with:
+ *
+ *   Recommendations   "what should I do?"      — verdicts, nothing else, so an
+ *                                                action list is never buried
+ *                                                under six diagnostic panels.
+ *   Creatives         "which ad is pulling?"   — the asset view: creatives,
+ *                                                their fatigue, and the pages
+ *                                                and forms they land on.
+ *   Where the money   "where did it go?"       — every budget-shaped section in
+ *                                                one place: pacing, forecast,
+ *                                                delivery-vs-plan, and the
+ *                                                placement/device split.
+ *
+ * `Ads` survives holding campaign-level detail. It is deliberately NOT merged
+ * into the money tab: a campaign row is the unit an operator acts on, and
+ * burying it under four budget panels is what made the old tab unreadable.
+ *
+ * 🔴 Adding a group is not free. `availableGroups` in `c/[slug]/page.tsx` hides
+ * any group with no non-required section in it, so an empty tab never renders —
+ * but `registry.test.ts` fails a group declared here with no section assigned,
+ * which is the check that catches a half-finished move.
  */
 export const SECTION_GROUPS: readonly {
   id: SectionGroup;
@@ -143,7 +202,22 @@ export const SECTION_GROUPS: readonly {
   blurb: string;
 }[] = [
   { id: "overview", label: "Overview", blurb: "What happened, and where it is heading" },
-  { id: "ads", label: "Ads", blurb: "Where the money went and what it bought" },
+  {
+    id: "recommendations",
+    label: "Recommendations",
+    blurb: "What to do next, and why",
+  },
+  { id: "ads", label: "Ads", blurb: "What ran, and what each campaign cost" },
+  {
+    id: "creatives",
+    label: "Creatives",
+    blurb: "Which ads and landing pages are pulling",
+  },
+  {
+    id: "money",
+    label: "Where the money went",
+    blurb: "Budget, pacing, and what the spend bought",
+  },
   { id: "leads", label: "Leads", blurb: "What happened after the click" },
   { id: "reports", label: "Reports", blurb: "Written summaries and the tables" },
 ];
@@ -191,6 +265,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "lead_filter_note",
     group: "overview",
+    hue: 2,
     label: "Lead source note",
     description: "Which leads these numbers count, and which are excluded.",
     defaultOrder: 10,
@@ -202,6 +277,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "insights",
     group: "overview",
+    hue: 7,
     label: "What changed",
     description: "Plain-English headlines derived from the period-over-period deltas.",
     defaultOrder: 20,
@@ -212,6 +288,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "anomalies",
     group: "overview",
+    hue: 5,
     label: "Unusual days",
     description:
       "Individual days that sat far outside this account's own normal — the thing a period-over-period comparison averages away.",
@@ -226,6 +303,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "weekly_summary",
     group: "reports",
+    hue: 7,
     label: "Written summary",
     description:
       "A drafted update for this period, in four framings — edited by a person, published deliberately.",
@@ -251,6 +329,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "commentary",
     group: "reports",
+    hue: 7,
     label: "Monthly commentary",
     description:
       "What we did and what happens next, written per calendar month — and last month's plan answered against this month's figures.",
@@ -273,6 +352,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "kpis",
     group: "overview",
+    hue: 1,
     label: "Headline metrics",
     description: "Spend, leads, cost per lead, appointments, shows, wins, revenue, ROAS.",
     defaultOrder: 30,
@@ -283,7 +363,8 @@ export const SECTIONS: readonly SectionDef[] = [
   },
   {
     id: "budget_delivery",
-    group: "reports",
+    group: "money",
+    hue: 1,
     label: "Budget delivery",
     description:
       "Whether the agreed monthly budget was actually placed, for the last twelve months.",
@@ -303,7 +384,8 @@ export const SECTIONS: readonly SectionDef[] = [
   },
   {
     id: "budget_pacing",
-    group: "overview",
+    group: "money",
+    hue: 4,
     label: "Budget pacing",
     description:
       "Spend against the monthly budget the client agreed, with the projected month-end and what to spend per day to land on it.",
@@ -327,7 +409,8 @@ export const SECTIONS: readonly SectionDef[] = [
   },
   {
     id: "forecast",
-    group: "overview",
+    group: "money",
+    hue: 4,
     label: "Where this month lands",
     description:
       "Projected spend and leads for the calendar month in progress, weighted by weekday, with an 80% range.",
@@ -345,6 +428,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "duplicates",
     group: "leads",
+    hue: 5,
     label: "The same person, more than once",
     description:
       "Leads sharing a phone number or email — and how much of the book can be checked at all.",
@@ -369,6 +453,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "funnel",
     group: "overview",
+    hue: 3,
     label: "Funnel",
     description:
       "Where people are lost between stages — the view no CRM-less competitor can build.",
@@ -380,6 +465,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "trend",
     group: "overview",
+    hue: 1,
     label: "Spend and leads over time",
     description: "Two stacked panels sharing a timeline, with the previous period ghosted.",
     defaultOrder: 50,
@@ -390,6 +476,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "campaigns",
     group: "ads",
+    hue: 1,
     label: "Campaign breakdown",
     description: "Ad spend joined to CRM leads, per campaign.",
     defaultOrder: 60,
@@ -399,7 +486,8 @@ export const SECTIONS: readonly SectionDef[] = [
   },
   {
     id: "keep_kill",
-    group: "ads",
+    group: "recommendations",
+    hue: 1,
     label: "Keep or stop",
     description:
       "Which campaigns are far enough from the rest of the account to act on, with the confidence behind each call.",
@@ -415,7 +503,8 @@ export const SECTIONS: readonly SectionDef[] = [
   },
   {
     id: "creatives",
-    group: "ads",
+    group: "creatives",
+    hue: 6,
     label: "Creative performance",
     description:
       "Which image or video is working, grouped by asset rather than by ad id.",
@@ -429,7 +518,8 @@ export const SECTIONS: readonly SectionDef[] = [
   },
   {
     id: "creative_fatigue",
-    group: "ads",
+    group: "creatives",
+    hue: 6,
     label: "Creative fatigue",
     description:
       "Creatives performing measurably worse than they used to, judged against their own history.",
@@ -450,7 +540,8 @@ export const SECTIONS: readonly SectionDef[] = [
   },
   {
     id: "breakdowns",
-    group: "ads",
+    group: "money",
+    hue: 1,
     label: "Where the money went",
     description:
       "Spend by region, placement, device, age and gender — including the share Meta withholds.",
@@ -464,6 +555,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "speed_to_lead",
     group: "leads",
+    hue: 3,
     label: "Speed to lead",
     description: "Time from a new lead arriving to the first outbound call.",
     defaultOrder: 70,
@@ -474,6 +566,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "speed_outcome",
     group: "leads",
+    hue: 3,
     label: "Speed to lead vs outcome",
     description:
       "Whether leads answered faster actually booked, showed and closed more often.",
@@ -493,6 +586,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "call_timing",
     group: "leads",
+    hue: 3,
     label: "When calls connect",
     description:
       "Which hours of the day outbound calls actually reach a person — and whether enough of the day has been tried to say.",
@@ -506,6 +600,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "lead_quality",
     group: "leads",
+    hue: 2,
     label: "What kinds of leads convert",
     description:
       "Which groups of leads book more often — by when they arrived and which campaign they came from. A group-level finding, never a per-lead score.",
@@ -534,7 +629,8 @@ export const SECTIONS: readonly SectionDef[] = [
      * and the two halves of "which page is working" would never be seen
      * together.
      */
-    group: "ads",
+    group: "creatives",
+    hue: 2,
     label: "Which pages and forms bring leads",
     description:
       "The landing page, form or calendar each lead came through, and how many of them booked.",
@@ -553,6 +649,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "aging",
     group: "leads",
+    hue: 5,
     label: "Leads that stopped moving",
     description:
       "Open leads sitting longer than this pipeline normally takes at their stage.",
@@ -575,6 +672,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "uncalled",
     group: "leads",
+    hue: 5,
     label: "Call these people",
     description: "Leads nobody has phoned, a working day or more after they arrived.",
     /*
@@ -599,6 +697,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "maturation",
     group: "leads",
+    hue: 4,
     label: "Is this month worse, or younger?",
     description:
       "How long a month's leads take to convert, and whether the last two months are comparable yet.",
@@ -618,6 +717,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "channels",
     group: "leads",
+    hue: 2,
     label: "Paid vs the rest of the pipeline",
     description:
       "Whether the advertising is adding leads, and whether the split can be believed.",
@@ -631,6 +731,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "pipeline",
     group: "leads",
+    hue: 2,
     label: "Pipeline explorer",
     description: "Every paid lead and the stage it sits in right now.",
     defaultOrder: 80,
@@ -644,6 +745,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "heatmap",
     group: "leads",
+    hue: 2,
     label: "When leads arrive",
     description: "Paid leads by weekday and hour, in the client's timezone.",
     defaultOrder: 90,
@@ -654,6 +756,7 @@ export const SECTIONS: readonly SectionDef[] = [
   {
     id: "report_tables",
     group: "reports",
+    hue: 7,
     label: "Report tables",
     description:
       "Moving averages, 7-day change, 14-day daily and month-on-month — the source sheet's four views.",

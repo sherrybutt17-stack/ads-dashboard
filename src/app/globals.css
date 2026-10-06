@@ -1,53 +1,146 @@
 @import "tailwindcss";
 
 /*
- * Design tokens — bold dark-first.
+ * Design tokens — the premium light language.
  *
- * Dark is the deliberate default (see the pre-paint script in layout.tsx): a
- * deep, faintly-cool near-black canvas with crafted top-lit surfaces and one
- * confident blue accent that is allowed to GLOW in exactly two places — the
- * primary action and the hero metric. Light stays fully supported and warm.
+ * ── What changed, and why it is a token swap rather than a rewrite ─────
  *
- * Colours come from a validated palette — every categorical hue was checked
- * with the data-viz validator for colourblind separation, chroma, lightness
- * band, and contrast against BOTH surfaces. Do not substitute a hue by eye;
- * re-run the validator if these change. The surfaces below only ever move
- * within the near-black / near-white band, so the validated mark contrast is
- * preserved.
+ * The app was bold dark-first: a near-black canvas with one blue accent. The
+ * agreed direction is the opposite — a soft monochrome grey canvas, a rounded
+ * app frame floating on it, white outlined cards, and electric violet as the
+ * single accent. Every screen was already styled through these properties, so
+ * changing the values here moves the whole app at once; the component layer
+ * below only gains the NEW pieces the language needs (the frame, the pill rail,
+ * the segmented nav, the notched dark panel).
  *
- * Dark values are declared under two scopes: the media query covers the OS
- * setting, the [data-theme] scope covers the in-app toggle, and the toggle must
- * win in both directions. Keep the two dark blocks identical.
+ * ── What did NOT change, deliberately ─────────────────────────────────
+ *
+ * `--series-*`, `--seq-*`, `--status-*` and `--delta-*` keep their validated
+ * values and their meanings. They were measured with the data-viz validator for
+ * colourblind separation, chroma, lightness band and contrast on BOTH grounds,
+ * and `status-contrast.test.ts` recomputes them against the surfaces below on
+ * every run. The new surfaces are lighter than the old light ones, so the floor
+ * was rechecked: the tightest pair is --status-good on --surface-page at
+ * 4.54:1, which clears AA with almost nothing to spare. Do not darken
+ * --surface-page further without re-running that test.
+ *
+ * ── The one place the brief was not followed literally ────────────────
+ *
+ * The brief gives #A1A1AD for muted text. On these surfaces it measures
+ * 2.1–2.6:1, and --text-muted is the colour of roughly 117 labels, footnotes
+ * and axis ticks across the app — the exact defect the previous palette was
+ * darkened to fix. So the brief's greys are shifted one step: its secondary
+ * (#6B6B78) becomes muted, secondary darkens to #5C5C68, and #A1A1AD survives
+ * as --text-faint for placeholder glyphs and disabled affordances, which are
+ * never load-bearing text.
+ *
+ * Dark is a straight variable swap, declared under two scopes: the media query
+ * covers the OS setting, the [data-theme] scope covers the in-app toggle, and
+ * the toggle must win in both directions. Keep the two dark blocks identical.
  */
 
 :root {
   color-scheme: light;
 
-  /* Surfaces */
-  --surface-page: #f9f9f7;
-  --surface-1: #fcfcfb;
-  --surface-2: #f3f3f0;
+  /* Surfaces — page canvas, the frame that floats on it, cards, muted fills. */
+  --surface-page: #e9e9ee;
+  --surface-app: #f5f5f9;
+  --surface-1: #ffffff;
+  --surface-2: #efeff2;
   --surface-raised: #ffffff;
-  /* Card fill — a whisper of top-lit gradient reads as crafted, not flat. */
-  --card-bg: linear-gradient(180deg, #ffffff 0%, #fbfbf9 100%);
+  /* Flat white. The old top-lit gradient belonged to the dark language; here
+     the card is defined by its hairline and its radius, not by a sheen. */
+  --card-bg: #ffffff;
 
-  /* Ink */
-  --text-primary: #0b0b0b;
-  --text-secondary: #52514e;
+  /* Ink — see the note above on why muted is not the brief's #A1A1AD. */
+  --text-primary: #16161d;
+  --text-secondary: #5c5c68;
   /*
-   * Darkened from #898781, which measured 3.41:1 on --surface-page and 3.23:1
-   * on --surface-2 — below the 4.5:1 AA floor for small text, and this is the
-   * colour of roughly 117 labels, footnotes and axis ticks across the app.
-   * #6b6a65 measures 5.14 / 4.88 on the same surfaces while keeping the warm
-   * grey cast that separates it from --text-secondary.
+   * Was #6b6b78, which clears AA on a card (5.25:1 on --surface-1) but not on
+   * the page ground it also sits on: 4.34:1 on --surface-page, and only 4.58:1
+   * on --surface-2. The report route puts twelve runs of muted copy straight on
+   * the page ground, so the common case was the failing one. #666673 clears
+   * every surface — 4.67 page / 4.93 surface-2 / 5.66 surface-1 — and is the
+   * smallest step that does, which keeps the most daylight between muted and
+   * --text-secondary (#5c5c68) so the two still read as different ranks.
+   * Both dark scopes already cleared (worst 4.75:1) and are left alone.
    */
-  --text-muted: #6b6a65;
+  --text-muted: #666673;
+  --text-faint: #a1a1ad;
 
   /* Lines */
-  --border: rgba(11, 11, 11, 0.1);
-  --border-strong: rgba(11, 11, 11, 0.16);
-  --gridline: #e1e0d9;
-  --baseline: #c3c2b7;
+  --border: #e6e6ee;
+  --border-strong: #d8d8e2;
+  --gridline: #eeeef3;
+  --baseline: #d8d8e2;
+
+  /* Brand — violet is the only accent, and it earns its brightness by being
+     the single one. --violet-500 on white is 5.62:1, so white type sits on it
+     safely; the old --accent cleared only 4.42:1 and carried a warning. */
+  --violet-100: #eceafe;
+  --violet-400: #7a6cf6;
+  --violet-500: #5b4cf0;
+  --violet-600: #4a3bd8;
+
+  /*
+   * Lime — the house action colour.
+   *
+   * 🔴 A FILL, and never type. Lime is a light hue, so the arrangement that
+   * makes it work is the only one it works in: #bef264 carrying near-black
+   * ink measures 13.78:1, while the same lime AS text on white is 1.31:1 and
+   * as a focus ring on the page ground 1.08:1 — both invisible. So there is
+   * no "--lime-ink" in the sense `--series-N-ink` is one. `--lime-on` is the
+   * ink that sits ON the fill; it is not a lime you may set type in, and
+   * `lime-fill.test.ts` fails the build if one appears as a `color:`.
+   *
+   * Held IDENTICAL in both themes on purpose, which is why it is declared
+   * here rather than swapped below. It is the house's action colour the way
+   * a logo is a fixed colour — a lime that shifted with the theme would make
+   * the same button read as two different brands. The theme moves the ground
+   * underneath it, not the mark.
+   *
+   * Hover DARKENS the fill rather than fading the element, for the reason
+   * the Meta button learned the hard way: `opacity` lightens ink and ground
+   * together and walks contrast the wrong way.
+   */
+  --lime: #bef264;
+  --lime-hover: #aee245;
+  --lime-on: #16161d;
+
+  /*
+   * Pastel tints — a card GROUND for the KPI row, never a mark.
+   *
+   * Assigned per metric and fixed, so spend is always the violet card; they
+   * carry no data value, because the number printed on top is what carries
+   * it. This is deliberately NOT the `--series-*` ramp: those are tuned as
+   * marks against a 3:1 floor, and a section that borrowed one would put a
+   * data colour on a non-data object — the rule `series-palette.test.ts`
+   * exists to enforce.
+   *
+   * Each clears 4.75:1 against the worst ink that lands on it (--text-muted)
+   * in both themes — the same headroom the ink ramp keeps, so a later
+   * surface tweak cannot quietly push one under the 4.5 floor.
+   */
+  --tint-violet: #ece9fe;
+  --tint-blue: #dfedff;
+  --tint-mint: #d4f5e5;
+  --tint-amber: #fbeecd;
+
+
+  /* Ink surfaces — the pill rail, the upsell card, the signature dark panel. */
+  --ink: #1e1e24;
+  --navy: #17182b;
+  --navy-raised: #22233a;
+
+  /* Soft data colours. Categorical, fixed order, never cycled — and never the
+     sole carrier of identity: every mark drawn in these also gets a direct
+     label with its name and number. Measured: they pass CVD separation
+     (ΔE 10.0 deutan) but butter↔blush is ΔE 13.8 for normal vision, below the
+     15 floor, which is precisely why the labels are not optional. */
+  --periwinkle: #8da4de;
+  --periwinkle-soft: #b9c8ee;
+  --butter: #e9d79a;
+  --blush: #efa3a3;
 
   /* Categorical series — fixed order, never cycled. */
   --series-1: #2a78d6; /* blue    — spend */
@@ -58,6 +151,32 @@
   --series-6: #008300;
   --series-7: #4a3aa7;
   --series-8: #e34948;
+  /*
+   * The same eight hues, moved to where they can be READ.
+   *
+   * `--series-N` is tuned for a MARK: a 2px line or a filled bar, sitting on a
+   * card, judged against the 3:1 floor for non-text. Setting type in those
+   * values fails, and fails quietly — in light theme only two of the eight
+   * clear 4.5:1 as body text, and `--series-4` amber measures 2.17:1 on white.
+   *
+   * So each hue gets a second value for ink. Hue and saturation are held and
+   * only lightness moves, which is why a heading in `--series-2-ink` still
+   * reads as the same orange as the bar beneath it. Every value clears 4.7:1
+   * against --surface-2 — the WORSE of the two grounds a section heading can
+   * land on — leaving margin above the 4.5 floor so a later surface tweak
+   * cannot silently push one under. series-ink.test.ts holds that line.
+   *
+   * Use `--series-N` for marks and `--series-N-ink` for text. They are not
+   * interchangeable and the test will say so.
+   */
+  --series-1-ink: #2469bd;
+  --series-2-ink: #b94212;
+  --series-3-ink: #137854;
+  --series-4-ink: #8e6100;
+  --series-5-ink: #c82361;
+  --series-6-ink: #007b00;
+  --series-7-ink: #4a3aa7;
+  --series-8-ink: #ce211f;
 
   /* Sequential blue ramp — ordinal use starts at 250 on light (2:1 floor). */
   --seq-250: #86b6ef;
@@ -75,88 +194,181 @@
      110 set `color:` and three set a background or border — so the bar is the
      4.5:1 AA floor for small text, not the 3:1 for a graphical object.
 
-     They used to be one set shared by both themes, chosen against the light
-     ground and never restepped for dark. Measured, the light set was the worse
-     half: --status-warning #fab219 came out at 1.65:1 on --surface-2, which is
-     an alarm nobody can read, and good and serious failed too. Dark inherited
-     them and failed only on critical (3.30:1).
-
-     Now stepped per theme. The values below are the light steps; the dark ones
-     live in both dark scopes. `status-contrast.test.ts` computes every pair and
-     fails the build under 4.5:1, because "looks fine on my monitor" is exactly
-     how the old set survived.
-
-     An amber that clears 4.5:1 on near-white is necessarily brown — that is the
-     arithmetic, not a taste decision. It is acceptable here only because every
-     status in this app also carries an icon and the state in words; see
-     `DataState`, whose second rule is that status is never colour alone. */
+     The brief's own #22A06B / #E5484D are 3.0:1 and 3.5:1 on white and would
+     fail that floor outright. They appear in this app only the way the mockups
+     use them — as a fill behind darker text, or as a dot beside a word — never
+     as the text itself. `status-contrast.test.ts` computes every pair and fails
+     the build under 4.5:1, because "looks fine on my monitor" is exactly how
+     the previous set survived for years. */
   --status-good: #137a13;
   --status-warning: #8a5f00;
   --status-serious: #a8481f;
   --status-critical: #a92626;
+  /* Ink that sits ON a flat status fill. Every one of the four flips to a LIGHT
+     value in dark mode, so a hard-coded white label drops as low as 1.83:1 there
+     (amber) — far under AA. Measured across all four in both themes: white wins
+     every light pair (worst 5.50 on good), near-black wins every dark pair
+     (worst 5.55 on good). One token serves all four because they agree. */
+  --status-ink: #ffffff;
+
+  /* Tinted status grounds — the badge and alert fills, with their own ink. */
+  --good-bg: #dcf5e9;
+  --good-ink: #14714a;
+  --warn-bg: #fbf0d6;
+  --warn-ink: #8a6a12;
+  --warn-line: #e8cfa0;
+  --bad-bg: #fbe2e2;
+  --bad-ink: #a3262a;
+  --bad-line: #f0cacb;
 
   /* Delta text: distinct from series green so a trend never impersonates one. */
   --delta-good: #006300;
   --delta-bad: #c0392b;
 
-  --radius: 10px;
+  /* Radius scale — the frame is the largest thing on screen and reads as one
+     rounded object; everything nested steps down from it.
+
+     🔴 Six steps, and every rounded corner in the app is one of them. Before
+     this there were thirteen hard-coded values (8, 9, 10, 11, 12, 13, 14, 20 …)
+     scattered across 162 call sites, which is what a UI looks like when each
+     component picked a number that felt right on its own. They now resolve
+     through these tokens, guarded by `radius-scale.test.ts`. `--radius-xs` is
+     the floor for sub-scale controls — micro badges, segment toggles, the
+     11px-tall chips inside tables — that a 9px corner visibly over-rounds.
+     Heatmap cells and 3px ticks are drawings, not controls, and stay literal. */
+  --radius-frame: 32px;
+  --radius-xl: 20px;
   --radius-lg: 16px;
-  /* Layered, soft elevation — a premium card floats, it doesn't sit in a box. */
-  --shadow-card: 0 1px 2px rgba(17, 17, 22, 0.04), 0 6px 20px -8px rgba(17, 17, 22, 0.08);
-  --shadow-elevated: 0 2px 4px rgba(17, 17, 22, 0.06), 0 16px 40px -12px rgba(17, 17, 22, 0.16);
+  --radius: 12px;
+  --radius-sm: 9px;
+  --radius-xs: 7px;
+
+  /* Gradients — the primary action and the hero panel. */
   /*
-   * A dialog sits on a different plane from a card, so it needs its own step —
-   * not `--shadow-elevated` borrowed from a hover state. Deeper and wider, so
-   * the surface behind it is unmistakably out of reach even before the reader
-   * notices the scrim.
+   * The light stop was #7a6cf6, where white measures 3.96:1. Rasterising the
+   * real gradient at real button sizes and reading only the pixels inside each
+   * label's own box put four buttons under AA for real — "Save mapping" 4.37,
+   * "Verify & add" 4.43, "Add client" 4.48 — while a wider one read 4.68, so
+   * the defect moved with the button's geometry. #6a5cf0 puts white at 4.77:1
+   * on the stop ITSELF, which is the top-left corner no glyph reaches, so the
+   * button now clears at every pixel and the margin no longer depends on
+   * padding, label length or where the gradient line happens to fall.
    */
-  --shadow-overlay: 0 8px 16px -6px rgba(17, 17, 22, 0.12), 0 32px 80px -20px rgba(17, 17, 22, 0.3);
-  /* The scrim itself, so light and dark can dim by different amounts. */
-  --overlay-scrim: rgba(17, 17, 22, 0.42);
-  /* A hairline top highlight gives the card edge a crafted, lit quality. */
-  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --page-glow: rgba(42, 120, 214, 0.05);
-  /* Accent glow — the one signature flourish, on the hero tile and the CTA. */
-  --accent-glow: 0 10px 30px -10px rgba(42, 120, 214, 0.35);
-  --accent: var(--series-1);
+  --g-primary: linear-gradient(135deg, #6a5cf0 0%, #5b4cf0 55%, #4a3bd8 100%);
   /*
-   * Text ON --accent. Chosen per theme rather than inverted, because --accent is
-   * a mid blue in light (#2a78d6) and a LIGHTER blue in dark (#3987e5), so the
-   * winner flips: white measures 4.42:1 here but only 3.64:1 on the dark accent,
-   * where near-black measures 5.20:1. See the dark scopes below.
-   *
-   * ⚠️ 4.42:1 clears AA Large but sits just under the 4.5:1 normal-text bar. The
-   * buttons using it are 13px medium. If strict AA is wanted, move those
-   * backgrounds to --seq-550 (#1c5cab, 6.63:1 on white) rather than darkening
-   * --accent, which is also a series colour and must keep its ramp position.
+   * Darkened from #6457e6/#5a4fd8/#7468ee. That gradient's light end was
+   * #7468ee, where plain white text measures 4.24:1 — under AA before any
+   * decoration, and the panel lays two blurred white lights over it, which
+   * drag the worst ground to 3.36:1. Measured across all three stops with the
+   * stronger 0.14 light fully over each: nothing cleared, so the ground itself
+   * was the defect, not the text on it. These stops hold white at 4.87:1 or
+   * better everywhere on the panel, including under the lights.
    */
+  --g-hero: linear-gradient(135deg, #5a4ed2 0%, #5044c4 45%, #5c50ce 100%);
+
+  /* Depth — five named steps, spent by role. A card is a hairline and almost
+     no shadow; the frame is the only thing that really floats. */
+  --shadow-frame: 0 30px 80px -20px rgba(20, 20, 40, 0.18);
+  --shadow-card: 0 1px 2px rgba(16, 16, 30, 0.04);
+  --shadow-sm: 0 1px 2px rgba(16, 16, 30, 0.05);
+  --shadow-elevated: 0 12px 32px -8px rgba(20, 20, 40, 0.2);
+  --shadow-overlay: 0 8px 16px -6px rgba(20, 20, 40, 0.14), 0 32px 80px -20px rgba(20, 20, 40, 0.3);
+  --shadow-violet: 0 8px 20px -6px rgba(91, 76, 240, 0.55);
+  --shadow-row: 0 8px 24px -8px rgba(91, 76, 240, 0.6);
+  --overlay-scrim: rgba(22, 22, 29, 0.42);
+  /* The card is defined by its edge now, not by a lit top hairline. */
+  --card-highlight: none;
+  --page-glow: transparent;
+  --accent-glow: var(--shadow-violet);
+  --accent: var(--violet-500);
   --accent-ink: #ffffff;
-  /*
-   * One step below --shadow-card, for the selected row in an interactive list.
-   * A pressed/active affordance should read as a lift, not as a second card.
-   */
-  --shadow-sm: 0 1px 2px rgba(17, 17, 22, 0.06);
+
+  /* Glass — five tokens, spent on CHROME only. See the `.glass-*` block
+     near the bottom of this file for where they are allowed to land and,
+     more importantly, where they are not.
+
+     The two backgrounds are MIXED rather than spelled out per theme.
+     `color-mix()` inside a custom property resolves at the element it is
+     used on, against whichever `--surface-app` / `--surface-raised` is in
+     scope — and the dark scopes redefine both on `:root` itself. So one
+     declaration produces both halves, the same trick `.accent-text` uses
+     for the per-client accent. Only the three tokens that are genuinely
+     "white, at some strength" have to be restated per theme.
+
+     72% and 88%, not the 45% that photographs better: `backdrop-filter`
+     is dropped in High Contrast, on paper, and by a few engines still in
+     use, and what is left in each of those cases still has to be a
+     surface you can read a label on. */
+  --glass-bg: color-mix(in srgb, var(--surface-app) 72%, transparent);
+  --glass-panel-bg: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  --glass-blur: 18px;
+  /* 🔴 The edge is DARK in light mode and light in dark mode, which is the
+     opposite of the sheen two lines down and is not a mistake. The edge is
+     the panel's outline — a popover floats over a near-white page, and a
+     white rim on a white panel is no rim at all. The sheen is a highlight
+     ON the surface, and a highlight is light in both themes or it is a
+     smudge. They point in different directions because they do different
+     jobs. Light lands at roughly --border-strong (#d8d8e2) over white. */
+  --glass-edge: rgba(24, 24, 44, 0.12);
+  /* The lit top hairline. One pixel of light along the upper edge is what
+     separates "translucent div" from "glass". */
+  --glass-sheen: rgba(255, 255, 255, 0.8);
+  --glass-shadow: 0 10px 30px -18px rgba(20, 20, 40, 0.34);
+
+  /* Motion — one easing, 180–240ms, everywhere. */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
 
-    --surface-page: #0a0b0f;
-    --surface-1: #141519;
-    --surface-2: #20222a;
-    --surface-raised: #1c1e26;
-    /* Top-lit sheen — the card catches the page glow along its upper edge. */
-    --card-bg: linear-gradient(180deg, #1a1c23 0%, #131419 100%);
+    --surface-page: #0e0e14;
+    --surface-app: #15151d;
+    --surface-1: #1c1c26;
+    --surface-2: #242430;
+    --surface-raised: #1c1c26;
+    --card-bg: #1c1c26;
 
-    --text-primary: #ffffff;
-    --text-secondary: #c5c6cd;
-    --text-muted: #8b8d96;
+    --text-primary: #f2f2f7;
+    --text-secondary: #b4b4c2;
+    --text-muted: #8e8e9e;
+    --text-faint: #6a6a7a;
 
-    --border: rgba(255, 255, 255, 0.09);
-    --border-strong: rgba(255, 255, 255, 0.15);
-    --gridline: #26272e;
-    --baseline: #34353d;
+    --border: #2a2a38;
+    --border-strong: #3a3a4a;
+    --gridline: #26262f;
+    --baseline: #34343f;
+
+    /* Violet lifts off the dark ground rather than inverting — #5b4cf0 on
+       #0e0e14 is 2.6:1 and disappears. #8d7dff is 5.2–6.0:1 on every dark
+       surface here. */
+    --violet-100: #26243d;
+    --violet-400: #a396ff;
+    --violet-500: #8d7dff;
+    --violet-600: #7a6cf6;
+
+    /* Fixed across themes — see the note in the light scope. */
+    --lime: #bef264;
+    --lime-hover: #aee245;
+    --lime-on: #16161d;
+
+    /* Not an inversion: each is stepped down until --text-muted clears
+       4.75:1 on it, the same way the light tints were stepped up. */
+    --tint-violet: #232040;
+    --tint-blue: #11253f;
+    --tint-mint: #0e2a20;
+    --tint-amber: #2d2310;
+
+
+    --ink: #1c1c26;
+    --navy: #14151f;
+    --navy-raised: #1e1f2c;
+
+    --periwinkle: #93a9e2;
+    --periwinkle-soft: #6d80b4;
+    --butter: #d9c78a;
+    --blush: #df9393;
 
     /* Same eight hues, stepped for the dark surface — not an inversion. */
     --series-1: #3987e5;
@@ -167,6 +379,14 @@
     --series-6: #008300;
     --series-7: #9085e9;
     --series-8: #e66767;
+    --series-1-ink: #4a91e7;
+    --series-2-ink: #de7044;
+    --series-3-ink: #1aa373;
+    --series-4-ink: #c98500;
+    --series-5-ink: #db6a93;
+    --series-6-ink: #00a700;
+    --series-7-ink: #9085e9;
+    --series-8-ink: #e66767;
 
     --seq-250: #184f95;
     --seq-300: #1c5cab;
@@ -177,73 +397,102 @@
     --seq-550: #6da7ec;
     --seq-600: #86b6ef;
 
-    /* Status, stepped for the dark ground rather than inherited.
-
-       Only critical actually needed moving: #d03b3b measured 3.30:1 on
-       --surface-2, under the 4.5:1 text floor, and it is the colour that carries
-       "this data is missing, not zero" — the single most consequential sentence
-       this app prints. #ff6b6b is 5.72:1.
-
-       The other three already cleared the floor on dark (good 4.73, warning 8.65,
-       serious 6.01) and are restated verbatim rather than omitted: with the light
-       steps now darkened for their own ground, inheriting would drag brown-amber
-       onto a near-black surface where it reads as mud.
-
-       Critical stays clear of --delta-bad #e66767 for the reason recorded just
-       below on --delta-good — a status alarm and a metric moving the wrong way are
-       different events and must not render as the same colour. */
+    /* Status, stepped for the dark ground rather than inherited. Rechecked
+       against the new dark surfaces: the tightest is --status-good at 4.57:1
+       on --surface-2. */
     --status-good: #0ca30c;
     --status-warning: #fab219;
     --status-serious: #ec835a;
     --status-critical: #ff6b6b;
+    --status-ink: #12121a; /* worst 5.55:1, vs 1.83:1 for white on amber */
 
-    /* Lifted off #0ca30c, which was IDENTICAL to --status-good in dark mode — so a
+    --good-bg: #113328;
+    --good-ink: #5ddba5;
+    --warn-bg: #33280e;
+    --warn-ink: #e8c165;
+    --warn-line: #4d3d16;
+    --bad-bg: #37191b;
+    --bad-ink: #f19a9c;
+    --bad-line: #4d2528;
 
-       green delta and a green health dot rendered the same colour, defeating the
-
-       separation the light-mode pair is explicitly designed for (see above).
-
-       #3ecf6b measures 9.69:1 on the dark page ground. */
-
+    /* Lifted off #0ca30c, which was IDENTICAL to --status-good in dark mode —
+       so a green delta and a green health dot rendered the same colour,
+       defeating the separation the light pair is explicitly designed for. */
     --delta-good: #3ecf6b;
     --delta-bad: #e66767;
 
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 34px -14px rgba(0, 0, 0, 0.78);
-    --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.55), 0 28px 60px -18px rgba(0, 0, 0, 0.9);
-    /* Dark needs a deeper scrim: a translucent panel over a near-black page has
-       far less luminance contrast to lean on than it does over white. */
+    --shadow-frame: 0 30px 80px -20px rgba(0, 0, 0, 0.7);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --shadow-elevated: 0 12px 32px -8px rgba(0, 0, 0, 0.66);
     --shadow-overlay: 0 10px 24px -8px rgba(0, 0, 0, 0.7), 0 44px 90px -22px rgba(0, 0, 0, 0.95);
+    --shadow-violet: 0 8px 22px -6px rgba(141, 125, 255, 0.4);
+    --shadow-row: 0 8px 24px -8px rgba(141, 125, 255, 0.45);
     --overlay-scrim: rgba(0, 0, 0, 0.66);
-    --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    --page-glow: rgba(57, 135, 229, 0.12);
-    --accent-glow: 0 12px 40px -10px rgba(57, 135, 229, 0.5);
+    --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    --page-glow: rgba(141, 125, 255, 0.1);
+    --accent-glow: var(--shadow-violet);
     /*
-     * NOT the light value inverted. --accent is lighter here (#3987e5), so white
-     * on it drops to 3.64:1 while near-black reaches 5.20:1 — the accessible
-     * choice is the one that looks counterintuitive.
+     * NOT the light value inverted. --accent is lighter here (#8d7dff), so
+     * white on it drops to 3.23:1 while near-black reaches 5.96:1 — the
+     * accessible choice is the one that looks counterintuitive.
      */
-    --accent-ink: #0b0f14;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    /* Near-white at a tenth of the strength. The light values would put a
+       hard white line across a near-black bar; these read as a sheet edge
+       catching what little light the dark theme has. */
+    --glass-edge: rgba(255, 255, 255, 0.12);
+    --glass-sheen: rgba(255, 255, 255, 0.14);
+    --glass-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.8);
+    --accent-ink: #12121a;
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --surface-page: #0a0b0f;
-  --surface-1: #141519;
-  --surface-2: #20222a;
-  --surface-raised: #1c1e26;
-  --card-bg: linear-gradient(180deg, #1a1c23 0%, #131419 100%);
+  --surface-page: #0e0e14;
+  --surface-app: #15151d;
+  --surface-1: #1c1c26;
+  --surface-2: #242430;
+  --surface-raised: #1c1c26;
+  --card-bg: #1c1c26;
 
-  --text-primary: #ffffff;
-  --text-secondary: #c5c6cd;
-  --text-muted: #8b8d96;
+  --text-primary: #f2f2f7;
+  --text-secondary: #b4b4c2;
+  --text-muted: #8e8e9e;
+  --text-faint: #6a6a7a;
 
-  --border: rgba(255, 255, 255, 0.09);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --gridline: #26272e;
-  --baseline: #34353d;
+  --border: #2a2a38;
+  --border-strong: #3a3a4a;
+  --gridline: #26262f;
+  --baseline: #34343f;
+
+  --violet-100: #26243d;
+  --violet-400: #a396ff;
+  --violet-500: #8d7dff;
+  --violet-600: #7a6cf6;
+
+  /* Fixed across themes — see the note in the light scope. */
+  --lime: #bef264;
+  --lime-hover: #aee245;
+  --lime-on: #16161d;
+
+  /* Not an inversion: each is stepped down until --text-muted clears
+     4.75:1 on it, the same way the light tints were stepped up. */
+  --tint-violet: #232040;
+  --tint-blue: #11253f;
+  --tint-mint: #0e2a20;
+  --tint-amber: #2d2310;
+
+
+  --ink: #1c1c26;
+  --navy: #14151f;
+  --navy-raised: #1e1f2c;
+
+  --periwinkle: #93a9e2;
+  --periwinkle-soft: #6d80b4;
+  --butter: #d9c78a;
+  --blush: #df9393;
 
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -253,6 +502,14 @@
   --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
+  --series-1-ink: #4a91e7;
+  --series-2-ink: #de7044;
+  --series-3-ink: #1aa373;
+  --series-4-ink: #c98500;
+  --series-5-ink: #db6a93;
+  --series-6-ink: #00a700;
+  --series-7-ink: #9085e9;
+  --series-8-ink: #e66767;
 
   --seq-250: #184f95;
   --seq-300: #1c5cab;
@@ -263,47 +520,40 @@
   --seq-550: #6da7ec;
   --seq-600: #86b6ef;
 
-  /* Status, stepped for the dark ground rather than inherited.
-
-     Only critical actually needed moving: #d03b3b measured 3.30:1 on
-     --surface-2, under the 4.5:1 text floor, and it is the colour that carries
-     "this data is missing, not zero" — the single most consequential sentence
-     this app prints. #ff6b6b is 5.72:1.
-
-     The other three already cleared the floor on dark (good 4.73, warning 8.65,
-     serious 6.01) and are restated verbatim rather than omitted: with the light
-     steps now darkened for their own ground, inheriting would drag brown-amber
-     onto a near-black surface where it reads as mud.
-
-     Critical stays clear of --delta-bad #e66767 for the reason recorded just
-     below on --delta-good — a status alarm and a metric moving the wrong way are
-     different events and must not render as the same colour. */
+  /* Mirrors the media-query block above — see the notes there. */
   --status-good: #0ca30c;
   --status-warning: #fab219;
   --status-serious: #ec835a;
   --status-critical: #ff6b6b;
+  --status-ink: #12121a; /* worst 5.55:1, vs 1.83:1 for white on amber */
 
-  /* Lifted off #0ca30c, which was IDENTICAL to --status-good in dark mode — so a
-
-     green delta and a green health dot rendered the same colour, defeating the
-
-     separation the light-mode pair is explicitly designed for (see above).
-
-     #3ecf6b measures 9.69:1 on the dark page ground. */
+  --good-bg: #113328;
+  --good-ink: #5ddba5;
+  --warn-bg: #33280e;
+  --warn-ink: #e8c165;
+  --warn-line: #4d3d16;
+  --bad-bg: #37191b;
+  --bad-ink: #f19a9c;
+  --bad-line: #4d2528;
 
   --delta-good: #3ecf6b;
   --delta-bad: #e66767;
 
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 34px -14px rgba(0, 0, 0, 0.78);
-  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.55), 0 28px 60px -18px rgba(0, 0, 0, 0.9);
+  --shadow-frame: 0 30px 80px -20px rgba(0, 0, 0, 0.7);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-elevated: 0 12px 32px -8px rgba(0, 0, 0, 0.66);
   --shadow-overlay: 0 10px 24px -8px rgba(0, 0, 0, 0.7), 0 44px 90px -22px rgba(0, 0, 0, 0.95);
+  --shadow-violet: 0 8px 22px -6px rgba(141, 125, 255, 0.4);
+  --shadow-row: 0 8px 24px -8px rgba(141, 125, 255, 0.45);
   --overlay-scrim: rgba(0, 0, 0, 0.66);
-  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --page-glow: rgba(57, 135, 229, 0.12);
-  --accent-glow: 0 12px 40px -10px rgba(57, 135, 229, 0.5);
-  /* Mirrors the media-query block above — see the note there. */
-  --accent-ink: #0b0f14;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --page-glow: rgba(141, 125, 255, 0.1);
+  --accent-glow: var(--shadow-violet);
+  --glass-edge: rgba(255, 255, 255, 0.12);
+  --glass-sheen: rgba(255, 255, 255, 0.14);
+  --glass-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.8);
+  --accent-ink: #12121a;
 }
 
 @theme inline {
@@ -317,16 +567,39 @@
   --color-line: var(--border);
   --color-line-strong: var(--border-strong);
   --color-grid: var(--gridline);
+
+  /* The frame's own ground, one step lighter than the page behind it. */
+  --color-app: var(--surface-app);
+  /* Faint ink: placeholders and disabled glyphs only — never body text. */
+  --color-ink-4: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--violet-100);
+  /* The dark surfaces: pill rail, segmented nav, the signature panel. */
+  --color-navy: var(--navy);
+  --color-navy-raised: var(--navy-raised);
+  --color-panel: var(--ink);
 }
+
+/*
+ * NOTE on what is NOT mapped here: --radius-*, --shadow-* and the status and
+ * series colours stay plain custom properties. Tailwind 4 owns the --radius-*
+ * and --color-* namespaces, so registering --radius-lg in @theme would silently
+ * redefine `rounded-lg` for the whole app, and registering --color-violet-500
+ * would shadow Tailwind's own violet. Reach for those through var() instead.
+ */
 
 html,
 body {
   color: var(--text-primary);
-  /* Geist (self-hosted via next/font) leads; system stack is the fallback if the
-     variable is ever unset. Clean-neutral by design — the data leads, the type
-     recedes. */
+  /* Plus Jakarta Sans (self-hosted via next/font/local — see layout.tsx) leads;
+     the system stack catches the case where the variable is unset. Its wide
+     apertures and slightly geometric lowercase hold up at 12px label sizes,
+     which is most of this app. The stack is repeated, not inherited, because a
+     silent fallback to system-ui is the one typography bug nobody notices in
+     review and everybody notices in a client screenshot. */
   font-family:
-    var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    var(--font-jakarta), -apple-system, BlinkMacSystemFont, "SF Pro Display",
     "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -335,8 +608,10 @@ body {
 }
 
 body {
-  /* A single faint accent bloom high on the page — ambient depth, not a gradient
-     hero. Barely-there in light, a felt atmosphere in dark. */
+  /* The page is a flat, quiet grey canvas — the app frame is what the eye lands
+     on, and it can only read as floating if the ground behind it is inert. The
+     accent bloom survives only in dark, where --page-glow is non-transparent and
+     the frame needs help separating from near-black. */
   background:
     radial-gradient(1200px 560px at 50% -280px, var(--page-glow), transparent),
     var(--surface-page);
@@ -363,15 +638,25 @@ body {
   font-feature-settings: "tnum";
 }
 
+/*
+ * The card is an edge, not a slab.
+ *
+ * It used to carry a lit top hairline and a real drop shadow, which is how a
+ * raised object reads on a dark ground. On this light ground the same treatment
+ * makes every block look equally important — so depth is spent on the frame and
+ * on the two or three things that genuinely float, and the card is defined by a
+ * 20px radius and one hairline. --card-highlight resolves to `none` in light and
+ * to a faint inset in dark, where an edge alone is not enough separation.
+ */
 .card {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--card-highlight), var(--shadow-card);
   transition:
-    box-shadow 0.22s ease,
-    border-color 0.22s ease,
-    transform 0.22s ease;
+    box-shadow 0.22s var(--ease),
+    border-color 0.22s var(--ease),
+    transform 0.22s var(--ease);
 }
 
 /* Cards the user can act on lift slightly on hover — a quiet, premium tell. */
@@ -395,28 +680,342 @@ body {
 }
 
 /*
+ * Section identity — the hue a section wears, set once per section.
+ *
+ * `c/[slug]/page.tsx` wraps each section in `.section-band` and writes two
+ * custom properties on it: `--section-band` (the MARK value, for the rule) and
+ * `--section-ink` (the TEXT value, for the heading). They are different values
+ * of the same hue and are not interchangeable; see `--series-N-ink` above.
+ *
+ * The heading picks up the ink on its own — every section h2 already asks for
+ * `var(--section-ink, var(--text-primary))` — so this rule only has to draw the
+ * mark. Both properties inherit, which is what keeps the whole feature to one
+ * wrapper: no section component knows it has a colour.
+ *
+ * The fallback is `transparent`, not a colour. Outside a band — a settings
+ * form, a modal, the report glossary — the pseudo-element still exists but
+ * paints nothing, so a heading that never opted in is pixel-identical to
+ * before. That is deliberate: this file cannot see which h2 is a section.
+ */
+.section-band h2::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 0.95em;
+  margin-right: 8px;
+  vertical-align: -0.11em;
+  border-radius: 2px;
+  background: var(--section-band, transparent);
+}
+
+/*
+ * The rule is decoration and the heading text already carries the meaning, so
+ * it is hidden from the accessibility tree by being a pseudo-element with an
+ * empty `content` — nothing to announce. Forced-colors is the one mode where a
+ * 3px bar of `background` disappears entirely; there it becomes a border, which
+ * the system palette does honour.
+ */
+@media (forced-colors: active) {
+  .section-band h2::before {
+    background: none;
+    border-left: 3px solid CanvasText;
+    width: 0;
+  }
+}
+
+/*
+ * The section's hue, carried onto the CARD rather than only onto its heading.
+ *
+ * The 3px rule above was the whole treatment, and it was not enough. A tab of
+ * eight sections still read as one continuous document — the complaint was
+ * literally "it looks like a PDF" — because a 3px mark beside a heading is the
+ * only thing on screen that is not grey, and you have to already be reading the
+ * heading to see it. Wayfinding you only get once you have stopped and read is
+ * not wayfinding; it is a footnote.
+ *
+ * So the hue also paints two things a reader sees while SCROLLING PAST:
+ *
+ *   1. a 3px bar across the top edge of the card, and
+ *   2. a tint that fades out over the first ~140px of it.
+ *
+ * Both are `background-image` layers, and that is load-bearing. The obvious
+ * implementations both break something:
+ *
+ *   `border-top: 3px` shifts every card down 2px and reflows the page.
+ *   `box-shadow: inset 0 3px` has to restate `.card`'s own shadow, and would
+ *      land AFTER `.card-interactive:hover` in this file at equal specificity
+ *      (`.section-band > .card` and `.card-interactive:hover` are both 0-2-0) —
+ *      so it would win, and silently kill the hover lift on every section card.
+ *
+ * `background-image` collides with neither: `.card` sets the `background`
+ * SHORTHAND, which does reset `background-image`, but `.card` is earlier in
+ * this file so these longhands apply on top of it. Nothing else in the codebase
+ * sets `background-image` on a card.
+ *
+ * Backgrounds clip to the border radius, so the bar follows the card's rounded
+ * top corners without being told to.
+ *
+ * 🔴 Direct child (`>`), never a descendant. Sections nest cards — a stat tile
+ * inside a KPI grid, a modal inside a table — and a descendant selector would
+ * stripe every one of them, which turns a wayfinding mark into wallpaper.
+ */
+.section-band > .card,
+.section-band > section.card,
+.section-band > div > .card {
+  background-image:
+    linear-gradient(var(--section-band, transparent), var(--section-band, transparent)),
+    linear-gradient(to bottom, var(--section-tint, transparent), transparent);
+  background-repeat: no-repeat;
+  background-size:
+    100% 3px,
+    100% 140px;
+  background-position:
+    top left,
+    top left;
+}
+
+/*
+ * Forced-colors throws away both layers — `background-image` is one of the
+ * properties the mode discards outright — so the card falls back to the system
+ * border it already has. Nothing to state; noted so the next person does not go
+ * looking for why the stripe is missing in High Contrast.
+ */
+
+/*
+ * The tab strip's edge fade.
+ *
+ * Seven tabs overflow the header on anything narrower than a laptop, and a
+ * label sliced mid-word at the viewport edge reads as a layout bug rather than
+ * as "scroll for more". The fade says the content continues.
+ *
+ * `data-overflow` is written by `DashboardTabs` from a real measurement, so the
+ * fade appears on the side that actually has hidden content and never on a
+ * strip that fits. CSS alone cannot ask whether a box is scrollable, and a mask
+ * applied unconditionally would fade the first tab on a desktop where every tab
+ * is already visible.
+ *
+ * `mask-image` rather than an overlaid gradient: a gradient has to be painted
+ * in the header's own background colour, which moves with the theme AND with
+ * the client's accent, and a hardcoded one shows up as a grey smear the moment
+ * either changes. A mask takes the pixels out instead, so whatever is behind
+ * shows through, correctly, in every theme.
+ */
+.tab-strip[data-overflow="right"] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.tab-strip[data-overflow="left"] {
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.tab-strip[data-overflow="both"] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 28px,
+    #000 calc(100% - 28px),
+    transparent
+  );
+}
+
+/*
+ * 🔴 The accent, made safe to use as TEXT.
+ *
+ * `--accent` is delivered as an INLINE STYLE — `lib/accent.ts` writes one of six
+ * per-client hexes onto a wrapper — so one hex has to survive both themes, and
+ * that file solves each for the best WORST-of-both contrast. It lands them all
+ * near 4.1:1, which is fine behind a label and NOT fine as the label: the
+ * emphasis tile's 10.5px eyebrow measured 4.11:1 on the dark card. That file
+ * says so itself, and names the fix — "a light/dark PAIR, not a darker hex here".
+ *
+ * This is that pair, derived rather than hand-picked. Mixing toward
+ * --text-primary darkens the accent in light mode and lightens it in dark,
+ * because --text-primary is near-black in one and near-white in the other — so
+ * one declaration produces both halves of the pair, for a per-client accent the
+ * server cannot resolve a theme for.
+ *
+ * Measured on every accent against the card it lands on, worst case of the
+ * seven: raw accent 4.08:1 light / 4.05:1 dark — the failure. 90% already
+ * clears at 4.73 / 4.68, so 85% is not the minimum that works, it is the
+ * minimum plus a margin: 5.09:1 / 5.02:1, while keeping enough of the hue that
+ * the eyebrow still reads as the accent rather than as grey text. Going further
+ * buys contrast nobody needs and costs the colour its identity.
+ * `accent-text.test.ts` recomputes both halves rather than trusting this note.
+ *
+ * It is a class rather than a token because `var(--accent)` has to resolve at
+ * the element, where the per-client wrapper's value is in scope — declared on
+ * :root it would silently bake in the house violet for every client.
+ */
+.accent-text {
+  color: color-mix(in srgb, var(--accent) 85%, var(--text-primary));
+}
+
+/*
+ * 🔴 The inverse of .accent-text: the accent as a FILL, carrying --accent-ink.
+ *
+ * Raw `background: var(--accent)` with `color: var(--accent-ink)` is the
+ * pressed state of the range picker, the calendar endpoints and two wizard
+ * buttons — and it fails in BOTH themes. --accent-ink is solved per theme
+ * (white in light, #12121a in dark) but the accent it lands on is a per-client
+ * inline value, and across the six client accents plus the house violet the
+ * worst pairs are 4.08:1 light (#6a6ff0) and 4.47:1 dark (#aa5cc4). `accent.ts`
+ * says the fix is a darker fill rather than a different ink, and this is it.
+ *
+ * Mixing toward --text-primary works because --text-primary and --accent-ink
+ * sit at OPPOSITE poles in each theme: the mix darkens the fill in light (away
+ * from white ink) and lightens it in dark (away from near-black ink), so one
+ * declaration moves both themes in the direction that helps. Measured worst
+ * case: 4.38/4.83 at 95%, 4.73/5.16 at 90%, 5.09/5.58 at 85% — the same
+ * minimum-plus-a-margin choice as .accent-text, and the same value, so the two
+ * stay legible as a pair rather than as two tuned constants.
+ *
+ * It has to be a class for the same reason .accent-text does: var(--accent)
+ * must resolve at the element, where accent.ts's inline style reaches it.
+ */
+.accent-fill {
+  background: color-mix(in srgb, var(--accent) 85%, var(--text-primary));
+  color: var(--accent-ink);
+}
+
+/*
+ * 🔴 A client's card on the roll-up, washed with that client's own accent.
+ *
+ * The colour is IDENTITY, not status. It is the same accent the client's own
+ * dashboard wears, so clicking a card lands somewhere that is recognisably the
+ * same place — and it follows the client, never their position in the list, so
+ * adding or archiving one never repaints the others. The section the card sits
+ * in carries the status, in the house status hues, and the two must not be
+ * confused: a teal card is not "a teal kind of problem".
+ *
+ * ── Why 14%, when this shipped at 6% ──────────────────────────────────
+ *
+ * A client's `brandColor` is normalised on write to clear `BRAND_MIN_CONTRAST`
+ * (3:1) against BOTH surfaces, so the wash has to hold for any colour in that
+ * band — 42,501 of them — not merely for the six generated accents.
+ *
+ * At 6% the card was legible and invisible: a white card with a coloured edge.
+ * The binding constraint was never the wash, it was ONE INK. `--text-muted` is
+ * the faintest token in the house and it was carrying the card's meta line, and
+ * brute-forced over the whole band it capped the wash at 6% on its own:
+ *
+ *   ink set on the card                       max wash still clearing 4.75
+ *   --text-primary + --secondary + --muted      6%   ← what shipped
+ *   --text-primary + --secondary               17%
+ *   --text-primary alone                       60%
+ *
+ * So the fix was to stop spending the budget on the faintest ink. The meta line
+ * moved to `--text-secondary` — it is one of two lines on a card, not a
+ * footnote, and it was under-set as muted anyway — and the wash went with it.
+ * `--status-critical` ("No events yet") is the binding ink at that depth:
+ *
+ *   12%  5.07     14%  4.90  ← shipped      16%  4.73  ✗ (floor 4.75)
+ *   13%  4.98     15%  4.81
+ *
+ * 14, not 15, so a text token can be nudged one step without this going under.
+ *
+ * ⚠️ The budget is spent. Putting `--text-muted` back on this card — a third
+ * line, a timestamp, a caption — silently costs 8 points of wash.
+ * `client-card-tint.test.ts` reads the inks back out of `ClientCards.tsx` and
+ * measures whatever it finds, so that edit fails the build rather than shipping.
+ *
+ * ── Why the spine is not just var(--accent) ───────────────────────────
+ *
+ * Because the card beneath it is washed in that same colour, so the spine eats
+ * its own contrast: 2.77:1 at full strength, under the 3:1 non-text floor, for
+ * exactly the reason the tint-badge rule below documents. The fix is the one
+ * already solved in `.accent-fill` directly above — mix toward --text-primary,
+ * which darkens in light and lightens in dark, away from the wash in both — at
+ * the same 85%. Re-measured against the deeper ground: 3.20:1 worst case, down
+ * from 3.31 at 6% and still clear. One constant, two rules, so they cannot
+ * drift apart.
+ *
+ * ⚠️ That 3.20 is a NON-TEXT floor. The spine is a bar and the monogram is a
+ * filled tile, both fine; the accent may not carry type on this card. The
+ * "Switch to sub-account" line is a text token for that reason.
+ */
+.client-card {
+  background: color-mix(in srgb, var(--accent) 14%, var(--card-bg));
+  border-left: 3px solid color-mix(in srgb, var(--accent) 85%, var(--text-primary));
+}
+
+/*
+ * 🔴 A badge tinted with its own colour: `--tint` sets both the wash and the ink.
+ *
+ * Ten sites spelled this by hand as `color: X` over
+ * `background: color-mix(in srgb, X 14%, transparent)`, and the shape is a trap:
+ * the wash moves the GROUND toward the very colour the text is, so the badge
+ * eats its own contrast. Measured, "✓ mapped" read 4.25:1 in dark, "not used"
+ * 4.28 and "Auto-map" 4.43 — all under AA, none of them obviously wrong.
+ *
+ * Shrinking the wash does not fix it: at 6% the worst case is still 4.28, because
+ * the loss is dominated by the token's own margin over the surface, not by the
+ * tint. The ink has to move instead — mixed toward --text-primary, which darkens
+ * it in light and lightens it in dark, away from the wash in both. Across every
+ * status colour, --text-muted and all seven accents, on all three surfaces in
+ * both themes: 4.24:1 at 75%, 4.59:1 at 70%, 4.97:1 at 65%. 70% is the minimum
+ * that clears, and keeps enough of the token that green still reads as green.
+ *
+ * Set --tint inline; everything else comes from here.
+ */
+.tint-badge {
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  color: color-mix(in srgb, var(--tint) 70%, var(--text-primary));
+}
+
+/*
  * Primary action button — the accent's second sanctioned glow. Reuses the
  * logo-mark gradient so brand and action read as one system. Theme-independent
- * by design (a fixed blue works on both grounds).
+ * by design (a fixed violet works on both grounds).
+ *
+ * 🔴 It carries its own size. Every call site used to repeat
+ * `rounded-[8px] px-3 py-2 text-[13px] font-medium`, which was already dead
+ * code — this file is unlayered and Tailwind's utilities sit in
+ * `@layer utilities`, so an unlayered `.btn-accent` wins every tie regardless
+ * of source order. The radius had silently been `var(--radius)` for as long as
+ * both existed. Putting the padding and type here makes what ships and what is
+ * written agree; add utilities for POSITION (`w-full`, `self-start`, margins),
+ * never for size.
  */
+/*
+ * The geometry is shared with `.btn-lime` in one selector, deliberately.
+ *
+ * Two primary buttons that are the same size until someone changes one of them
+ * is the drift this file keeps paying for elsewhere. Only the PAINT differs
+ * below, and only the paint should.
+ */
+.btn-accent,
+.btn-lime {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  border-radius: var(--radius);
+}
+
 .btn-accent {
-  background: linear-gradient(180deg, #4a97ee 0%, #1f5eb0 100%);
+  background: var(--g-primary);
+  /*
+   * White stays, and it is measured, not assumed: --g-primary's lightest stop
+   * holds white at 4.77:1, so every pixel of this button clears AA and no
+   * label-geometry argument is needed. See the token for what it took to get
+   * there.
+   */
   color: #ffffff;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    0 1px 2px rgba(0, 0, 0, 0.22),
-    0 8px 22px -8px rgba(45, 120, 220, 0.55);
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    var(--shadow-violet);
   transition:
-    filter 0.16s ease,
-    box-shadow 0.22s ease,
-    transform 0.1s ease;
+    filter 0.16s var(--ease),
+    box-shadow 0.22s var(--ease),
+    transform 0.18s var(--ease);
 }
 .btn-accent:hover:not(:disabled) {
-  filter: brightness(1.06);
+  filter: brightness(1.05);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.24),
-    0 1px 2px rgba(0, 0, 0, 0.22),
-    0 12px 30px -8px rgba(45, 120, 220, 0.62);
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 12px 28px -8px rgba(91, 76, 240, 0.62);
 }
 .btn-accent:active:not(:disabled) {
   transform: translateY(0.5px);
@@ -427,15 +1026,64 @@ body {
   box-shadow: none;
 }
 
+/*
+ * The house action, on the agency's own pages.
+ *
+ * ── 🔴 Why this is a separate class and not a recoloured `.btn-accent` ──
+ *
+ * `.btn-accent` is worn by fourteen files, and two groups of them must NOT turn
+ * lime. Inside `/c/[slug]` the accent is the CLIENT's own colour — the whole
+ * point of per-client branding is that their dashboard looks like theirs — and
+ * on the signed-out pages (login, signup, reset, verify, the OAuth result) the
+ * violet is the product's face before anyone has a tenant at all. Repainting
+ * the shared class would have taken both.
+ *
+ * ── 🔴 Why the ink is near-black and identical in both themes ───────────
+ *
+ * Lime is a light hue, so the arrangement that works is the only one it works
+ * in: #bef264 under #16161d measures 13.78:1. Lightening the ink in dark mode
+ * to match the surrounding text would land white-on-lime at 1.5:1 — the same
+ * button, unreadable, on the theme half the operators use. The fill is held
+ * identical across themes for the same reason a logo is: a house colour that
+ * shifted with the theme would read as two different brands.
+ *
+ * Hover DARKENS the fill rather than fading the element. `opacity` lightens ink
+ * and ground together and walks contrast the wrong way — the mistake the Meta
+ * connect button made — and `brightness(1.05)`, which `.btn-accent` can afford
+ * on a mid-violet, would push this lime toward white and take the ink with it.
+ */
+.btn-lime {
+  background: var(--lime);
+  color: var(--lime-on);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 6px 16px -8px rgba(0, 0, 0, 0.35);
+  transition:
+    background-color 0.16s var(--ease),
+    box-shadow 0.22s var(--ease),
+    transform 0.18s var(--ease);
+}
+.btn-lime:hover:not(:disabled) {
+  background: var(--lime-hover);
+}
+.btn-lime:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+.btn-lime:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
 /* Secondary / ghost action — bordered, fills to surface-2 on hover. */
 .btn-ghost {
   background: transparent;
   border: 1px solid var(--border-strong);
   color: var(--text-secondary);
   transition:
-    background-color 0.16s ease,
-    border-color 0.16s ease,
-    color 0.16s ease;
+    background-color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    color 0.16s var(--ease),
+    transform 0.18s var(--ease);
 }
 .btn-ghost:hover:not(:disabled) {
   background: var(--surface-2);
@@ -457,7 +1105,7 @@ body {
 
 /* Table rows and list rows get a subtle wash on hover. */
 .row-hover {
-  transition: background-color 0.14s ease;
+  transition: background-color 0.16s var(--ease);
 }
 .row-hover:hover {
   background: var(--surface-2);
@@ -512,9 +1160,20 @@ body[data-range-pending="1"]::after {
   50% { opacity: 0.9; }
   100% { opacity: 0.55; }
 }
+/*
+ * A skeleton is a material, not a shape: it supplies the shimmering ground and
+ * nothing else, so each placeholder declares the radius of whatever it stands in
+ * for.
+ *
+ * 🔴 This used to set `border-radius: 6px`. Because this file is unlayered it
+ * beat every `rounded-*` utility at the call sites — those live in Tailwind's
+ * `@layer utilities` and lose to unlayered rules on any tie — so the whole
+ * loading screen rendered as 6px rectangles: the pill, the KPI tiles and the
+ * notched panel's asymmetric corner alike. Verified in the browser, not guessed.
+ * `skeleton-shape.test.ts` now requires every call site to name its own shape.
+ */
 .skeleton {
   background: var(--surface-2);
-  border-radius: 6px;
   animation: shimmer 1.6s ease-in-out infinite;
 }
 
@@ -529,25 +1188,56 @@ body[data-range-pending="1"]::after {
   -webkit-overflow-scrolling: touch;
 }
 
-:where(a, button, input, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--series-1);
+/*
+ * One focus ring for the whole app. `:where()` holds the element half at zero
+ * specificity, so any component can take focus over without a fight — `.field`
+ * does exactly that, trading the outline for an accent border and glow.
+ *
+ * 🔴 No `border-radius` here. It used to set 4px, and since this rule sits after
+ * `.btn-accent` at equal specificity, keyboard-focusing the primary button
+ * snapped its corners from 12px to 4px mid-interaction. Browsers already run the
+ * outline around the element's own border-radius, so the ring hugs whatever
+ * shape it lands on with nothing declared.
+ */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 /*
  * Entrance — one orchestrated load moment, gently staggered top to bottom, so
  * the dashboard assembles itself rather than snapping in. Motion only; with
  * reduced-motion the whole block is skipped and content is simply present.
+ *
+ * 🔴 This animates `translate`, NOT `transform`, and the distinction is the
+ * whole reason the hover grow at the bottom of this file works at all.
+ *
+ * `animation-fill-mode: both` means the `to` keyframe keeps applying forever
+ * after the animation ends, and a filled animation outranks every ordinary
+ * declaration in the cascade — no amount of specificity beats it. So while this
+ * ran on `transform`, it permanently pinned `transform: none` on every direct
+ * child of <main>, and any of them that wanted a hover transform silently got
+ * nothing. That is not hypothetical: three `.card` sections are direct children
+ * of <main> on the roll-up right now. They are not `.card-interactive` today,
+ * so nobody had noticed — the bug was waiting for the first page that puts one
+ * interactive panel at the top level.
+ *
+ * The house rule this establishes, which the block at the end of the file is
+ * the other half of:
+ *
+ *     ENTRANCE motion uses `translate`.  INTERACTION motion uses `transform`.
+ *
+ * Two properties, so the pinned one can never sit on top of the live one.
+ * `motion-properties.test.ts` holds both halves.
  */
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    translate: 0 12px;
   }
   to {
     opacity: 1;
-    transform: none;
+    translate: 0 0;
   }
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -584,6 +1274,970 @@ body[data-range-pending="1"]::after {
 .table-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
   background-clip: padding-box;
+}
+
+/* ================================================================== *
+ * The shell
+ *
+ * Three objects carry the whole redesign, and they are the only places
+ * real depth is spent:
+ *
+ *   .app-frame     the rounded sheet the entire app sits on
+ *   .sidenav       the labelled column of primary destinations
+ *   .segmented     the dark bar of tabs within the current destination
+ *
+ * The split between the last two is the one the old sidebar comment
+ * argued for and it has not changed: the SIDEBAR is where you can go, the
+ * SEGMENTED bar is what you are looking at once you are there. Moving a
+ * destination into the segmented bar makes it look like a view of the
+ * current page, which is how people end up unable to find it.
+ * ================================================================== */
+
+/*
+ * The frame. One rounded sheet, inset from the page edge, carrying the
+ * only large shadow in the system. Everything else is flat by contrast,
+ * which is what makes this read as the object and not as a background.
+ *
+ * The inset collapses below `lg`: on a phone a 24px margin plus a 32px
+ * radius eats the usable width, so the frame goes edge-to-edge and square.
+ */
+.app-frame {
+  background: var(--surface-app);
+  border-radius: var(--radius-frame);
+  box-shadow: var(--shadow-frame);
+  overflow: clip;
+}
+@media (max-width: 1023px) {
+  .app-frame {
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
+/*
+ * The segmented tab bar. A navy trough with a violet pill behind the
+ * current view.
+ *
+ * The inactive labels sit at 72% white on #17182B, which measures 8.9:1 —
+ * they have to stay genuinely readable, because a segmented control where
+ * only the selected item is legible reads as a single button and nobody
+ * discovers the other tabs.
+ */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--navy);
+  border-radius: 999px;
+}
+.seg-link {
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+  transition:
+    background-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    transform 0.18s var(--ease);
+}
+.seg-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+.seg-link[aria-current="page"] {
+  background: var(--g-primary);
+  color: #ffffff;
+  box-shadow: var(--shadow-violet);
+}
+
+/* ================================================================== *
+ * Signature surfaces
+ * ================================================================== */
+
+/*
+ * The notched panel — the dark block whose title sits in a tab fused to
+ * its top-left corner, with a concave sweep joining the two.
+ *
+ * The concave corner is a masked square, not an image: a radial gradient
+ * punches a quarter-circle out of a block of the panel's own colour, so it
+ * tracks the token in both themes and stays crisp at any zoom. It is
+ * decorative — `aria-hidden` on the span, and the heading inside the tab
+ * is a real heading.
+ */
+.panel-notched {
+  position: relative;
+  background: var(--navy);
+  border-radius: 0 var(--radius-xl) var(--radius-xl) var(--radius-xl);
+  color: #ffffff;
+
+  /*
+   * 🔴 The on-navy palette, declared HERE and fixed in both themes.
+   *
+   * Everything else in this file flips with the theme because the surface under
+   * it flips. This panel's does not — `--navy` is near-black in light and dark
+   * alike — so a token that flipped would be the bug: `--periwinkle-soft` goes
+   * #b9c8ee → #6d80b4 between themes, and the dark value on a dark panel is
+   * 3.4:1, an alarm the reader cannot see. These four are measured against both
+   * navies (7:1 at worst, most above 10:1) and must be re-measured if either
+   * `--navy` moves. Polarity still ships with a caret and its words; the colour
+   * only confirms.
+   */
+  --panel-ink: #ffffff;
+  --panel-ink-soft: #b9c8ee;
+  --panel-good: #7fe3ae;
+  --panel-bad: #efa3a3;
+}
+.panel-tab {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 20px;
+  background: var(--navy);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  color: #ffffff;
+}
+.panel-tab::after {
+  content: "";
+  position: absolute;
+  left: 100%;
+  bottom: 0;
+  width: 22px;
+  height: 22px;
+  background: var(--navy);
+  -webkit-mask: radial-gradient(circle 22px at 100% 0, transparent 0 22px, #000 22px);
+  mask: radial-gradient(circle 22px at 100% 0, transparent 0 22px, #000 22px);
+}
+
+/*
+ * The violet detail card — a glass slab used once per screen, for the one
+ * figure or object the page is actually about.
+ *
+ * `backdrop-filter` is progressive: where it is unsupported the gradient
+ * alone still gives a legible violet ground, so no text ever lands on bare
+ * page. White on the darkest stop is 5.6:1.
+ */
+/*
+ * The violet detail card. It is NOT translucent, and the name is the only thing
+ * left of that idea: white on this violet clears 4.5:1 with so little room that
+ * any alpha below ~0.98 over a light backdrop drops it under — the first stop
+ * measured 3.50:1 at the 0.92 it used to carry. At 0.98 the blur behind it is
+ * invisible, so it was buying a AA failure with nothing.
+ *
+ * It takes --g-primary rather than re-spelling the stops, because re-spelling is
+ * how it drifted in the first place: it kept the pre-darkening #7a6cf6 (3.96:1)
+ * for as long as it went unused. Through the token, gradient-ink.test.ts covers
+ * it whether or not anything renders it.
+ */
+/* ── The labelled sidebar ───────────────────────────────────────────────
+ *
+ * Replaces the header button row that carried Users / Audit log / Settings /
+ * Add client / Sign out. That row survived at desktop width and wrapped into
+ * two ragged lines below it — but the reason it had to go is that it gave no
+ * sense of WHERE you were. Every destination looked like every other, and the
+ * page you were actually on was not among them. A sidebar answers that for
+ * free: the current page is the lime pill.
+ *
+ * Light ground, not the near-black the dashboard's old 72px icon rail wore.
+ * A dark slab reads as a piece of furniture at 72px; the same treatment at
+ * 232px with labels would run a black column down a third of the screen. This
+ * takes --surface-1 and separates from the --surface-app content area by a
+ * single hairline.
+ *
+ * It replaced that rail outright rather than sitting beside it. The rail was
+ * icon-only and paid for it with hover-and-focus tooltips, and its
+ * `[aria-current]` rule never fired once — nothing ever set the attribute,
+ * because a server component has no pathname to compare against. So the one
+ * thing navigation exists to tell you was missing from both of the app's two
+ * navigations at the same time.
+ */
+.sidenav {
+  background: var(--surface-1);
+  /* It sits OUTSIDE the frame, on the page ground, so it needs the frame's own
+     treatment to read as an object rather than as a pale stripe. Same radius
+     family and the same shadow, one step down in radius because it is the
+     smaller of the two panels. */
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-frame);
+}
+
+.sidenav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding-inline: 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    transform 0.18s var(--ease);
+}
+
+.sidenav-link:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+/*
+ * The active pill.
+ *
+ * 🔴 Lime fill with near-black ink, and the SAME pair in both themes. This is
+ * the one arrangement lime is legible in — 13.78:1 — and the reason
+ * `--lime-on` is spelled as "the ink that goes on lime" rather than as a lime
+ * you could set type in. A dark-theme variant that lightened the ink to match
+ * the surrounding text would land white on lime at 1.5:1.
+ *
+ * `:hover` is restated because the hover rule above would otherwise repaint
+ * the current page's pill grey on the way past it.
+ */
+.sidenav-link[aria-current="page"],
+.sidenav-link[aria-current="page"]:hover {
+  background: var(--lime);
+  color: var(--lime-on);
+  font-weight: 600;
+}
+
+/*
+ * Below `lg` the sidebar becomes a horizontal strip that scrolls — a 232px
+ * column and a phone cannot both have the width.
+ */
+@media (max-width: 1023px) {
+  .sidenav {
+    /* Flush strip on a phone — the frame drops its radius and shadow at this
+       same breakpoint, so the two stay in step rather than one floating above
+       a square-cornered sheet. */
+    border-radius: 0;
+    box-shadow: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.card-glass {
+  background: var(--g-primary);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-xl);
+  color: #ffffff;
+  box-shadow: var(--shadow-violet);
+}
+
+/* The hero block — onboarding, upsells, the empty-state pitch. */
+.card-hero {
+  background: var(--g-hero);
+  border-radius: var(--radius-xl);
+  color: #ffffff;
+}
+/*
+ * The primary button inverts on the hero. `.btn-accent` IS the violet gradient,
+ * so on a violet panel it is a button-shaped smudge — the one place in the app
+ * where the accent cannot carry the primary action, and the ground takes over.
+ */
+/*
+ * On the hero the eyebrow inherits white from the panel; its own --text-muted
+ * is a light-ground colour and lands at 1.7:1 here. There is no dimmed white
+ * to demote it with either: on a violet this dark, white only clears AA at
+ * ~0.95 alpha, which is not a visible step down. Size and case do that job.
+ */
+.card-hero .eyebrow {
+  color: #ffffff;
+}
+
+.card-hero .btn-accent {
+  background: #ffffff;
+  color: var(--violet-600);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 8px 20px -8px rgba(12, 10, 40, 0.5);
+}
+.card-hero .btn-accent:hover:not(:disabled) {
+  filter: none;
+  background: #f4f2ff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 12px 26px -8px rgba(12, 10, 40, 0.55);
+}
+
+/* A row lifted out of a list on hover, the way the mockups' lead rows do. */
+.row-lift {
+  transition:
+    box-shadow 0.18s var(--ease),
+    transform 0.18s var(--ease);
+}
+.row-lift:hover {
+  box-shadow: var(--shadow-row);
+  /* The lift itself lives in the interaction-motion block at the end of the
+     file, with every other hover transform, so it is gated on pointer and on
+     reduced-motion like the rest. It used to sit here ungated. */
+}
+
+/* ================================================================== *
+ * Small components
+ * ================================================================== */
+
+/*
+ * Status badges. The fill is the brief's soft green/amber/red; the TEXT on
+ * it is the darker *-ink token, because the fill colours themselves are
+ * around 3:1 and would fail as type. Every badge also carries its word —
+ * the colour is confirmation, never the message.
+ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.badge-good {
+  background: var(--good-bg);
+  color: var(--good-ink);
+}
+.badge-warn {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+.badge-bad {
+  background: var(--bad-bg);
+  color: var(--bad-ink);
+}
+.badge-neutral {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+.badge-accent {
+  background: var(--violet-100);
+  color: var(--violet-600);
+}
+
+/*
+ * Filter chips — the Audit category row, the pipeline campaign filters, the
+ * role and dashboard pickers. Each of those had hand-rolled the same pill in
+ * `var(--series-1)`, the blue that means "spend" in every chart on the site, so
+ * a selected filter and a spend line wore one colour. The pressed state is ink:
+ * a chip is a hard on/off, and ink says that without spending the accent.
+ *
+ * 🔴 `aria-current` is matched by presence, not by the string "true" — the
+ * audit row sets `aria-current="page"`, which is the correct value for a link
+ * that navigates, and an `[aria-current="true"]` selector silently misses it.
+ */
+.chip {
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-size: 13px;
+  transition:
+    background-color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    color 0.16s var(--ease),
+    transform 0.18s var(--ease);
+}
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.chip[aria-pressed="true"],
+.chip[aria-current]:not([aria-current="false"]) {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--surface-1);
+}
+
+/*
+ * Radios and checkboxes keep their native rendering and take the accent through
+ * `accent-color` — one line, and the platform keeps its own hit target, its
+ * focus behaviour, its high-contrast and forced-colors handling and its
+ * animation. Rebuilding them out of divs to change one colour would trade all
+ * of that away. Ten controls across the settings, branding and export forms
+ * were rendering in the browser's default blue.
+ */
+:where(input[type="radio"], input[type="checkbox"]) {
+  accent-color: var(--accent);
+}
+
+/*
+ * File pickers — a label styled as a button, wrapping the real input.
+ *
+ * 🔴 A bare `<input type="file">` renders as the browser's own grey "Choose
+ * file / No file chosen": a different shape, font and colour from every other
+ * control on the page, which reads as an unstyled fragment of a half-built form
+ * rather than as something to click. Two of the three upload controls still
+ * looked like that.
+ *
+ * The input stays in the DOM and keeps its ref, its accept list and its change
+ * handler — it is what the OS picker is attached to, and swapping it for a div
+ * with a click handler would take keyboard access and the file dialog with it.
+ * `sr-only` hides it visually while leaving it focusable, and `:focus-within`
+ * is what makes that focus visible on the label standing in for it.
+ */
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    transform 0.18s var(--ease);
+}
+.file-button:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.file-button:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.file-button:has(input:disabled) {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* Text inputs, selects and textareas across forms. */
+.field {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-size: 14px;
+  transition:
+    border-color 0.16s var(--ease),
+    box-shadow 0.16s var(--ease);
+}
+.field::placeholder {
+  color: var(--text-faint);
+}
+.field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.field:disabled {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/*
+ * Currency symbols set smaller and lighter than their figure, so a column
+ * of money reads as a column of numbers with a unit rather than as
+ * punctuation competing with digits. Applied to a span around the symbol
+ * only — never the whole amount, or the number shrinks with it.
+ */
+.currency-mark {
+  font-size: 0.6em;
+  font-weight: 500;
+  color: var(--text-muted);
+  vertical-align: baseline;
+  margin-right: 0.08em;
+}
+
+/* Uppercase eyebrow labels above a figure or a section. */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ================================================================== *
+ * Glass
+ *
+ * ── Where it is allowed to land ───────────────────────────────────────
+ *
+ * Glass is only glass when something MOVES behind it. Three surfaces in
+ * this app qualify: the sticky header, which the whole page scrolls
+ * under; the popovers, which float over whatever the reader was already
+ * looking at; and the dialog scrim, which has the entire page behind it.
+ *
+ * Everywhere else it is an effect with a bill and no picture.
+ * `backdrop-filter` promotes a compositor layer and re-samples what sits
+ * behind the element on every scroll frame — and on the sidebar, which
+ * stands on a ground that is deliberately inert (see `body`: "the page is
+ * a flat, quiet grey canvas"), all that work blurs a solid colour into
+ * the same solid colour. The lit edge further down is what those surfaces
+ * get instead: the look, for one painted pixel.
+ *
+ * 🔴 It never goes on a table, a card, or anything holding a figure.
+ *
+ * The blur samples what is behind the element, so a 12px tabular number
+ * would sit on a ground that CHANGES as the page scrolls under it —
+ * contrast you cannot measure because it is different every frame, on the
+ * one part of this app that exists to be read quickly. The brief for this
+ * dashboard is dense data that stays legible; a blurred backdrop under a
+ * number is the single effect that trades that away for a screenshot.
+ *
+ * ── The surface has to survive without the blur ───────────────────────
+ *
+ * `backdrop-filter` is the least dependable property in this file: absent
+ * in some engines, switched off in High Contrast, meaningless on paper.
+ * All three cases are handled below, and all three arrive at the same
+ * place — an ordinary opaque panel. That only works because the mixes are
+ * 72% and 88% rather than the 45% that looks better in isolation. See the
+ * token block for the arithmetic.
+ * ================================================================== */
+.glass-bar,
+.glass-panel {
+  background: var(--glass-bg);
+  /* Saturation as well as blur: a plain blur of a coloured backdrop
+     averages toward grey, and a header that greys out over a chart reads
+     as dirty glass rather than as glass. */
+  /* 🔴 The PREFIXED property goes first and the standard one last, and
+     that order is load-bearing rather than cosmetic. Lightning CSS (the
+     minifier `next build` runs) treats the pair as one logical property
+     and keeps only the LAST declaration, re-deriving whatever prefixes
+     the browserslist targets need. Written the other way round the
+     standard `backdrop-filter` is the one dropped from the built
+     stylesheet, and Firefox — which has never shipped the `-webkit-`
+     alias — loses the blur with no warning and no fallback, because
+     `@supports not (...)` below is FALSE there: Firefox supports the
+     property perfectly well, it just never receives the declaration.
+     Check a build with `grep -o '[-a-z]*backdrop-filter' .next/static/
+     chunks/*.css | sort | uniq -c` after touching any of these. */
+  -webkit-backdrop-filter: saturate(180%) blur(var(--glass-blur));
+  backdrop-filter: saturate(180%) blur(var(--glass-blur));
+}
+
+/*
+ * The sticky bar — a page header, or anything the content scrolls beneath.
+ *
+ * 🔴 It owns its own bottom hairline, so do NOT add `border-b` at the call
+ * site. globals.css is unlayered while Tailwind's utilities sit in
+ * `@layer utilities`, so this shorthand outranks every `border-b-*` in the
+ * tree — the same trap `.skeleton { border-radius }` fell into. Owning the
+ * edge outright is the version of that with one answer instead of two.
+ */
+.glass-bar {
+  position: relative;
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--glass-shadow);
+}
+
+/*
+ * The lit edge, as a fading gradient rather than a flat line.
+ *
+ * A hairline at constant strength across a full-width bar reads as a
+ * border somebody forgot to delete. One that fades out at both ends reads
+ * as light catching an edge, which is the entire difference between this
+ * and a div at 72% opacity.
+ *
+ * A pseudo-element rather than an inset box-shadow, because a box-shadow
+ * cannot be a gradient. `pointer-events: none` because it covers the top
+ * edge of a bar whose contents are all controls.
+ */
+.glass-bar::before,
+.segmented::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--glass-sheen) 22%,
+    var(--glass-sheen) 78%,
+    transparent
+  );
+}
+
+/*
+ * The floating panel — popovers, the definition tooltip, the date picker.
+ *
+ * Mixed from --surface-raised because that is the token these already
+ * wore, and at 88% rather than the bar's 72% because a popover holds PROSE
+ * at 12px over arbitrary page content, where the header holds controls
+ * over its own sheet. At 88% over the worst case — a near-black chart —
+ * --text-primary still lands above 12:1.
+ */
+.glass-panel {
+  background: var(--glass-panel-bg);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--shadow-overlay);
+}
+
+/*
+ * The dialog scrim. The one place a blur is unambiguously worth it: the
+ * whole page is behind it, none of it is meant to be read while the dialog
+ * is open, and pushing it out of focus is what stops a reader's eye from
+ * trying. Deliberately light on the blur — 6px, not the bar's 18px — so
+ * the page is still recognisable as the place you will be returned to.
+ */
+.scrim-glass {
+  background: var(--overlay-scrim);
+  /* Prefix first, standard last — see `.glass-bar` above for why the
+     minifier makes that order matter. */
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(120%);
+}
+
+/*
+ * No blur available: fall all the way back to the opaque token.
+ *
+ * This is not a nicety. At 72% with nothing blurring behind it, the
+ * header's own labels sit directly over whatever table row happens to be
+ * passing under them.
+ */
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .glass-bar {
+    background: var(--surface-app);
+  }
+  .glass-panel {
+    background: var(--surface-raised);
+  }
+  .scrim-glass {
+    background: var(--overlay-scrim);
+  }
+}
+
+/*
+ * High Contrast replaces the palette wholesale and switches the blur off.
+ * Left alone the sheen survives as a white line ruled across a
+ * system-coloured bar — the same artefact the section stripe avoids
+ * further up, for the same reason.
+ */
+@media (forced-colors: active) {
+  .glass-bar::before,
+  .segmented::before {
+    display: none;
+  }
+}
+
+/* ================================================================== *
+ * The lit edge on the opaque surfaces
+ *
+ * The surfaces that are meant to read as physical sheets but have nothing
+ * moving behind them get the highlight without the blur. One painted
+ * pixel, no compositor layer, no per-frame resample.
+ *
+ * 🔴 The navy trough takes the same `--glass-sheen` the bar does, and that
+ * is the choice worth stating: `--glass-sheen` dims from 0.8 to 0.14
+ * between themes because the surfaces it usually lands on flip, and
+ * `--navy` does not — it is near-black in both. Using it here therefore
+ * gives the pill a bright edge in light and a faint one in dark, on an
+ * unchanged ground. That is intentional: in light mode the trough sits on
+ * white and needs the edge to separate; in dark it sits on near-black,
+ * where a 0.8 white line would be the brightest thing on the screen.
+ * ================================================================== */
+.segmented {
+  position: relative;
+}
+
+/*
+ * 🔴 Inset past the corner, NOT clipped by `overflow: hidden`.
+ *
+ * Clipping is the obvious way to keep a straight 1px line off a 999px
+ * curve, and it would also cut `--shadow-violet` off the current tab —
+ * the one piece of depth in the control, and the thing that says which
+ * view you are looking at. 20px is where the radius stops: 999px clamps
+ * to half the 40px height.
+ */
+.segmented::before {
+  inset: 0 20px auto;
+}
+
+/* ================================================================== *
+ * Scroll motion — the section reveal
+ *
+ * Each section tips up out of the page as it comes into view: a few
+ * degrees of rotation about its own centre, a short rise, and a fade that
+ * starts already half-visible.
+ *
+ * ── Driven by position, not by a timer ────────────────────────────────
+ *
+ * `animation-timeline: view()` ties progress to where the element is in
+ * the viewport, which is why this can exist at all on a page like this.
+ * A timer-based reveal needs an observer, needs an initial state of
+ * `opacity: 0`, and parks anything below the fold invisible until
+ * something fires — and if that something does not fire, the section is
+ * simply gone. A progress timeline has no such state: scroll position IS
+ * the clock, so the element is always exactly as revealed as its position
+ * says it should be, including on the first paint.
+ *
+ * ── Why it is on the card and not on `main > *` ───────────────────────
+ *
+ * The rotation needs `perspective` on an ancestor, and perspective has a
+ * single vanishing point fixed to the element that declares it. On
+ * `<main>` — a box several thousand pixels tall — that point sits at the
+ * middle of the whole page, so a section near the bottom would be viewed
+ * from 1500px off axis and shear rather than tilt. Declaring it on each
+ * `.section-band` instead gives every section its own vanishing point at
+ * its own centre, which is the only way this reads as depth rather than
+ * as a skew. It also leaves `main > *` free to keep the load stagger it
+ * already has.
+ *
+ * ── Why the fade starts at 0.55 and not at 0 ──────────────────────────
+ *
+ * 🔴 If the timeline is ever inactive — a page short enough not to scroll
+ * is the realistic case — the animation should produce no effect and the
+ * element should render at its base style. "Should". This floor is what
+ * makes the cost of being wrong about that survivable: at 0.55,
+ * --text-primary over --surface-1 still measures about 4.5:1, so the worst
+ * case is a section that looks washed out rather than a section nobody can
+ * read. A floor of 0 would be a blank page with no error and no cause.
+ *
+ * The same reasoning is why the rotation is 4deg and the push-back 40px.
+ * Held at the `from` keyframe forever, that is a section that looks
+ * slightly odd; at 20deg it is a section lying on its back.
+ *
+ * ── Both gates are load-bearing ───────────────────────────────────────
+ *
+ *   @supports  — Firefox has no progress timelines yet. Without the
+ *                guard, `animation: tilt-in both` with a timeline it
+ *                cannot resolve falls back to a TIME-based animation with
+ *                no duration, and the `from` keyframe sticks. Inside the
+ *                guard, those browsers get the existing load stagger and
+ *                nothing else, which is a complete experience.
+ *
+ *   reduced     — this is the exact motion the setting is about: large
+ *                blocks moving in depth. Under it the sections simply
+ *                appear, with the stagger, as they always did.
+ *
+ * `translate` and `rotate`, not `transform`, per the split recorded on the
+ * interaction block below: entrance motion owns the independent transform
+ * properties so that a hover `transform` underneath it still resolves.
+ * `motion-properties.test.ts` holds both halves.
+ * ================================================================== */
+@keyframes tilt-in {
+  from {
+    opacity: 0.55;
+    translate: 0 22px -40px;
+    rotate: x 4deg;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0 0;
+    rotate: x 0deg;
+  }
+}
+
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .section-band {
+      perspective: 1000px;
+    }
+
+    .section-band > * {
+      /*
+       * `linear`, deliberately. An easing curve on a progress timeline is
+       * applied to SCROLL POSITION, not to time — so the section speeds up
+       * and slows down relative to the wheel, which reads as the page
+       * lagging rather than as the section easing.
+       */
+      animation: tilt-in linear both;
+      /*
+       * After the shorthand, never before: `animation` resets both of
+       * these to their initial values, and `animation-timeline: auto` is
+       * the document timeline — a zero-duration time animation that would
+       * pin the `from` keyframe.
+       */
+      animation-timeline: view();
+      /*
+       * `cover`, not `entry`. `entry 100%` is reached when the element's
+       * BOTTOM edge enters the viewport, so a section taller than the
+       * screen would still be revealing itself a full section-height
+       * later. `cover` is measured against the element plus the viewport,
+       * which behaves the same way for a 300px panel and a 2000px table.
+       */
+      animation-range: cover 0% cover 20%;
+    }
+  }
+}
+
+/* ================================================================== *
+ * Smooth scrolling
+ *
+ * Programmatic and anchor-driven scrolls glide instead of jumping: the
+ * skip link, a focus move onto something off-screen, `scrollIntoView`.
+ *
+ * 🔴 This is the whole of it — the wheel and the trackpad are left alone
+ * on purpose. Re-animating native scrolling in JavaScript (the Lenis
+ * class of library) is the usual way this gets done, and on a dashboard it
+ * is the wrong trade twice over: it detaches scroll position from the
+ * input device, which is what makes a long table feel heavy, and it
+ * breaks the progress timelines above, which read the real scroller.
+ *
+ * Gated on reduced-motion because a smooth scroll is still motion the
+ * reader did not ask for — and because a jump is a perfectly good way to
+ * arrive somewhere.
+ * ================================================================== */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/*
+ * Anything scrolled to lands clear of the sticky header rather than under
+ * it. The bar is ~60px, plus ~44px of tab strip on the dashboard; 112px
+ * leaves a little air above the target on both.
+ */
+html {
+  scroll-padding-top: 112px;
+}
+
+/* ================================================================== *
+ * Interaction motion — the hover grow
+ *
+ * Everything the pointer can act on grows a little under it. The transitions
+ * were already plumbed for this and had been for a long time: `.card` has
+ * listed `transform` in its transition since it was written, and the comment
+ * above `.card-interactive:hover` promises cards "lift slightly on hover — a
+ * quiet, premium tell". Nothing ever set a transform, so the lift never
+ * happened and the transition animated a property that never changed.
+ *
+ * ── Why one block at the end, instead of a line per component ─────────
+ *
+ * The two media conditions are the whole design, and both of them are cheaper
+ * to state once:
+ *
+ *   (hover: hover)                    a touch screen fires :hover on tap and
+ *                                     LEAVES IT ON until you touch something
+ *                                     else, so a phone would carry a card stuck
+ *                                     mid-grow after every tap.
+ *
+ *   (prefers-reduced-motion:          the global killswitch further up kills
+ *      no-preference)                 `transition`, NOT `transform`. Under it a
+ *                                     grow would still happen, just instantly —
+ *                                     a hard jump, which is worse than the
+ *                                     animation it was meant to spare them.
+ *                                     Gating the rules out entirely means there
+ *                                     is nothing to neutralise, and the hover
+ *                                     still answers in colour and shadow.
+ *
+ * Stating them once also means position is load-bearing: these rules sit AFTER
+ * every component they touch so they win on order at equal specificity, with no
+ * `!important` anywhere. Keep this block second-to-last, ahead of the print
+ * block — which for its own reasons has to be the last thing in the file.
+ *
+ * (Do not write that block's at-rule out literally in a comment anywhere:
+ * `print-css.test.ts` locates it with a plain `indexOf` over the raw file and
+ * does not strip comments, so prose naming it hijacks the scan and five print
+ * assertions start measuring whatever block follows the sentence instead.)
+ *
+ * ── `transform`, never `scale`/`translate` ────────────────────────────
+ *
+ * Tailwind 4 compiles `scale-*` and `translate-*` to the INDEPENDENT `scale`
+ * and `translate` properties, not to `transform`. globals.css is unlayered
+ * while Tailwind's utilities live in `@layer utilities`, so a bare `scale:` on
+ * a component class here would outrank every `hover:scale-*` at every call
+ * site — the same trap `.skeleton { border-radius: 6px }` fell into when it
+ * beat every `rounded-*` in the tree. Using `transform` leaves both properties
+ * free for call sites, and composes with them rather than replacing them.
+ *
+ * That is also why `@keyframes rise` was moved onto `translate` — see the note
+ * there. Entrance motion and interaction motion now own one property each.
+ *
+ * ── Why the numbers are this small ────────────────────────────────────
+ *
+ * A scaled box has to stay inside its own gutter or it slides under the card
+ * beside it, and a grid item that overlaps its neighbour needs a z-index to
+ * come back on top — which on the client cards would drop the absolutely
+ * positioned Remove button behind the link that grew over it. Sizing the grow
+ * to the gap avoids that whole class of problem, so no z-index is needed here.
+ *
+ *   roll-up grid   1100 max-width − 64 padding = 1036, 3 columns, 12px gaps
+ *                  → 337px cards; 1.02 grows 6.7px, 3.4px per side, into a
+ *                    12px gutter. 5.3px of clearance left.
+ *   KPI row        same frame, 4 columns → 250px tiles; 1.02 grows 5.0px,
+ *                    2.5px per side. 7px left.
+ *   phone, 1 col   368px card, 1.85px per side against main's 16px padding —
+ *                    clear of `.app-frame`'s `overflow: clip`.
+ *
+ * The other reason to keep it small: a non-integer scale rasterises text at the
+ * pre-scale size and stretches it, so a card that grows 6% reads as a card that
+ * went slightly out of focus. At 2% that is not visible.
+ *
+ * ── What deliberately does NOT grow ───────────────────────────────────
+ *
+ * 🔴 `.row-hover` — table rows. A scaled `<tr>` takes its cells with it and
+ * they stop lining up with the header and with every other row, so the grow
+ * would read as the table breaking. Rows keep the background wash they had;
+ * only their easing was brought onto `--ease`. `.row-lift` already lifts 1px
+ * and is left as it is for the same reason.
+ * ================================================================== */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  /* Lift and grow together: the shadow under it is already changing to
+     `--shadow-elevated`, and a shadow that deepens while the box stays put
+     reads as the light moving rather than the card. */
+  .card-interactive:hover {
+    transform: translateY(-2px) scale(1.02);
+  }
+
+  /*
+   * Buttons take a larger factor for a similar amount of travel — 1.03 on a
+   * 120px button is 3.6px, about what 1.02 is on a 337px card. Scaling every
+   * surface by the same number would make the small controls look inert.
+   */
+  .btn-accent:hover:not(:disabled),
+  .btn-lime:hover:not(:disabled),
+  .btn-ghost:hover:not(:disabled) {
+    transform: scale(1.03);
+  }
+
+  /*
+   * 🔴 The press has to be restated here, not left to the `:active` rules
+   * further up. A pressed button matches BOTH `:hover:not(:disabled)` and
+   * `:active:not(:disabled)`, the two are the same specificity, and this block
+   * is later in the file — so without this the hover grow would win and the
+   * button would stay big and still while being clicked. Settling back under
+   * 1 makes the press read as a press against the grow it interrupts.
+   */
+  .btn-accent:active:not(:disabled),
+  .btn-lime:active:not(:disabled) {
+    transform: translateY(0.5px) scale(0.99);
+  }
+
+  /* Small pills: bigger factor again, same reason as the buttons. */
+  .chip:hover,
+  .seg-link:hover {
+    transform: scale(1.04);
+  }
+
+  .file-button:hover {
+    transform: scale(1.02);
+  }
+
+  /*
+   * The sidebar rail is 232px with 16px of padding, so a 200px link growing 2%
+   * puts 2px a side into that padding and never touches the rail's edge. The
+   * current-page pill is included on purpose: excluding it would make the one
+   * item you are actually on the only dead thing in the list.
+   */
+  .sidenav-link:hover {
+    transform: scale(1.02);
+  }
+
+  /* Pre-dates the rest of this block; moved here so the gate covers it too. */
+  .row-lift:hover {
+    transform: translateY(-1px);
+  }
 }
 
 /* ================================================================== *
@@ -629,6 +2283,7 @@ body[data-range-pending="1"]::after {
     color-scheme: light;
 
     --surface-page: #ffffff;
+    --surface-app: #ffffff;
     --surface-1: #ffffff;
     --surface-2: #f3f3f0;
     --surface-raised: #ffffff;
@@ -637,6 +2292,9 @@ body[data-range-pending="1"]::after {
     --text-primary: #0b0b0b;
     --text-secondary: #45443f;
     --text-muted: #5c5b56;
+    /* Darker than on screen: faint ink is a screen affordance, and #a1a1ad
+       laser-printed at 300dpi is close to invisible. */
+    --text-faint: #6f6e69;
 
     --border: rgba(11, 11, 11, 0.18);
     --border-strong: rgba(11, 11, 11, 0.28);
@@ -651,6 +2309,23 @@ body[data-range-pending="1"]::after {
     --series-6: #008300;
     --series-7: #4a3aa7;
     --series-8: #e34948;
+    --series-1-ink: #2469bd;
+    --series-2-ink: #b94212;
+    --series-3-ink: #137854;
+    --series-4-ink: #8e6100;
+    --series-5-ink: #c82361;
+    --series-6-ink: #007b00;
+    --series-7-ink: #4a3aa7;
+    --series-8-ink: #ce211f;
+
+    --lime: #bef264;
+    --lime-hover: #aee245;
+    --lime-on: #16161d;
+
+    --tint-violet: #ece9fe;
+    --tint-blue: #dfedff;
+    --tint-mint: #d4f5e5;
+    --tint-amber: #fbeecd;
 
     --seq-250: #86b6ef;
     --seq-300: #6da7ec;
@@ -665,8 +2340,39 @@ body[data-range-pending="1"]::after {
     --status-warning: #b07800;
     --status-serious: #c25a2c;
     --status-critical: #c0392b;
+    /* Paper is a light ground, so the light-theme value is the correct one. */
+    --status-ink: #ffffff;
     --delta-good: #006300;
     --delta-bad: #c0392b;
+
+    /* Badge and alert grounds. The dark theme's versions are near-black
+       tints, which print as solid blocks with the label lost inside. */
+    --good-bg: #dcf5e9;
+    --good-ink: #14714a;
+    --warn-bg: #fbf0d6;
+    --warn-ink: #8a6a12;
+    --warn-line: #e8cfa0;
+    --bad-bg: #fbe2e2;
+    --bad-ink: #a3262a;
+    --bad-line: #f0cacb;
+
+    /* Brand and the dark shell surfaces. A report carries a violet header
+       and the occasional dark panel; those are intentional ink, so they
+       keep their light-theme values rather than the dark theme's lifted
+       ones (#8d7dff prints as a washed lilac). */
+    --violet-100: #eceafe;
+    --violet-400: #7a6cf6;
+    --violet-500: #5b4cf0;
+    --violet-600: #4a3bd8;
+    --accent: var(--violet-500);
+    --ink: #1e1e24;
+    --navy: #17182b;
+    --navy-raised: #22233a;
+
+    --periwinkle: #8da4de;
+    --periwinkle-soft: #b9c8ee;
+    --butter: #e9d79a;
+    --blush: #efa3a3;
 
     /* Elevation is a screen idiom. On paper a border does the job and a
        grey drop shadow just muddies the edge. */
@@ -674,12 +2380,23 @@ body[data-range-pending="1"]::after {
     --shadow-elevated: none;
     --shadow-overlay: none;
     --shadow-sm: none;
+    --shadow-frame: none;
+    --shadow-violet: none;
+    --shadow-row: none;
     /* Print forces a light ground, so the light-theme value is the correct one. */
     --accent-ink: #ffffff;
     --overlay-scrim: rgba(17, 17, 22, 0.42);
     --card-highlight: none;
     --page-glow: transparent;
     --accent-glow: none;
+    /* Glass. The blur is switched off further down, so what is left is a
+       plain panel and the two decorative tokens have nothing to decorate:
+       a lit edge is light on a screen and a grey rule on paper. The edge
+       keeps a value because it is a real outline — a popover printed from
+       a share link still needs a border. */
+    --glass-edge: rgba(24, 24, 44, 0.12);
+    --glass-sheen: transparent;
+    --glass-shadow: none;
   }
 
   /* Honour the palette rather than letting the browser "save ink" by
@@ -703,7 +2420,29 @@ body[data-range-pending="1"]::after {
     min-height: 0;
   }
 
-  /* See failure (2) above. */
+  /*
+   * See failure (2) above.
+   *
+   * Both entrances, not one. `main > *` carries the load stagger;
+   * `.section-band > *` carries the scroll reveal, whose `from` keyframe
+   * is a section at 55% opacity pushed 40px into the page — and a
+   * progress timeline holds that state until the reader scrolls, which
+   * they cannot do on paper. `animation: none` is enough on its own:
+   * with no animation applying, `opacity`, `translate` and `rotate` fall
+   * back to values nothing in this stylesheet ever sets. The other two
+   * declarations are belt and braces and pre-date the reveal.
+   *
+   * 🔴 `main > *` has to stay the LAST selector before the opening brace.
+   * `print-css.test.ts` finds this rule with a regex that expects that brace
+   * to follow the star directly, so a comma after it makes the test report
+   * the entrance animation as un-killed — see failure (2) for the cost.
+   *
+   * (And nothing in this block's comments may contain a brace of either
+   * kind. The same test locates the block by counting braces from the
+   * at-rule over the RAW file, comments included, so one in a sentence
+   * closes the block early and it reads the rest of the file as print CSS.)
+   */
+  .section-band > *,
   main > * {
     animation: none !important;
     opacity: 1 !important;
@@ -717,16 +2456,46 @@ body[data-range-pending="1"]::after {
     position: static !important;
   }
 
-  /* Backdrop blur has no meaning on paper and renders as a grey wash. */
-  header {
-    backdrop-filter: none !important;
+  /* Backdrop blur has no meaning on paper and renders as a grey wash.
+     The three glass classes are named as well as `header`, because the
+     dialog scrim and the popovers are not headers and a share-link report
+     printed with a dialog open would otherwise carry a grey rectangle
+     across the sheet. */
+  header,
+  .glass-bar,
+  .glass-panel,
+  .scrim-glass {
     -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* A lit edge is light on a screen and a grey rule on paper. */
+  .glass-bar::before,
+  .segmented::before {
+    display: none !important;
   }
 
   /* Horizontal scroll is a screen affordance; on paper it CLIPS, and the
      columns past the fold are simply gone with nothing to indicate it. */
   .table-scroll {
     overflow: visible !important;
+  }
+
+  /* The frame is a screen object. `overflow: clip` on it would cut every
+     sheet after the first down to the first page box, which is failure (1)
+     and (2)'s sibling: a report that prints exactly one page and silently
+     drops the rest. */
+  .app-frame {
+    overflow: visible !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  /* Navigation on paper is a list of words nobody can click. */
+  .sidenav,
+  .segmented {
+    display: none !important;
   }
 
   /* Controls, navigation and anything that only does something when
@@ -755,6 +2524,26 @@ body[data-range-pending="1"]::after {
   h3 {
     break-after: avoid;
     page-break-after: avoid;
+  }
+
+  /*
+   * Section cards keep their 3px hue bar and lose the 140px tint wash.
+   *
+   * The wash is ink on paper: on a mono printer it renders as a grey smear
+   * across the top of every section, which is worse than no colour at all. The
+   * bar survives because at 3px it reads as a divider even in grey.
+   *
+   * Written as a `background-size` override rather than a second
+   * `background-image`, so the two layers declared on screen stay the two
+   * layers here — collapsing the wash to `0 0` removes it without renumbering
+   * anything.
+   */
+  .section-band > .card,
+  .section-band > section.card,
+  .section-band > div > .card {
+    background-size:
+      100% 3px,
+      0 0;
   }
 }
 

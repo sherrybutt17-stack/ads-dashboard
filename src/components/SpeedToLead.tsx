@@ -144,7 +144,7 @@ export function SpeedToLeadWidget({
       <div>
         <h2
           className="text-[11px] font-semibold uppercase tracking-wide"
-          style={{ color: "var(--text-muted)" }}
+          style={{ color: "var(--section-ink, var(--text-muted))" }}
         >
           Speed to lead
         </h2>

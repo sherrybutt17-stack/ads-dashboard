@@ -72,6 +72,38 @@ const FLOOR = 4.5;
 const resolve = (dark: Record<string, string>, name: string) =>
   dark[name] ?? LIGHT[name];
 
+const TEXT_INK = ["--text-primary", "--text-secondary", "--text-muted"] as const;
+
+/**
+ * Body ink on every surface it can land on.
+ *
+ * The gap this closes: a token checked only against the white card passes and
+ * still fails in the app. --text-muted at #6b6b78 measured 5.25:1 on
+ * --surface-1 and 4.34:1 on --surface-page, and the report route puts muted
+ * copy straight on the page ground — so the surface that was never checked was
+ * the one carrying most of the text.
+ */
+describe("body ink contrast", () => {
+  for (const [label, s] of [
+    ["light", LIGHT],
+    ["dark (media query)", DARK_MEDIA],
+    ["dark (toggle)", DARK_TOGGLE],
+  ] as const) {
+    it(`every text ink clears ${FLOOR}:1 on every ${label} surface`, () => {
+      const bad: string[] = [];
+      for (const ink of TEXT_INK) {
+        const fg = resolve(s, ink);
+        for (const surf of SURFACES) {
+          const bg = resolve(s, surf);
+          const r = contrast(fg, bg);
+          if (r < FLOOR) bad.push(`${ink} ${fg} on ${surf} ${bg} = ${r.toFixed(2)}:1`);
+        }
+      }
+      expect(bad, bad.join("\n")).toEqual([]);
+    });
+  }
+});
+
 describe("status colour contrast", () => {
   it("parses the scopes it is checking", () => {
     // Without this the loops below can pass vacuously on an empty map.
@@ -140,6 +172,88 @@ describe("status colour contrast", () => {
     // colour, which is the kind of thing nobody notices until it is wrong.
     for (const status of STATUS) {
       expect(DARK_MEDIA[status], status).toBe(DARK_TOGGLE[status]);
+    }
+  });
+
+  /*
+   * The inverse case: a status colour used as a FILL, with a label on top.
+   *
+   * 🔴 The block above checks a status token as `color:` on a surface. Five call
+   * sites do the opposite — "Remove client", "Finish setup", the ✕ badge on a
+   * broken check and HealthChecklist's two dot badges paint the status token as
+   * `background` and put a label on it. Those labels were hard-coded `#fff`,
+   * which is correct in light and wrong in dark, where every status token flips
+   * to a LIGHT value: white on the dark --status-warning measured 1.83:1.
+   * --status-ink is the token that flips with them.
+   */
+  for (const [themeName, theme] of [
+    ["light", LIGHT],
+    ["dark (media query)", DARK_MEDIA],
+    ["dark (theme toggle)", DARK_TOGGLE],
+  ] as const) {
+    it(`🔴 --status-ink clears ${FLOOR}:1 on every ${themeName} status fill`, () => {
+      const ink = resolve(theme, "--status-ink");
+      expect(ink, `--status-ink is not declared in ${themeName} or in :root`).toBeTruthy();
+      const failures: string[] = [];
+      for (const status of STATUS) {
+        const bg = resolve(theme, status);
+        const ratio = contrast(ink, bg);
+        if (ratio < FLOOR) {
+          failures.push(`--status-ink ${ink} on ${status} ${bg} = ${ratio.toFixed(2)}:1`);
+        }
+      }
+      expect(
+        failures,
+        `Unreadable label on a status fill in ${themeName}:\n  ${failures.join("\n  ")}`,
+      ).toEqual([]);
+    });
+  }
+
+  it("🔴 --accent-ink clears 4.5:1 on every accent it can land on", () => {
+    /*
+     * --accent is not a stylesheet value: `lib/accent.ts` writes one of six
+     * per-client hexes onto a style object, and the dashboards that get no
+     * client fall back to --violet-500. --accent-ink has to work on all of
+     * them, in both themes — nine buttons paint a label on a flat --accent.
+     */
+    const ACCENT_TS = readFileSync(
+      join(process.cwd(), "src", "lib", "accent.ts"),
+      "utf8",
+    );
+    const perClient = [...ACCENT_TS.matchAll(/color:\s*"(#[0-9a-fA-F]{6})"/g)].map(
+      (m) => m[1].toLowerCase(),
+    );
+    // Guards against the palette being renamed out from under this test.
+    expect(perClient.length, "no per-client accents parsed from lib/accent.ts")
+      .toBeGreaterThanOrEqual(6);
+
+    const failures: string[] = [];
+    for (const [themeName, theme] of [
+      ["light", LIGHT],
+      ["dark (media query)", DARK_MEDIA],
+      ["dark (theme toggle)", DARK_TOGGLE],
+    ] as const) {
+      const ink = resolve(theme, "--accent-ink");
+      expect(ink, `--accent-ink is not declared in ${themeName} or in :root`).toBeTruthy();
+      for (const bg of [resolve(theme, "--violet-500"), ...perClient]) {
+        const ratio = contrast(ink, bg);
+        // The per-client set is solved for worst-of-both-themes and tops out
+        // near 4.5; see the long note in lib/accent.ts. 4:1 is its real floor.
+        const floor = perClient.includes(bg) ? 4 : FLOOR;
+        if (ratio < floor) {
+          failures.push(`${themeName}: --accent-ink ${ink} on ${bg} = ${ratio.toFixed(2)}:1`);
+        }
+      }
+    }
+    expect(
+      failures,
+      `Unreadable label on an accent fill:\n  ${failures.join("\n  ")}`,
+    ).toEqual([]);
+  });
+
+  it("🔴 the two dark scopes declare identical ink values", () => {
+    for (const ink of ["--status-ink", "--accent-ink"]) {
+      expect(DARK_MEDIA[ink], ink).toBe(DARK_TOGGLE[ink]);
     }
   });
 });

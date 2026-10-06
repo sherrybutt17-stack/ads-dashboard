@@ -182,7 +182,7 @@ export function CommentaryBlock({ commentary }: { commentary: CommentaryForRepor
   return (
     <section className="card avoid-break p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           {monthLabel(month)}
         </h2>
         {/*

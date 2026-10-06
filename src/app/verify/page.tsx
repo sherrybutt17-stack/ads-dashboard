@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { AuthShell, AuthHeading, AuthError } from "@/components/AuthShell";
+import { Icon } from "@/components/Icon";
 
 /**
  * Confirm an email address.
@@ -54,65 +56,54 @@ function VerifyForm() {
     }
   }
 
+  if (state === "done") {
+    return (
+      <AuthShell pitch="You're in. Let's set up your first client.">
+        <div
+          className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-lg)]"
+          style={{ background: "var(--good-bg)", color: "var(--good-ink)" }}
+        >
+          <Icon name="check" size={20} />
+        </div>
+        <div className="mt-5">
+          <AuthHeading title="Email confirmed">
+            Your address is confirmed. Sign in to set up your first client.
+          </AuthHeading>
+        </div>
+        <Link href="/login" className="btn-accent mt-5 w-full">
+          Sign in
+        </Link>
+      </AuthShell>
+    );
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <div className="card w-full max-w-sm p-6">
-        <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-          {state === "done" ? "Email confirmed" : "Confirm your email"}
-        </h1>
+    <AuthShell pitch="One click and you're done.">
+      <AuthHeading title="Confirm your email">
+        {token
+          ? "One click and you're done."
+          : "This page needs the link from your confirmation email. Open that link directly rather than typing the address."}
+      </AuthHeading>
 
-        {state === "done" ? (
-          <>
-            <p
-              className="mt-2 text-[13px] leading-relaxed"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              Your address is confirmed. Sign in to set up your first client.
-            </p>
-            <Link
-              href="/login"
-              className="btn-accent mt-4 block w-full rounded-[8px] px-3 py-2 text-center text-[13px] font-medium"
-            >
-              Sign in
-            </Link>
-          </>
-        ) : !token ? (
-          <p className="mt-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
-            This page needs the link from your confirmation email. Open that link
-            directly rather than typing the address.
-          </p>
-        ) : (
-          <>
-            <p
-              className="mt-2 text-[13px] leading-relaxed"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              One click and you&rsquo;re done.
-            </p>
+      {token && (
+        <>
+          {error && <AuthError>{error}</AuthError>}
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={state === "busy"}
+            className="btn-accent mt-5 w-full"
+          >
+            {state === "busy" ? "Confirming…" : "Confirm my email"}
+          </button>
+        </>
+      )}
 
-            {error && (
-              <p className="mt-2 text-xs" style={{ color: "var(--status-critical)" }}>
-                {error}
-              </p>
-            )}
-
-            <button
-              type="button"
-              onClick={confirm}
-              disabled={state === "busy"}
-              className="btn-accent mt-4 w-full rounded-[8px] px-3 py-2 text-[13px] font-medium"
-            >
-              {state === "busy" ? "Confirming…" : "Confirm my email"}
-            </button>
-          </>
-        )}
-
-        <p className="mt-3 text-[11px]" style={{ color: "var(--text-muted)" }}>
-          <Link href="/login" className="hover:underline">
-            Back to sign in
-          </Link>
-        </p>
-      </div>
-    </div>
+      <p className="mt-4 text-[12px]" style={{ color: "var(--text-secondary)" }}>
+        <Link href="/login" className="hover:underline">
+          Back to sign in
+        </Link>
+      </p>
+    </AuthShell>
   );
 }

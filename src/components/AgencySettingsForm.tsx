@@ -20,7 +20,7 @@ const inputStyle = {
   background: "var(--surface-1)",
   color: "var(--text-primary)",
 } as const;
-const INPUT_CLASS = "w-full rounded-[8px] border px-3 py-2 text-[13px]";
+const INPUT_CLASS = "w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]";
 
 type MarkMode = AgencySettings["agencyMarkMode"];
 
@@ -126,7 +126,7 @@ export function AgencySettingsForm({
   return (
     <section className="card flex flex-col gap-5 p-5">
       <div>
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Your mark
         </h2>
         <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
@@ -207,23 +207,26 @@ export function AgencySettingsForm({
             <img
               src={`/api/agency/logo?v=${logoVersion}`}
               alt="Your wordmark"
-              className="h-9 w-auto max-w-[180px] rounded border object-contain px-2 py-1"
+              className="h-9 w-auto max-w-[180px] rounded-[var(--radius-sm)] border object-contain px-2 py-1"
               style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
             />
           )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="text-[12px]"
-            style={{ color: "var(--text-secondary)" }}
-            onChange={(e) => uploadLogo(e.target.files?.[0] ?? null)}
-            disabled={busy}
-          />
+          {/* The real input, hidden but focusable — see `.file-button`. */}
+          <label className="file-button">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="sr-only"
+              onChange={(e) => uploadLogo(e.target.files?.[0] ?? null)}
+              disabled={busy}
+            />
+            {busy ? "Uploading…" : hasLogo ? "Replace wordmark" : "Choose a wordmark"}
+          </label>
           {hasLogo && (
             <button
               type="button"
-              className="rounded-[8px] border px-2.5 py-1 text-[12px]"
+              className="rounded-[var(--radius-sm)] border px-2.5 py-1 text-[12px]"
               style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
               onClick={() => uploadLogo(null)}
               disabled={busy}
@@ -241,8 +244,7 @@ export function AgencySettingsForm({
       <div className="flex items-center gap-3">
         <button
           type="button"
-          className="rounded-[8px] px-3 py-2 text-[13px] font-medium"
-          style={{ background: "var(--series-1)", color: "#fff", opacity: busy ? 0.6 : 1 }}
+          className="btn-lime"
           onClick={save}
           disabled={busy}
         >

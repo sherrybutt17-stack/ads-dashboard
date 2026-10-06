@@ -3,6 +3,12 @@
 import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import {
+  AuthShell,
+  AuthHeading,
+  AuthField,
+  AuthError,
+} from "@/components/AuthShell";
 
 function LoginForm() {
   const router = useRouter();
@@ -39,109 +45,56 @@ function LoginForm() {
     }
   }
 
-  const inputStyle = {
-    borderColor: "var(--border-strong)",
-    background: "var(--surface-1)",
-    color: "var(--text-primary)",
-  } as const;
-
   return (
-    <form onSubmit={submit} className="card w-full max-w-sm p-6">
-      <div className="mb-5 flex items-center gap-3">
-        <div
-          aria-hidden="true"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] text-[17px] font-bold text-white"
-          style={{
-            background: "linear-gradient(135deg, #4a97ee 0%, #1c5cab 100%)",
-            boxShadow:
-              "0 4px 14px -4px rgba(28, 92, 171, 0.6), inset 0 1px 0 rgba(255,255,255,0.28)",
-          }}
-        >
-          ◆
-        </div>
-        <div className="leading-tight">
-          <div
-            className="text-[15px] font-semibold"
-            style={{ color: "var(--text-primary)" }}
-          >
-            Ads + CRM
-          </div>
-          <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-            Live pipeline reporting
-          </div>
-        </div>
-      </div>
-
-      <h1
-        className="text-base font-semibold"
-        style={{ color: "var(--text-primary)" }}
-      >
-        Sign in
-      </h1>
-      <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+    <form onSubmit={submit}>
+      <AuthHeading title="Sign in">
         Use the email and password you were given.
-      </p>
+      </AuthHeading>
 
-      <label className="mt-4 block">
-        <span
-          className="text-[11px] font-medium tracking-wider uppercase"
-          style={{ color: "var(--text-muted)" }}
-        >
-          Email
-        </span>
-        <input
-          type="email"
-          autoFocus
-          autoComplete="username"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@example.com"
-          className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
-          style={inputStyle}
-        />
-      </label>
+      <AuthField
+        label="Email"
+        type="email"
+        autoFocus
+        autoComplete="username"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="you@example.com"
+      />
 
-      <label className="mt-3 block">
-        <span
-          className="text-[11px] font-medium tracking-wider uppercase"
-          style={{ color: "var(--text-muted)" }}
-        >
-          Password
-        </span>
-        <input
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
-          style={inputStyle}
-        />
-      </label>
+      <AuthField
+        label="Password"
+        type="password"
+        autoComplete="current-password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
 
-      {error && (
-        <p className="mt-2 text-xs" style={{ color: "var(--status-critical)" }}>
-          {error}
-        </p>
-      )}
+      {error && <AuthError>{error}</AuthError>}
 
       <button
         type="submit"
         disabled={busy || !password}
-        className="btn-accent mt-4 w-full rounded-[8px] px-3 py-2 text-[13px] font-medium"
+        className="btn-accent mt-5 w-full"
       >
         {busy ? "Checking…" : "Sign in"}
       </button>
 
-      <p className="mt-3 text-[11px]" style={{ color: "var(--text-muted)" }}>
+      <p
+        className="mt-4 text-[12px]"
+        style={{ color: "var(--text-secondary)" }}
+      >
         <Link href="/forgot" className="hover:underline">
           Forgot your password?
         </Link>
-      </p>
-      <p className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+        {" · "}
         <Link href="/signup" className="hover:underline">
           Create an agency
         </Link>
-        {" · "}
+      </p>
+      <p
+        className="mt-3 border-t pt-3 text-[11px] leading-relaxed"
+        style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+      >
         Agency staff: leave email blank to use the shared admin password. It is
         accepted only while this deployment has no user accounts, or when it is
         bound to a named one.
@@ -152,10 +105,10 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <Suspense fallback={<div className="skeleton h-64 w-full max-w-sm" />}>
+    <AuthShell>
+      <Suspense fallback={<div className="skeleton h-64 w-full rounded-[var(--radius-lg)]" />}>
         <LoginForm />
       </Suspense>
-    </div>
+    </AuthShell>
   );
 }

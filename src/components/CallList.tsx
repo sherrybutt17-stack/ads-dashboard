@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import {
   MAX_LISTED,
   type CallListRow,
@@ -66,13 +67,14 @@ function Row({
             {row.name ?? "Unnamed lead"}
           </span>
           <span
-            className="shrink-0 rounded-[5px] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase"
-            style={{
-              background: urgent
-                ? "color-mix(in srgb, var(--status-critical) 14%, transparent)"
-                : "var(--surface-2)",
-              color: urgent ? "var(--status-critical)" : "var(--text-muted)",
-            }}
+            className={`shrink-0 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase${
+              urgent ? " tint-badge" : ""
+            }`}
+            style={
+              urgent
+                ? ({ "--tint": "var(--status-critical)" } as CSSProperties)
+                : { background: "var(--surface-2)", color: "var(--text-muted)" }
+            }
           >
             {KIND_LABEL[row.kind]}
           </span>
@@ -124,7 +126,7 @@ export function CallListPanel({
 }) {
   const header = (
     <div>
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Call these people
       </h2>
       <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -218,7 +220,7 @@ export function CallListPanel({
       {header}
 
       <div
-        className="mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[10px] p-3.5"
+        className="mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[var(--radius)] p-3.5"
         style={{ background: "var(--surface-2)" }}
       >
         <span className="tnum text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>

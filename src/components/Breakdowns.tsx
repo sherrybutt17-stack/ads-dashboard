@@ -7,6 +7,7 @@ import type { SegmentBenchmark } from "@/lib/metrics/benchmark";
 import type { BreakdownKey } from "@/db/schema";
 import { DataState, PipeNotice, type DataStateProps } from "@/components/DataState";
 import { Icon } from "@/components/Icon";
+import { CategoryChart } from "@/components/CategoryChart";
 
 /**
  * Where the money actually went — by region, placement, device, age and gender.
@@ -57,7 +58,7 @@ export function Breakdowns({
   return (
     <section className="card overflow-hidden">
       <div className="px-5 py-4">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Where the money went
         </h2>
         <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -149,7 +150,43 @@ function BreakdownPanel({
         </p>
       </div>
 
-      <table className="w-full text-[12px]">
+      {/*
+        The same spend, as a shape.
+
+        🔴 The withheld spend is a SLICE, not an omission. This panel exists
+        because Meta's segments do not sum to the account total — it withholds
+        any segment below its privacy threshold — and a circle drawn from the
+        reported segments alone would silently renormalise that shortfall away,
+        showing a 60%-reported panel as a complete accounting of the budget.
+        That is the exact misreading the table below already spends a paragraph
+        preventing, and a chart that contradicted it would undo the paragraph.
+        So the gap is drawn, labelled, and grey.
+      */}
+      <CategoryChart
+        storageKey={`breakdown.${group.key}`}
+        measure="Spend"
+        format={{ kind: "money", currency }}
+        height={200}
+        data={[
+          ...group.segments.map((seg) => ({
+            key: seg.value,
+            label: seg.value,
+            value: seg.spend,
+          })),
+          ...(group.unsegmentedSpend > 0
+            ? [
+                {
+                  key: "__unsegmented__",
+                  label: "Not reported",
+                  value: group.unsegmentedSpend,
+                },
+              ]
+            : []),
+        ]}
+        empty={`No ${LABEL[group.key].toLowerCase()} spend in this range`}
+      />
+
+      <table className="mt-4 w-full text-[12px]">
         {/*
           A real <caption>, not a paragraph after the table: it associates the
           note with the table for a screen reader, which reads it BEFORE the

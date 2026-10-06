@@ -50,7 +50,7 @@ export function SignOut() {
       <button
         onClick={signOut}
         disabled={busy}
-        className="rounded-[9px] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)] disabled:opacity-60"
+        className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)] disabled:opacity-60"
         style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
       >
         {busy ? "Signing out…" : "Sign out"}
