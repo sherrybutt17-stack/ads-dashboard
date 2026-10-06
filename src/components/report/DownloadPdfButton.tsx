@@ -83,7 +83,7 @@ export function DownloadPdfButton({
         onClick={download}
         disabled={state === "working"}
         aria-busy={state === "working"}
-        className="inline-flex items-center gap-1.5 rounded-[8px] border px-3 py-1.5 text-[12px] font-medium transition-colors hover:opacity-80 disabled:opacity-60"
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-1.5 text-[12px] font-medium transition-colors hover:opacity-80 disabled:opacity-60"
         style={{
           borderColor: "var(--border-strong)",
           background: "var(--surface-1)",

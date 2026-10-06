@@ -161,7 +161,7 @@ export function ReportSchedule({
   if (loadError) {
     return (
       <section className="card p-5" aria-label="Scheduled report">
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Email this report on a schedule
         </h2>
         <p className="mt-2 text-[13px]" style={{ color: "var(--status-critical)" }}>
@@ -186,7 +186,7 @@ export function ReportSchedule({
 
   return (
     <section className="card p-5" aria-label="Scheduled report">
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Email this report on a schedule
       </h2>
       <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -196,7 +196,7 @@ export function ReportSchedule({
 
       {blocked && (
         <p
-          className="mt-3 rounded-[10px] border px-3 py-2.5 text-[12.5px] leading-relaxed"
+          className="mt-3 rounded-[var(--radius)] border px-3 py-2.5 text-[12.5px] leading-relaxed"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -260,7 +260,7 @@ export function ReportSchedule({
               onChange={(e) =>
                 setDraft({ ...draft, cadence: e.target.value as Schedule["cadence"] })
               }
-              className="mt-1 w-full rounded-[8px] border px-2.5 py-2 text-[13px]"
+              className="mt-1 w-full rounded-[var(--radius-sm)] border px-2.5 py-2 text-[13px]"
               style={{
                 borderColor: "var(--border-strong)",
                 background: "var(--surface-1)",
@@ -278,7 +278,7 @@ export function ReportSchedule({
               value={draft.sendHour}
               disabled={busy !== null}
               onChange={(e) => setDraft({ ...draft, sendHour: Number(e.target.value) })}
-              className="mt-1 w-full rounded-[8px] border px-2.5 py-2 text-[13px]"
+              className="mt-1 w-full rounded-[var(--radius-sm)] border px-2.5 py-2 text-[13px]"
               style={{
                 borderColor: "var(--border-strong)",
                 background: "var(--surface-1)",
@@ -306,7 +306,7 @@ export function ReportSchedule({
             disabled={busy !== null}
             onChange={(e) => setRecipientText(e.target.value)}
             placeholder="owner@example.com, partner@example.com"
-            className="mt-1 w-full rounded-[8px] border px-2.5 py-2 text-[13px]"
+            className="mt-1 w-full rounded-[var(--radius-sm)] border px-2.5 py-2 text-[13px]"
             style={{
               borderColor: "var(--border-strong)",
               background: "var(--surface-1)",
@@ -326,7 +326,7 @@ export function ReportSchedule({
             value={draft.linkTtlDays}
             disabled={busy !== null}
             onChange={(e) => setDraft({ ...draft, linkTtlDays: Number(e.target.value) })}
-            className="mt-1 w-full rounded-[8px] border px-2.5 py-2 text-[13px] sm:w-48"
+            className="mt-1 w-full rounded-[var(--radius-sm)] border px-2.5 py-2 text-[13px] sm:w-48"
             style={{
               borderColor: "var(--border-strong)",
               background: "var(--surface-1)",
@@ -364,8 +364,8 @@ export function ReportSchedule({
           type="button"
           onClick={() => void submit(false)}
           disabled={busy !== null}
-          className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-          style={{ background: "var(--brand, var(--series-1))" }}
+          className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--accent-ink)] disabled:opacity-60"
+          style={{ background: "var(--brand, var(--accent))" }}
         >
           {busy === "save" ? "Saving…" : "Save"}
         </button>
@@ -373,7 +373,7 @@ export function ReportSchedule({
           type="button"
           onClick={() => void submit(true)}
           disabled={busy !== null || blocked || recipients.length === 0}
-          className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
           style={{
             borderColor: "var(--border-strong)",
             color: "var(--text-secondary)",

@@ -120,7 +120,7 @@ export function WeeklySummary({
     <section className="card p-5" aria-label="Written summary">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             Written summary
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -184,7 +184,7 @@ export function WeeklySummary({
 
       {unavailable && (
         <p
-          className="mt-4 rounded-[10px] border px-3 py-2 text-xs"
+          className="mt-4 rounded-[var(--radius)] border px-3 py-2 text-xs"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -197,7 +197,7 @@ export function WeeklySummary({
 
       {!configured && !unavailable && (
         <p
-          className="mt-4 rounded-[10px] border px-3 py-2 text-xs"
+          className="mt-4 rounded-[var(--radius)] border px-3 py-2 text-xs"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -214,7 +214,7 @@ export function WeeklySummary({
       {/* 🔴 The unverified-figure flag. Named, not counted. */}
       {issues.length > 0 && (
         <div
-          className="mt-4 rounded-[10px] border px-3 py-2 text-xs"
+          className="mt-4 rounded-[var(--radius)] border px-3 py-2 text-xs"
           style={{
             borderColor: "var(--status-critical)",
             background: "color-mix(in srgb, var(--status-critical) 8%, transparent)",
@@ -252,7 +252,7 @@ export function WeeklySummary({
             setDirty(true);
           }}
           placeholder="Headline — one line"
-          className="w-full rounded-[10px] border px-3 py-2 text-sm"
+          className="w-full rounded-[var(--radius)] border px-3 py-2 text-sm"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -268,7 +268,7 @@ export function WeeklySummary({
           }}
           rows={7}
           placeholder="Nothing drafted for this framing yet."
-          className="w-full rounded-[10px] border px-3 py-2 text-sm leading-relaxed"
+          className="w-full rounded-[var(--radius)] border px-3 py-2 text-sm leading-relaxed"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -282,7 +282,7 @@ export function WeeklySummary({
           type="button"
           disabled={disabled || !configured}
           onClick={() => call("", "POST", {}, "generating")}
-          className="rounded-[8px] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
           style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
         >
           {busy === "generating"
@@ -298,7 +298,7 @@ export function WeeklySummary({
           onClick={() =>
             call("", "PUT", { headline: shownHeadline, body: shownBody }, "saving")
           }
-          className="rounded-[8px] border px-3 py-1.5 text-xs disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] border px-3 py-1.5 text-xs disabled:opacity-50"
           style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}
         >
           {busy === "saving" ? "Saving…" : "Save edits"}
@@ -317,7 +317,7 @@ export function WeeklySummary({
               type="button"
               disabled={disabled}
               onClick={() => call("/publish", "POST", { published: true }, "publishing")}
-              className="rounded-[8px] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+              className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
               style={{
                 background: current.hasUnpublishedChanges ? "var(--accent)" : "transparent",
                 color: current.hasUnpublishedChanges ? "var(--accent-ink)" : "var(--text-muted)",
@@ -330,7 +330,7 @@ export function WeeklySummary({
               type="button"
               disabled={disabled}
               onClick={() => call("/publish", "POST", { published: false }, "publishing")}
-              className="rounded-[8px] border px-3 py-1.5 text-xs disabled:opacity-50"
+              className="rounded-[var(--radius-sm)] border px-3 py-1.5 text-xs disabled:opacity-50"
               style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}
             >
               Withdraw
@@ -346,7 +346,7 @@ export function WeeklySummary({
                 : undefined
             }
             onClick={() => call("/publish", "POST", { published: true }, "publishing")}
-            className="flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
             style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
           >
             <Icon name="check" size={12} />

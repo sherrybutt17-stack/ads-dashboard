@@ -47,11 +47,26 @@ function CurveChart({ c }: { c: StageCurve }) {
       role="img"
       aria-label={`${c.noun}: share landed by day, over ${HORIZON_DAYS} days`}
     >
+      {/*
+        One series, no legend, so the colour carries no identity — which is what
+        frees it to carry WAYFINDING instead. `--section-band` is the hue the
+        section's heading rule wears, inherited from the section wrapper in
+        c/[slug]/page.tsx, so the sparkline matches the heading above it.
+
+        The fallback is load-bearing: this same component renders in the printed
+        report, which has no section wrapper, and an unresolved custom property
+        would draw the line with no stroke at all.
+      */}
       <polygon
         points={`0,${H} ${line} ${W},${y(1)} ${W},${H}`}
-        fill="color-mix(in srgb, var(--series-1) 16%, transparent)"
+        fill="color-mix(in srgb, var(--section-band, var(--series-1)) 16%, transparent)"
       />
-      <polyline points={line} fill="none" stroke="var(--series-1)" strokeWidth={1.75} />
+      <polyline
+        points={line}
+        fill="none"
+        stroke="var(--section-band, var(--series-1))"
+        strokeWidth={1.75}
+      />
       {c.halfDays !== null && (
         <line
           x1={x(c.halfDays)}
@@ -79,7 +94,7 @@ function EqualAge({ check, noun }: { check: EqualAgeCheck; noun: string }) {
   const tone = check.misleading ? "var(--status-warning)" : "var(--text-muted)";
   return (
     <div
-      className="flex items-start gap-2.5 rounded-[10px] p-3.5"
+      className="flex items-start gap-2.5 rounded-[var(--radius)] p-3.5"
       style={{ background: "var(--surface-2)" }}
     >
       <span className="mt-0.5 shrink-0" style={{ color: tone }}>
@@ -210,7 +225,7 @@ export function MaturationPanel({ data }: { data: MaturationReport }) {
   const header = (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
       <div>
-        <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
           Is this month actually worse, or just younger?
         </h2>
         <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -219,7 +234,7 @@ export function MaturationPanel({ data }: { data: MaturationReport }) {
         </p>
       </div>
       <div
-        className="flex flex-wrap gap-1 rounded-[9px] p-0.5"
+        className="flex flex-wrap gap-1 rounded-[var(--radius-sm)] p-0.5"
         style={{ background: "var(--surface-2)" }}
         role="group"
         aria-label="Outcome"
@@ -233,7 +248,7 @@ export function MaturationPanel({ data }: { data: MaturationReport }) {
               type="button"
               onClick={() => setStageId(id)}
               aria-pressed={active}
-              className="rounded-[7px] px-2.5 py-1 text-[12px] font-medium transition-colors"
+              className="rounded-[var(--radius-xs)] px-2.5 py-1 text-[12px] font-medium transition-colors"
               style={{
                 background: active ? "var(--surface-1)" : "transparent",
                 color: active

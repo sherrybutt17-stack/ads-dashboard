@@ -54,7 +54,7 @@ const inputStyle = {
   background: "var(--surface-1)",
   color: "var(--text-primary)",
 } as const;
-const INPUT_CLASS = "w-full rounded-[8px] border px-3 py-2 text-[13px]";
+const INPUT_CLASS = "w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]";
 
 export function ShareReport({
   clientId,
@@ -249,7 +249,7 @@ export function ShareReport({
           // change to its dependencies.
           void load();
         }}
-        className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-1.5 text-[13px] font-medium transition-colors hover:opacity-80"
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-1.5 text-[13px] font-medium transition-colors hover:opacity-80"
         style={{
           borderColor: "var(--border-strong)",
           background: "var(--surface-2)",
@@ -295,10 +295,10 @@ export function ShareReport({
            */}
           {error && minted && (
             <p
-              className="rounded-[8px] border px-3 py-2 text-[12px] leading-snug"
+              className="rounded-[var(--radius-sm)] border px-3 py-2 text-[12px] leading-snug"
               style={{
-                borderColor: "var(--danger, #b3261e)",
-                color: "var(--danger, #b3261e)",
+                borderColor: "var(--status-critical)",
+                color: "var(--status-critical)",
               }}
             >
               {error}
@@ -327,7 +327,7 @@ export function ShareReport({
                 changes an action's meaning should not be a detail.
               */}
               <div
-                className="flex gap-1 rounded-[9px] border p-1"
+                className="flex gap-1 rounded-[var(--radius-sm)] border p-1"
                 style={{ borderColor: "var(--border)" }}
                 role="tablist"
                 aria-label="How to share"
@@ -347,7 +347,7 @@ export function ShareReport({
                       setMode(m);
                       setError(null);
                     }}
-                    className="flex-1 rounded-[7px] px-3 py-1.5 text-[12.5px] font-medium transition-colors"
+                    className="flex-1 rounded-[var(--radius-xs)] px-3 py-1.5 text-[12.5px] font-medium transition-colors"
                     style={{
                       background:
                         mode === m ? "var(--surface-2)" : "transparent",
@@ -364,7 +364,7 @@ export function ShareReport({
 
               {mode === "email" && emailCfg && !emailCfg.configured && (
                 <p
-                  className="rounded-[8px] border px-3 py-2 text-[12px] leading-snug"
+                  className="rounded-[var(--radius-sm)] border px-3 py-2 text-[12px] leading-snug"
                   style={{
                     borderColor: "var(--border-strong)",
                     background: "var(--surface-2)",
@@ -380,7 +380,7 @@ export function ShareReport({
               {mode === "email" && emailCfg?.senderProblem && (
                 /* Shown verbatim — it is already a sentence for an operator. */
                 <p
-                  className="rounded-[8px] border px-3 py-2 text-[12px] leading-snug"
+                  className="rounded-[var(--radius-sm)] border px-3 py-2 text-[12px] leading-snug"
                   style={{
                     borderColor: "var(--border-strong)",
                     background: "var(--surface-2)",
@@ -417,14 +417,14 @@ export function ShareReport({
                           return (
                             <span
                               key={r}
-                              className="rounded-[5px] border px-1.5 py-0.5 text-[11px]"
+                              className="rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-[11px]"
                               style={{
                                 borderColor: ok
                                   ? "var(--border-strong)"
-                                  : "var(--danger, #b3261e)",
+                                  : "var(--status-critical)",
                                 color: ok
                                   ? "var(--text-secondary)"
-                                  : "var(--danger, #b3261e)",
+                                  : "var(--status-critical)",
                               }}
                             >
                               {r}
@@ -463,7 +463,7 @@ export function ShareReport({
                 hint="Fixed permanently. The link will always show this period, not whatever is current when it is opened."
               >
                 <div
-                  className="tnum rounded-[8px] border px-3 py-2 text-[13px]"
+                  className="tnum rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
                   style={{
                     borderColor: "var(--border)",
                     background: "var(--surface-2)",
@@ -496,7 +496,7 @@ export function ShareReport({
                       type="button"
                       onClick={() => setTtlDays(d)}
                       aria-pressed={ttlDays === d}
-                      className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium"
+                      className="rounded-[var(--radius-sm)] border px-3 py-1.5 text-[12px] font-medium"
                       style={{
                         borderColor:
                           ttlDays === d ? "var(--accent)" : "var(--border-strong)",
@@ -549,8 +549,8 @@ export function ShareReport({
                         emailCfg?.configured === false ||
                         Boolean(emailCfg?.senderProblem)))
                   }
-                  className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-                  style={{ background: "var(--brand, var(--series-1))" }}
+                  className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--accent-ink)] disabled:opacity-60"
+                  style={{ background: "var(--brand, var(--accent))" }}
                 >
                   {busy
                     ? mode === "email"
@@ -620,12 +620,12 @@ function MintedLink({
 }) {
   return (
     <div
-      className="rounded-[10px] border p-3"
+      className="rounded-[var(--radius)] border p-3"
       style={{ borderColor: "var(--border-strong)", background: "var(--surface-2)" }}
     >
       <div
         className="mb-2 flex items-center gap-1.5 text-xs font-medium"
-        style={{ color: failed ? "var(--danger, #b3261e)" : "var(--status-good)" }}
+        style={{ color: failed ? "var(--status-critical)" : "var(--status-good)" }}
       >
         <Icon name={failed ? "alert" : "check"} size={12} />{" "}
         {failed
@@ -635,7 +635,7 @@ function MintedLink({
             : `Sent to ${sentCount} ${sentCount === 1 ? "recipient" : "recipients"}`}
       </div>
       <code
-        className="block break-all rounded-[6px] px-2 py-1.5 text-[11px]"
+        className="block break-all rounded-[var(--radius-xs)] px-2 py-1.5 text-[11px]"
         style={{
           background: "var(--surface-1)",
           color: "var(--text-primary)",
@@ -655,7 +655,7 @@ function MintedLink({
            */
           autoFocus
           onClick={onCopy}
-          className="inline-flex items-center gap-1.5 rounded-[7px] border px-2.5 py-1 text-[12px] font-medium"
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-xs)] border px-2.5 py-1 text-[12px] font-medium"
           style={{
             borderColor: "var(--border-strong)",
             background: "var(--surface-1)",

@@ -29,6 +29,7 @@ import type { CreativeWithOutcome } from "@/lib/metrics/dashboard";
 import type { DeliveryRanking } from "@/db/schema";
 import { DataState, PipeNotice, type DataStateProps } from "@/components/DataState";
 import { Icon, type IconName } from "@/components/Icon";
+import { CategoryChart, type CategoryFormat } from "@/components/CategoryChart";
 
 /**
  * The creative leaderboard — which ADS are working, not which ad ids.
@@ -130,6 +131,23 @@ export function CreativeGrid({
 
   const sorted = useMemo(() => sortCreatives(assets, sort), [assets, sort]);
 
+  /*
+   * What the chart above the cards plots. Only the two additive measures are
+   * chartable — see the comment at the chart itself for why a rate is not.
+   */
+  const chart =
+    sort === "spend"
+      ? {
+          measure: "Spend",
+          of: (c: CreativeWithOutcome) => c.totals.spend,
+          format: { kind: "money", currency } as CategoryFormat,
+        }
+      : {
+          measure: "Leads",
+          of: (c: CreativeWithOutcome) => c.totals.leads,
+          format: { kind: "count" } as CategoryFormat,
+        };
+
   const totalSpend = creatives.reduce((s, c) => s + c.totals.spend, 0);
   const learningCount = assets.filter((c) => c.learning || c.learningLimited).length;
 
@@ -137,7 +155,7 @@ export function CreativeGrid({
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-baseline justify-between gap-2 px-5 py-4">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             Which creative is working
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -151,7 +169,7 @@ export function CreativeGrid({
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value as CreativeSortKey)}
-              className="rounded-md border px-2 py-1 text-xs"
+              className="rounded-[var(--radius-sm)] border px-2 py-1 text-xs"
               style={{
                 borderColor: "var(--border)",
                 background: "var(--surface-1)",
@@ -225,6 +243,50 @@ export function CreativeGrid({
               turning them off on that comparison — is the wrong call.
             </div>
           )}
+
+          {/*
+            The leaderboard as a shape, before the cards.
+
+            🔴 The chart plots SPEND or LEADS and never a rate, whichever way
+            the sort control is set. Cost per lead, hook rate and hold rate are
+            ratios: they do not sum, so a circle of them divides a whole that
+            does not exist, and a bar of them ranked by size invites the reader
+            to read "twice as tall" as "twice as much", which for a cost is
+            exactly backwards. When the sort is one of those, the chart shows
+            leads — the outcome the sort is a way of hunting for — and the cards
+            below carry the rate itself.
+
+            The unresolved bucket rides along in grey. It is deliberately kept
+            out of the card leaderboard because it is not an asset, but leaving
+            it out of a chart of spend would quietly renormalise the total, the
+            same trap the breakdowns panel documents at length.
+          */}
+          <div className="border-t px-5 pt-4" style={{ borderColor: "var(--border)" }}>
+            <CategoryChart
+              storageKey="creatives"
+              measure={chart.measure}
+              format={chart.format}
+              height={210}
+              data={[
+                ...sorted.map((c) => ({
+                  key: c.creativeKey,
+                  label: c.title || c.adName || "Untitled creative",
+                  value: chart.of(c),
+                })),
+                ...(unresolved && chart.of(unresolved) > 0
+                  ? [
+                      {
+                        key: "__unresolved__",
+                        label: "Not attributed to an asset",
+                        value: chart.of(unresolved),
+                        color: "var(--text-muted)",
+                      },
+                    ]
+                  : []),
+              ]}
+              empty="No creative carried spend in this period"
+            />
+          </div>
 
           <div
             className="grid gap-4 border-t px-5 py-5 sm:grid-cols-2 xl:grid-cols-3"
@@ -380,7 +442,7 @@ function RevenueCoverageNote({
           GoHighLevel has no native field for a Meta ad id — it only arrives if the
           ad&rsquo;s URL parameters carry{" "}
           <code
-            className="rounded px-1 py-0.5"
+            className="rounded-[var(--radius-xs)] px-1 py-0.5"
             style={{ background: "var(--surface-1)", color: "var(--text-secondary)" }}
           >
             ad_id=&#123;&#123;ad.id&#125;&#125;
@@ -465,7 +527,7 @@ function CreativeCard({
 
         {(c.learning || c.learningLimited) && (
           <p
-            className="flex items-start gap-1.5 rounded-md px-2 py-1.5 text-[11px] leading-snug"
+            className="flex items-start gap-1.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-[11px] leading-snug"
             style={{ background: "var(--surface-2)", color: "var(--status-warning)" }}
           >
             <Icon name="alert" size={12} className="mt-px shrink-0" />

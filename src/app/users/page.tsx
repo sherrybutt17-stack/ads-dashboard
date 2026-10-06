@@ -1,12 +1,12 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser, isAgencyOperator } from "@/lib/auth";
 import { listUsersForAgency } from "@/lib/users";
 import { assignableRoles } from "@/lib/roles";
 import { listClientsForSession } from "@/lib/clients";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { UsersManager } from "@/components/UsersManager";
 import { emailConfig, senderProblem } from "@/lib/reports/email";
+import { AgencyShell } from "@/components/AgencyShell";
+import { PageTitle } from "@/components/PageTitle";
 
 export const dynamic = "force-dynamic";
 
@@ -24,29 +24,13 @@ export default async function UsersPage() {
   const emailReady = Boolean(mail && !senderProblem(mail.from));
 
   return (
-    <div className="min-h-full">
-      <header className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="mx-auto flex max-w-[1100px] items-center gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0 flex-1">
-            <Link
-              href="/"
-              className="text-xs hover:underline"
-              style={{ color: "var(--text-muted)" }}
-            >
-              ← Clients
-            </Link>
-            <h1
-              className="text-lg font-semibold"
-              style={{ color: "var(--text-primary)" }}
-            >
-              Users &amp; access
-            </h1>
-          </div>
-          <ThemeToggle />
-        </div>
-      </header>
+    <AgencyShell session={session}>
+      <main className="mx-auto w-full max-w-[1100px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <PageTitle
+          title="Users &amp; access"
+          subtitle={`${users.length} ${users.length === 1 ? "person" : "people"} with a login`}
+        />
 
-      <main className="mx-auto max-w-[1100px] px-4 py-6 sm:px-6">
         <UsersManager
           /*
            * 🔴 The form's options come from the SAME rule the API enforces.
@@ -77,6 +61,6 @@ export default async function UsersPage() {
             .map((c) => ({ id: c.id, name: c.name, slug: c.slug }))}
         />
       </main>
-    </div>
+    </AgencyShell>
   );
 }

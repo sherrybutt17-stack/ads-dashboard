@@ -286,6 +286,14 @@ export function contrastRatio(a: string, b: string): number | null {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** The two page backgrounds a brand colour has to survive. */
+/**
+ * The two page backgrounds a brand colour has to survive.
+ *
+ * These track `--surface-1` in each theme and must be updated with it. The dark
+ * value moved from `#0a0b0f` to `#1c1c26` with the redesign — a lighter card
+ * makes dark the HARDER of the two targets for a mid-toned hue, so the band
+ * this feeds genuinely shifts. Leaving a stale value here does not throw; it
+ * silently bands every client's colour against a surface that no longer exists.
+ */
 export const SURFACE_LIGHT = "#ffffff";
-export const SURFACE_DARK = "#0a0b0f";
+export const SURFACE_DARK = "#1c1c26";

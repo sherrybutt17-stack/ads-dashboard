@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -20,12 +19,14 @@ import { ReportSchedule } from "@/components/ReportSchedule";
 import { BudgetSettings } from "@/components/BudgetSettings";
 import { describeDestination } from "@/lib/alerts/send";
 import { RemoveClient } from "@/components/RemoveClient";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { getLeadAttributionBreakdown } from "@/lib/metrics/queries";
 import { trailingWindowInclusive } from "@/lib/dates";
 import { isMetaConnectConfigured } from "@/lib/meta/oauth";
 import { isTiktokConnectConfigured } from "@/lib/tiktok/oauth";
 import { activeTiktokAccountsForDisplay } from "@/lib/tiktok/accounts";
+import { AppShell } from "@/components/AppShell";
+import { ClientSideNav } from "@/components/ClientSideNav";
+import { PageTitle } from "@/components/PageTitle";
 
 export const dynamic = "force-dynamic";
 
@@ -109,29 +110,20 @@ export default async function SetupPage({
   ]);
 
   return (
-    <div className="min-h-full">
-      <header className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="mx-auto flex max-w-[900px] items-center gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0 flex-1">
-            <Link
-              href={`/c/${slug}`}
-              className="text-xs hover:underline"
-              style={{ color: "var(--text-muted)" }}
-            >
-              ← {client.name}
-            </Link>
-            <h1
-              className="text-lg font-semibold"
-              style={{ color: "var(--text-primary)" }}
-            >
-              Setup &amp; connections
-            </h1>
-          </div>
-          <ThemeToggle />
-        </div>
-      </header>
-
-      <main className="mx-auto flex max-w-[900px] flex-col gap-5 px-4 py-6 sm:px-6">
+    <AppShell
+      nav={
+        <ClientSideNav
+          slug={slug}
+          brandName={branding.displayName ?? client.name}
+          session={session}
+          staff
+          brandingEditable={branding.clientEditable}
+        />
+      }
+    >
+      <main className="mx-auto w-full max-w-[900px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <PageTitle title="Connections" subtitle={client.name} />
+        <div className="flex flex-col gap-5">
         <HealthChecklist clientId={client.id} initial={health} />
 
         <LeadSourceSettings
@@ -245,7 +237,8 @@ export default async function SetupPage({
         />
 
         <RemoveClient clientId={client.id} clientName={client.name} />
+        </div>
       </main>
-    </div>
+    </AppShell>
   );
 }

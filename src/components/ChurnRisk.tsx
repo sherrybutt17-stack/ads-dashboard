@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import type { ChurnClient, ChurnLevel, ChurnReport, ChurnSignal } from "@/lib/metrics/churn";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/metrics/compute";
@@ -29,13 +30,12 @@ function LevelChip({ level }: { level: ChurnLevel }) {
   const critical = level === "talk";
   return (
     <span
-      className="shrink-0 rounded-[5px] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase"
-      style={{
-        background: critical
-          ? "color-mix(in srgb, var(--status-critical) 14%, transparent)"
-          : "color-mix(in srgb, var(--status-warning) 14%, transparent)",
-        color: critical ? "var(--status-critical)" : "var(--status-warning)",
-      }}
+      className="tint-badge shrink-0 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase"
+      style={
+        {
+          "--tint": critical ? "var(--status-critical)" : "var(--status-warning)",
+        } as CSSProperties
+      }
     >
       {LEVEL_LABEL[level]}
     </span>
@@ -172,7 +172,7 @@ export function ChurnRiskPanel({
 }) {
   const header = (
     <div>
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Worth a conversation
       </h2>
       <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>

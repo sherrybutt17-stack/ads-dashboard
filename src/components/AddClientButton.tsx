@@ -46,9 +46,12 @@ export function AddClientButton() {
 
   return (
     <>
+      {/* Lime, not the house violet: this is an agency-page action, and the
+          violet is reserved for the client's own accent inside their dashboard
+          and for the signed-out pages. See `.btn-lime`. */}
       <button
         onClick={() => setOpen(true)}
-        className="btn-accent rounded-[8px] px-3 py-2 text-[13px] font-medium"
+        className="btn-lime"
       >
         Add client
       </button>
@@ -73,7 +76,7 @@ export function AddClientButton() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Parfaire Medical Aesthetics"
-              className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
+              className="mt-1 w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
               style={{
                 borderColor: "var(--border-strong)",
                 background: "var(--surface-1)",
@@ -92,7 +95,7 @@ export function AddClientButton() {
             <select
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
-              className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
+              className="mt-1 w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
               style={{
                 borderColor: "var(--border-strong)",
                 background: "var(--surface-1)",
@@ -128,7 +131,7 @@ export function AddClientButton() {
               type="button"
               onClick={() => setOpen(false)}
               disabled={busy}
-              className="rounded-[8px] border px-3 py-2 text-[13px]"
+              className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
               style={{
                 borderColor: "var(--border-strong)",
                 color: "var(--text-secondary)",
@@ -139,7 +142,7 @@ export function AddClientButton() {
             <button
               type="submit"
               disabled={busy || !name.trim()}
-              className="btn-accent rounded-[8px] px-3 py-2 text-[13px] font-medium"
+              className="btn-lime"
             >
               {busy ? "Creating…" : "Continue"}
             </button>

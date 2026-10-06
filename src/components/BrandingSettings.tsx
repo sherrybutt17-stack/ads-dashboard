@@ -12,7 +12,7 @@ const inputStyle = {
   color: "var(--text-primary)",
 } as const;
 
-const INPUT_CLASS = "w-full rounded-[8px] border px-3 py-2 text-[13px]";
+const INPUT_CLASS = "w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]";
 
 /**
  * Staff-set per-client branding — W1.
@@ -122,7 +122,7 @@ export function BrandingSettings({
 
   return (
     <section className="card p-5">
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Client branding
       </h2>
       <p className="mt-0.5 mb-4 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -161,7 +161,7 @@ export function BrandingSettings({
             {brandColor.trim() && (
               <span
                 aria-hidden="true"
-                className="inline-block h-7 w-7 shrink-0 rounded-md border"
+                className="inline-block h-7 w-7 shrink-0 rounded-[var(--radius-xs)] border"
                 style={{
                   background: brandColor.trim(),
                   borderColor: "var(--border-strong)",
@@ -232,32 +232,12 @@ export function BrandingSettings({
               <img
                 src={`/api/c/${slug}/branding/logo?v=${logoVersion}`}
                 alt="Current logo"
-                className="h-9 w-auto max-w-[180px] rounded border object-contain px-2 py-1"
+                className="h-9 w-auto max-w-[180px] rounded-[var(--radius-sm)] border object-contain px-2 py-1"
                 style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
               />
             )}
-            {/*
-              🔴 The native control, driven by a label styled as a button.
-              `<input type="file">` renders as the browser's own grey "Choose
-              file / No file chosen" — a different shape, font and colour from
-              every other control on the page, which reads as an unstyled
-              fragment of a half-built form rather than something to click.
-
-              The input itself stays in the DOM and keeps its ref, its accept
-              list and its change handler: it is what the OS picker is attached
-              to, and replacing it with a div and a click handler would lose
-              keyboard access and the file dialog with it. `sr-only` hides it
-              visually while leaving it focusable, and the label's
-              `focus-within` ring is what makes that focus visible.
-            */}
-            <label
-              className="inline-flex cursor-pointer items-center rounded-[8px] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)] focus-within:ring-2 focus-within:ring-[var(--accent)]"
-              style={{
-                color: busy ? "var(--text-muted)" : "var(--text-primary)",
-                borderColor: "var(--border)",
-                cursor: busy ? "not-allowed" : "pointer",
-              }}
-            >
+            {/* The real input, hidden but focusable — see `.file-button`. */}
+            <label className="file-button">
               <input
                 ref={fileRef}
                 type="file"
@@ -290,8 +270,8 @@ export function BrandingSettings({
             type="button"
             onClick={() => void save()}
             disabled={busy}
-            className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-            style={{ background: "var(--brand, var(--series-1))" }}
+            className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--accent-ink)] disabled:opacity-60"
+            style={{ background: "var(--brand, var(--accent))" }}
           >
             {busy ? "Saving…" : "Save branding"}
           </button>

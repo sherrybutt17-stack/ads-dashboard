@@ -222,12 +222,15 @@ function PasswordGate({ token, problem }: { token: string; problem?: string }) {
   return (
     <Centred>
       <h1
-        className="text-[17px] font-semibold"
+        className="text-[22px] leading-tight font-semibold tracking-[-0.02em]"
         style={{ color: "var(--text-primary)" }}
       >
         This report is password protected
       </h1>
-      <p className="mt-1 mb-4 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+      <p
+        className="mt-2 mb-5 text-[13px] leading-relaxed"
+        style={{ color: "var(--text-secondary)" }}
+      >
         Enter the password you were given alongside the link.
       </p>
       {message && (
@@ -240,7 +243,7 @@ function PasswordGate({ token, problem }: { token: string; problem?: string }) {
           {message}
         </p>
       )}
-      <form action={unlock} className="flex flex-col gap-2">
+      <form action={unlock} className="flex flex-col gap-2.5">
         <input type="hidden" name="token" value={token} />
         <input
           type="password"
@@ -248,17 +251,12 @@ function PasswordGate({ token, problem }: { token: string; problem?: string }) {
           autoFocus
           required
           aria-label="Report password"
-          className="w-full rounded-[8px] border px-3 py-2 text-[13px]"
-          style={{
-            borderColor: "var(--border-strong)",
-            background: "var(--surface-1)",
-            color: "var(--text-primary)",
-          }}
+          className="field"
         />
         <button
           type="submit"
-          className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white"
-          style={{ background: "var(--brand, var(--series-1))" }}
+          className="rounded-[var(--radius)] px-3.5 py-2.5 text-[13px] font-medium text-[var(--accent-ink)]"
+          style={{ background: "var(--brand, var(--accent))" }}
         >
           View report
         </button>
@@ -297,20 +295,35 @@ function ShareProblem({ reason }: { reason: ShareFailure }) {
   const { title, detail } = PROBLEM[reason];
   return (
     <Centred>
-      <h1 className="text-[17px] font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h1
+        className="text-[22px] leading-tight font-semibold tracking-[-0.02em]"
+        style={{ color: "var(--text-primary)" }}
+      >
         {title}
       </h1>
-      <p className="mt-1 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+      <p
+        className="mt-2 text-[13px] leading-relaxed"
+        style={{ color: "var(--text-secondary)" }}
+      >
         {detail}
       </p>
     </Centred>
   );
 }
 
+/**
+ * The gate and the failure states share one centred card.
+ *
+ * Deliberately NOT the signed-out split panel the agency's own login uses: the
+ * person reading this holds a link to one client's numbers and has no account
+ * here. Selling them the product on the way in would be the wrong room.
+ */
 function Centred({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-full items-center justify-center px-4 py-20">
-      <div className="card w-full max-w-[420px] p-6">{children}</div>
+    <div className="flex min-h-full flex-1 flex-col lg:p-5">
+      <div className="app-frame flex flex-1 items-center justify-center px-4 py-20">
+        <div className="w-full max-w-[420px]">{children}</div>
+      </div>
     </div>
   );
 }

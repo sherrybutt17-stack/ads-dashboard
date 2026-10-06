@@ -174,7 +174,7 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
       >
         <a
           href={backHref}
-          className="btn-ghost inline-flex items-center gap-1 rounded-[8px] px-2.5 py-1.5 text-[12px]"
+          className="btn-ghost inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[12px]"
           style={{ color: "var(--text-muted)" }}
         >
           <Icon name="arrowLeft" size={12} /> Leave
@@ -187,10 +187,10 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
           onClick={() => go(index - 1)}
           disabled={index === 0}
           aria-label="Previous slide"
-          className="btn-ghost rounded-[8px] px-3 py-1.5 text-[13px] disabled:opacity-40"
+          className="btn-ghost rounded-[var(--radius-sm)] px-3 py-1.5 text-[13px] disabled:opacity-40"
           style={{ color: "var(--text-secondary)" }}
         >
-          ←
+          <Icon name="chevronLeft" size={16} />
         </button>
         <span
           className="tnum text-[12px] tabular-nums"
@@ -206,10 +206,10 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
           }}
           disabled={index >= total - 1}
           aria-label="Next slide"
-          className="btn-ghost rounded-[8px] px-3 py-1.5 text-[13px] disabled:opacity-40"
+          className="btn-ghost rounded-[var(--radius-sm)] px-3 py-1.5 text-[13px] disabled:opacity-40"
           style={{ color: "var(--text-secondary)" }}
         >
-          →
+          <Icon name="chevronRight" size={16} />
         </button>
 
         <span className="flex-1" />
@@ -217,7 +217,7 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
         <button
           type="button"
           onClick={() => void toggleFullscreen()}
-          className="btn-ghost rounded-[8px] px-2.5 py-1.5 text-[12px]"
+          className="btn-ghost rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[12px]"
           style={{ color: "var(--text-muted)" }}
         >
           Full screen
@@ -252,7 +252,7 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
           <div className="card max-w-lg p-6">
             <h2
               className="text-[15px] font-semibold"
-              style={{ color: "var(--text-primary)" }}
+              style={{ color: "var(--section-ink, var(--text-primary))" }}
             >
               {deck.skipped.length} slide{deck.skipped.length === 1 ? "" : "s"} not
               in this deck
@@ -268,7 +268,7 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
               {deck.skipped.map((s) => (
                 <li
                   key={s.label}
-                  className="rounded-[9px] border p-2.5 text-[12.5px]"
+                  className="rounded-[var(--radius-sm)] border p-2.5 text-[12.5px]"
                   style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
                 >
                   <strong style={{ color: "var(--text-primary)" }}>{s.label}</strong>
@@ -280,14 +280,14 @@ export function DeckView({ deck, slug, backHref, initialSlide, staff }: Props) {
               <button
                 type="button"
                 onClick={() => setPreflight(false)}
-                className="rounded-[8px] px-3 py-1.5 text-[13px] font-medium"
+                className="rounded-[var(--radius-sm)] px-3 py-1.5 text-[13px] font-medium"
                 style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
               >
                 Start presenting
               </button>
               <a
                 href={`/c/${slug}`}
-                className="btn-ghost rounded-[8px] px-3 py-1.5 text-[13px]"
+                className="btn-ghost rounded-[var(--radius-sm)] px-3 py-1.5 text-[13px]"
                 style={{ color: "var(--text-secondary)" }}
               >
                 Fix it first

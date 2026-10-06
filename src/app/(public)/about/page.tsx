@@ -64,7 +64,7 @@ export default function AboutPage() {
         <a
           href="mailto:dev@growthguild.us"
           className="underline underline-offset-2"
-          style={{ color: "var(--series-1)" }}
+          style={{ color: "var(--accent)" }}
         >
           dev@growthguild.us
         </a>

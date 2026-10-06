@@ -7,6 +7,7 @@ import {
   formatPercent,
   formatChange,
   changeSentiment,
+  funnelCoherence,
   type DerivedMetrics,
   type FunnelCounts,
   type AdTotals,
@@ -101,6 +102,83 @@ function ColumnDefinitions() {
   );
 }
 
+/**
+ * Why three columns went blank.
+ *
+ * 🔴 The counterpart to the suppression in `derive`. A rate whose denominator
+ * is the wrong population is not printable, but a dash the reader cannot
+ * account for is its own kind of broken — arguably worse than the wrong number,
+ * because a wrong number at least sends them somewhere. This turns the blank
+ * into the finding it actually is, using the two counts sitting in the same row
+ * that prove it.
+ *
+ * Only ever rendered when a row is genuinely incoherent, so a healthy book
+ * never sees it. Both halves can fire at once; they are separate sentences
+ * because they are separate faults with separate fixes.
+ */
+function FunnelGapNote({ rows }: { rows: MetricRow[] }) {
+  /*
+   * The worst row, not the first. These tables stack windows of different
+   * lengths, and quoting "3 leads against 25 appointments" is a great deal more
+   * convincing than whichever row happens to sit at the top.
+   */
+  let topGap: MetricRow | null = null;
+  let showGap: MetricRow | null = null;
+  for (const r of rows) {
+    const { leadsRecorded, showsRecorded } = funnelCoherence(r.funnel);
+    if (!leadsRecorded) {
+      const worst = r.funnel.appointment_booked - r.funnel.new_lead;
+      if (!topGap || worst > topGap.funnel.appointment_booked - topGap.funnel.new_lead) {
+        topGap = r;
+      }
+    }
+    if (!showsRecorded && (!showGap || r.funnel.closed_won > showGap.funnel.closed_won)) {
+      showGap = r;
+    }
+  }
+  if (!topGap && !showGap) return null;
+
+  return (
+    <div
+      className="border-t px-5 py-3 text-[11px] leading-relaxed"
+      style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+    >
+      <span className="font-semibold" style={{ color: "var(--text-secondary)" }}>
+        Some conversion rates are blank above.
+      </span>{" "}
+      {topGap && (
+        <>
+          {formatNumber(topGap.funnel.appointment_booked)} appointments were
+          booked against {formatNumber(topGap.funnel.new_lead)} leads in the{" "}
+          {topGap.label.toLowerCase()} window. An appointment is a lead that
+          booked, so it cannot outnumber them — leads are entering the pipeline
+          below its top, usually because the ads drive straight to a calendar
+          and the stage they land in is not mapped to New Lead.{" "}
+          <strong style={{ color: "var(--text-secondary)" }}>Book %</strong> and{" "}
+          <strong style={{ color: "var(--text-secondary)" }}>Optin %</strong>{" "}
+          divide by that lead count, so neither is shown.{" "}
+        </>
+      )}
+      {showGap && (
+        <>
+          {formatNumber(showGap.funnel.closed_won)} deals closed against{" "}
+          {formatNumber(showGap.funnel.showed)} recorded shows in the{" "}
+          {showGap.label.toLowerCase()} window. Nobody closes a deal with
+          someone who never turned up, so this is an attendance stage that is
+          not being recorded rather than an attendance problem.{" "}
+          <strong style={{ color: "var(--text-secondary)" }}>Show %</strong> and{" "}
+          <strong style={{ color: "var(--text-secondary)" }}>Close %</strong>{" "}
+          are blank rather than 0.00%, which would read as &ldquo;nobody
+          attended&rdquo;.{" "}
+        </>
+      )}
+      The counts themselves are untouched — only the ratios built on them are
+      withheld. Map the missing stages in Setup and these fill in immediately;
+      the transitions are already stored.
+    </div>
+  );
+}
+
 function render(value: number | null, kind: string, currency: string): string {
   if (kind === "currency") return formatCurrency(value, currency);
   if (kind === "percent") return formatPercent(value);
@@ -136,7 +214,7 @@ export function MetricsTable({
         <div>
           <h2
             className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
           >
             {title}
           </h2>
@@ -277,6 +355,8 @@ export function MetricsTable({
           </table>
         </div>
       )}
+
+      {open && <FunnelGapNote rows={rows} />}
     </section>
   );
 }

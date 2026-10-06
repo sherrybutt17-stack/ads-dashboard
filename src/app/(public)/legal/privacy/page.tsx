@@ -69,7 +69,7 @@ export default function PrivacyPage() {
         <a
           href="https://developers.google.com/terms/api-services-user-data-policy"
           className="underline underline-offset-2"
-          style={{ color: "var(--series-1)" }}
+          style={{ color: "var(--accent)" }}
           rel="noopener noreferrer"
           target="_blank"
         >
@@ -123,7 +123,7 @@ export default function PrivacyPage() {
         <a
           href="https://myaccount.google.com/permissions"
           className="underline underline-offset-2"
-          style={{ color: "var(--series-1)" }}
+          style={{ color: "var(--accent)" }}
           rel="noopener noreferrer"
           target="_blank"
         >
@@ -137,7 +137,7 @@ export default function PrivacyPage() {
         <a
           href="mailto:dev@growthguild.us"
           className="underline underline-offset-2"
-          style={{ color: "var(--series-1)" }}
+          style={{ color: "var(--accent)" }}
         >
           dev@growthguild.us
         </a>

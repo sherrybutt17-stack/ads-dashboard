@@ -1,7 +1,7 @@
 "use client";
 
 import type { UserRole } from "@/db/schema";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { DASH } from "@/lib/metrics/compute";
 
@@ -258,7 +258,7 @@ export function UsersManager({
       <section className="card p-5">
         <h2
           className="text-sm font-semibold"
-          style={{ color: "var(--text-primary)" }}
+          style={{ color: "var(--section-ink, var(--text-primary))" }}
         >
           Invite someone
         </h2>
@@ -300,13 +300,7 @@ export function UsersManager({
                 type="button"
                 onClick={() => setRole(r)}
                 aria-pressed={role === r}
-                className="rounded-[8px] border px-3 py-1.5 text-[13px] font-medium capitalize"
-                style={{
-                  borderColor:
-                    role === r ? "var(--series-1)" : "var(--border-strong)",
-                  background: role === r ? "var(--series-1)" : "transparent",
-                  color: role === r ? "#fff" : "var(--text-secondary)",
-                }}
+                className="chip font-medium capitalize"
               >
                 {r}
               </button>
@@ -342,18 +336,7 @@ export function UsersManager({
                       type="button"
                       onClick={() => toggleClient(c.id)}
                       aria-pressed={on}
-                      className="rounded-full border px-3 py-1 text-[13px]"
-                      style={{
-                        borderColor: on
-                          ? "var(--series-1)"
-                          : "var(--border-strong)",
-                        background: on
-                          ? "color-mix(in srgb, var(--series-1) 16%, transparent)"
-                          : "transparent",
-                        color: on
-                          ? "var(--text-primary)"
-                          : "var(--text-secondary)",
-                      }}
+                      className="chip"
                     >
                       {on ? "✓ " : ""}
                       {c.name}
@@ -369,7 +352,7 @@ export function UsersManager({
           type="button"
           onClick={invite}
           disabled={busy || !canInvite}
-          className="mt-4 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
+          className="btn-lime mt-4 disabled:opacity-50"
         >
           {busy ? "Sending…" : "Send invite"}
         </button>
@@ -391,7 +374,7 @@ export function UsersManager({
         <div className="px-5 py-4">
           <h2
             className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
           >
             Logins ({users.length})
           </h2>
@@ -595,7 +578,10 @@ function LinkPanel({
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2
+            className="text-sm font-semibold"
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
+          >
             {link.emailed
               ? `${link.kind === "invite" ? "Invite" : "Password link"} emailed to ${email}`
               : `Send this ${what} to ${email}`}
@@ -623,13 +609,13 @@ function LinkPanel({
           value={link.url}
           onFocus={(e) => e.currentTarget.select()}
           aria-label="Invite link"
-          className="min-w-0 flex-1 rounded-[8px] border px-3 py-2 font-mono text-[12px]"
+          className="min-w-0 flex-1 rounded-[var(--radius-sm)] border px-3 py-2 font-mono text-[12px]"
           style={inputStyle}
         />
         <button
           type="button"
           onClick={copy}
-          className="btn-accent rounded-[8px] px-3 py-2 text-[13px] font-medium"
+          className="btn-lime"
         >
           {copied ? "Copied" : "Copy link"}
         </button>
@@ -647,11 +633,8 @@ function LinkPanel({
 function Badge({ tone, children }: { tone: string; children: React.ReactNode }) {
   return (
     <span
-      className="mt-0.5 mr-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium"
-      style={{
-        background: `color-mix(in srgb, ${tone} 16%, transparent)`,
-        color: tone,
-      }}
+      className="tint-badge mt-0.5 mr-1 inline-block rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium"
+      style={{ "--tint": tone } as CSSProperties}
     >
       {children}
     </span>
@@ -684,7 +667,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
+        className="mt-1 w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
         style={inputStyle}
       />
     </label>

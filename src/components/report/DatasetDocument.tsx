@@ -119,7 +119,7 @@ export async function DatasetDocument({
           ) : (
             <div
               aria-hidden="true"
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[13px] text-[19px] font-bold text-white"
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--radius)] text-[19px] font-bold text-white"
               style={{
                 background:
                   "linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 50%, #0d1b30) 100%)",

@@ -29,19 +29,29 @@ import { createPortal } from "react-dom";
  * optional.**
  *
  * Per the CSS spec, an ancestor carrying `filter`, `backdrop-filter`,
- * `transform`, `perspective`, `contain` or `will-change` becomes the
- * **containing block for every `position: fixed` descendant**. The dashboard
- * header carries `backdropFilter: saturate(180%) blur(14px)`
- * (`app/c/[slug]/page.tsx`), and both the Sections and Share dialogs are opened
- * from controls inside it — so `inset: 0` resolved against that short, wide
- * strip instead of the viewport. The panel was cut off at a hard horizontal
- * edge, scrolled inside a sliver, and the scrim never covered the page.
+ * `transform`, `translate`, `rotate`, `scale`, `perspective`, `contain` or
+ * `will-change` becomes the **containing block for every `position: fixed`
+ * descendant**. The dashboard header is `.glass-bar`, which is a
+ * `backdrop-filter` (`globals.css`), and both the Sections and Share dialogs
+ * are opened from controls inside it — so `inset: 0` resolved against that
+ * short, wide strip instead of the viewport. The panel was cut off at a hard
+ * horizontal edge, scrolled inside a sliver, and the scrim never covered the
+ * page.
  *
  * Removing the blur would fix those two and leave the trap armed for the next
- * dialog. `globals.css` also puts `transform: translateY(12px)` on `main > *`
- * for the entrance stagger, so **any** fixed-position element inside a dashboard
- * section hits the identical bug. The portal is the durable fix: escaping to
- * `document.body` means no ancestor can ever create a containing block for it.
+ * dialog — and by now three more ancestors have joined it, none of them
+ * removable:
+ *
+ *   `main > *`        `@keyframes rise` runs with `animation-fill-mode: both`,
+ *                     so its final `translate: 0 0` is pinned for the life of
+ *                     the page. Every dashboard section, permanently.
+ *   `.section-band`   `perspective: 1000px`, for the scroll reveal.
+ *   `.section-band > *`  the reveal's own `translate`/`rotate`.
+ *
+ * So **any** fixed-position element rendered from inside a dashboard section
+ * hits the identical bug, and there is no configuration of this app in which it
+ * does not. The portal is the durable fix: escaping to `document.body` means no
+ * ancestor can ever create a containing block for it.
  */
 
 const FOCUSABLE =
@@ -51,10 +61,11 @@ const FOCUSABLE =
  * Renders children into `document.body`, escaping every ancestor.
  *
  * 🔴 **Use this for ANY `position: fixed` element rendered from inside the
- * dashboard header or a dashboard section.** Both create containing blocks —
- * the header permanently via `backdrop-filter`, a section transiently via the
- * `rise` entrance animation's `transform` — and a fixed element inside one
- * resolves its `inset`/`top`/`left` against that box rather than the viewport.
+ * dashboard header or a dashboard section.** Both create containing blocks, and
+ * both do it permanently — the header via `.glass-bar`'s `backdrop-filter`, a
+ * section via the `rise` entrance animation's filled `translate` and the scroll
+ * reveal's `perspective` — and a fixed element inside one resolves its
+ * `inset`/`top`/`left` against that box rather than the viewport.
  *
  * The symptom is not a crash. A full-viewport click-away catcher silently
  * covers only the header strip, so clicking the page below does not dismiss the
@@ -222,8 +233,14 @@ export function Modal({
        * `items-start` + `m-auto` still centres a short dialog, and lets a tall
        * one start at the top where it can be scrolled through.
        */
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4"
-      style={{ background: "var(--overlay-scrim)" }}
+      /*
+       * `.scrim-glass` is the scrim colour plus a light blur of the page
+       * behind it. The panel itself stays opaque: it holds forms, and a
+       * translucent ground under a text input is a legibility cost with no
+       * return. Pushing the PAGE out of focus is what stops the eye trying to
+       * read it, which is the whole job of a scrim.
+       */
+      className="scrim-glass fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4"
       onMouseDown={(e) => {
         // mousedown, not click: a click that STARTED inside the panel (drag-
         // selecting text and releasing outside) would otherwise dismiss it and
@@ -237,7 +254,7 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={labelledBy ?? titleId}
         aria-describedby={description ? descId : undefined}
-        className="m-auto flex w-full max-w-sm flex-col rounded-[14px]"
+        className="m-auto flex w-full max-w-sm flex-col rounded-[var(--radius-lg)]"
         style={{
           background: "var(--surface-raised)",
           border: "1px solid var(--border-strong)",
@@ -252,7 +269,7 @@ export function Modal({
           <h2
             id={titleId}
             className="text-base font-semibold"
-            style={{ color: "var(--text-primary)" }}
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
           >
             {title}
           </h2>

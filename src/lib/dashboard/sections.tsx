@@ -10,6 +10,7 @@ import {
   formatNumber,
   formatPercent,
   formatMultiple,
+  funnelCoherence,
   DASH,
 } from "@/lib/metrics/compute";
 import { StatTile } from "@/components/StatTile";
@@ -133,6 +134,16 @@ export interface SectionContext {
  * (fixed trailing windows) or the pipeline explorer (current state, no date
  * filter at all). Selecting "last 7 days" and then reading a pipeline of 700
  * leads is the interface misleading the reader, not the data.
+ *
+ * 🔴 Positive margin, deliberately. This sat at `-mb-3`, tucking the badge
+ * under the card's top edge back when that edge was blank. It is no longer
+ * blank: `.section-band > .card` now paints a 3px hue bar and a 140px tint
+ * across the top of every section card, and a 12px overlap dragged that bar
+ * straight through the middle of this line of text — the badge rendered with
+ * what looked like a strikethrough and its descenders clipped off. The badge
+ * belongs ABOVE the band, and the gap between it and the card (6px) has to stay
+ * far smaller than the gap between sections (24px) so it still reads as part of
+ * the card below it rather than as a caption on the one above.
  */
 function CadenceBadge({ id }: { id: SectionId }) {
   const def = SECTION_BY_ID[id];
@@ -140,7 +151,7 @@ function CadenceBadge({ id }: { id: SectionId }) {
   if (!label) return null;
   return (
     <div
-      className="-mb-3 flex items-center gap-1.5 text-[11px]"
+      className="mb-1.5 flex items-center gap-1.5 text-[11px]"
       style={{ color: "var(--text-muted)" }}
       title={CADENCE_HINT[def.cadence] ?? undefined}
     >
@@ -316,7 +327,18 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
           basis={basis}
           change={deltas.appointment_booked}
           spark={sparkAppts}
-          footnote={`${formatPercent(current.derived.bookPct, 1)} of leads`}
+          /*
+           * 🔴 A suppressed rate needs a reason, not a dash. `bookPct` is null
+           * whenever appointments outnumber leads — the funnel's top is not
+           * being recorded — and "— of leads" under a tile reads as a broken
+           * renderer rather than as the finding it is. The Reports tab carries
+           * the full explanation; this is the one line that fits here.
+           */
+          footnote={
+            !funnelCoherence(current.funnel).leadsRecorded
+              ? "more appts than leads recorded"
+              : `${formatPercent(current.derived.bookPct, 1)} of leads`
+          }
         />
         <StatTile
           label="Showed"
@@ -326,7 +348,12 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
           metricKey="showed"
           basis={basis}
           change={deltas.showed}
-          footnote={`${formatPercent(current.derived.showPct, 1)} of appts`}
+          // Same rule, the other break: wins downstream of zero recorded shows.
+          footnote={
+            !funnelCoherence(current.funnel).showsRecorded
+              ? "attendance not recorded"
+              : `${formatPercent(current.derived.showPct, 1)} of appts`
+          }
         />
         <StatTile
           label="Closed / won"
@@ -754,7 +781,7 @@ export const CAMPAIGN_DOTS = [
 export function NoWebhookBanner({ slug }: { slug: string }) {
   return (
     <div
-      className="flex flex-wrap items-center gap-3 rounded-[10px] border p-4"
+      className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border p-4"
       style={{
         borderColor: "var(--status-critical)",
         background: "color-mix(in srgb, var(--status-critical) 8%, transparent)",
@@ -762,7 +789,7 @@ export function NoWebhookBanner({ slug }: { slug: string }) {
     >
       <span
         aria-hidden="true"
-        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-[var(--status-ink)]"
         style={{ background: "var(--status-critical)" }}
       >
         ✕
@@ -778,7 +805,7 @@ export function NoWebhookBanner({ slug }: { slug: string }) {
       </div>
       <Link
         href={`/c/${slug}/setup`}
-        className="shrink-0 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white"
+        className="shrink-0 rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--status-ink)]"
         style={{ background: "var(--status-critical)" }}
       >
         Finish setup
@@ -812,7 +839,7 @@ export function OutOfRangeBanner({
   const span = rangeLabel(notice.firstKey, notice.lastKey);
   return (
     <div
-      className="flex flex-wrap items-center gap-3 rounded-[10px] border p-4"
+      className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border p-4"
       style={{
         borderColor: "var(--border-strong)",
         background: "color-mix(in srgb, var(--text-muted) 6%, transparent)",
@@ -843,7 +870,7 @@ export function OutOfRangeBanner({
       </div>
       <Link
         href={`/c/${slug}?platform=${platform}&start=${notice.firstKey}&end=${notice.lastKey}`}
-        className="shrink-0 rounded-[8px] border px-3 py-2 text-[13px] font-medium"
+        className="shrink-0 rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
         style={{
           borderColor: "var(--border-strong)",
           color: "var(--text-primary)",
@@ -864,7 +891,7 @@ export function AttributionBanner({
 }) {
   return (
     <div
-      className="flex flex-wrap items-center gap-3 rounded-[10px] border p-4"
+      className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] border p-4"
       style={{
         borderColor: "var(--status-warning)",
         background: "color-mix(in srgb, var(--status-warning) 10%, transparent)",
@@ -889,7 +916,7 @@ export function AttributionBanner({
       </div>
       <Link
         href={`/c/${slug}/setup`}
-        className="shrink-0 rounded-[8px] border px-3 py-2 text-[13px] font-medium"
+        className="shrink-0 rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
         style={{
           borderColor: "var(--border-strong)",
           color: "var(--text-secondary)",
@@ -943,7 +970,7 @@ function LeadFilterNote({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[8px] border px-3 py-2 text-xs"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-sm)] border px-3 py-2 text-xs"
       style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
     >
       <span style={{ color: "var(--text-secondary)" }}>{description}</span>
@@ -1066,8 +1093,8 @@ function ReportTablesSkeleton() {
       <span className="sr-only">Loading report tables…</span>
       {Array.from({ length: 4 }).map((_, i) => (
         <div key={i} className="card p-5">
-          <div className="skeleton h-4 w-48" />
-          <div className="skeleton mt-2 h-3 w-72" />
+          <div className="skeleton h-4 w-48 rounded-full" />
+          <div className="skeleton mt-2 h-3 w-72 rounded-full" />
         </div>
       ))}
     </div>

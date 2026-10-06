@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   div,
   derive,
+  funnelCoherence,
   pctChange,
   sumAds,
   sumFunnels,
@@ -99,6 +100,120 @@ describe("derive", () => {
     expect(d.closePct).toBeNull();
     expect(d.cpShow).toBeNull();
     expect(d.cpWon).toBeCloseTo(166.67, 2);
+  });
+});
+
+/*
+ * 🔴 A percentage the funnel's own counts contradict.
+ *
+ * Every figure below was rendered on the live gg-ads Reports tab, and every one
+ * of them is arithmetically correct. That is the whole difficulty: nothing here
+ * is a calculation bug, so nothing downstream of the division can catch it. The
+ * denominator is the wrong population, and only the counts either side of it
+ * can say so.
+ */
+describe("rates the funnel contradicts", () => {
+  it("suppresses a booking rate above 100% instead of printing it", () => {
+    // 30-day window, live: 3 leads, 25 appointments. Printed "833.33%".
+    const d = derive(funnel({ new_lead: 3, appointment_booked: 25 }), ads({ spend: 2312.51 }));
+    expect(d.bookPct).toBeNull();
+  });
+
+  it("keeps a booking rate of exactly 100%", () => {
+    // Every lead booked. Unusual, not impossible — the boundary is `>`, not `>=`.
+    const d = derive(funnel({ new_lead: 12, appointment_booked: 12 }), ads());
+    expect(d.bookPct).toBe(1);
+  });
+
+  it("suppresses the opt-in rate along with the booking rate", () => {
+    /*
+     * Same denominator, same defect. A lead count the funnel has already shown
+     * to be short understates click-to-lead by exactly the factor it is short
+     * by, and `health.ts` names opt-in rate among the figures that are unusable
+     * while the top of the funnel is unmapped.
+     */
+    const d = derive(
+      funnel({ new_lead: 3, appointment_booked: 25 }),
+      ads({ linkClicks: 380 }),
+    );
+    expect(d.optinPct).toBeNull();
+  });
+
+  it("suppresses a 0% show rate when deals closed downstream of it", () => {
+    // 90-day window, live: 40 appts, 0 shown, 4 won. Printed "0.00%".
+    const d = derive(
+      funnel({ new_lead: 30, appointment_booked: 40, showed: 0, closed_won: 4 }),
+      ads({ spend: 7164.61 }),
+    );
+    expect(d.showPct, "0.00% reads as 'nobody attended' — nobody closes a deal with someone who never showed").toBeNull();
+    expect(d.closePct).toBeNull();
+  });
+
+  it("keeps a genuine 0% show rate when nothing closed either", () => {
+    /*
+     * The case the guard must NOT swallow. Appointments booked, none attended,
+     * no wins: the funnel does not contradict itself, so 0% is the finding and
+     * the reader needs to see it.
+     */
+    const d = derive(
+      funnel({ new_lead: 60, appointment_booked: 10, showed: 0, no_show: 10 }),
+      ads({ spend: 900 }),
+    );
+    expect(d.showPct).toBe(0);
+  });
+
+  it("does not let a bad month read as a broken pipeline", () => {
+    /*
+     * A no-show is a SIBLING of a show, not a stage after it. 9 no-shows
+     * against 1 show is a 10% show rate and a real problem to go and fix — but
+     * it is a selling problem, and blanking it would hide it.
+     */
+    const d = derive(
+      funnel({ new_lead: 40, appointment_booked: 10, showed: 1, no_show: 9, closed_won: 1 }),
+      ads(),
+    );
+    expect(d.showPct).toBeCloseTo(0.1, 6);
+    expect(d.closePct).toBe(1);
+  });
+
+  it("blanks only the half of the funnel that is broken", () => {
+    /*
+     * The two defects are independent and have different fixes — an unmapped
+     * entry stage versus an unmapped attendance stage — so one must not take
+     * the other's working numbers down with it.
+     */
+    const topBroken = derive(
+      funnel({ new_lead: 2, appointment_booked: 20, showed: 16, closed_won: 4 }),
+      ads({ linkClicks: 300 }),
+    );
+    expect(topBroken.bookPct).toBeNull();
+    expect(topBroken.optinPct).toBeNull();
+    expect(topBroken.showPct).toBeCloseTo(0.8, 6); // still true, still shown
+    expect(topBroken.closePct).toBe(0.25);
+
+    const middleBroken = derive(
+      funnel({ new_lead: 100, appointment_booked: 25, showed: 0, closed_won: 5 }),
+      ads({ linkClicks: 400 }),
+    );
+    expect(middleBroken.bookPct).toBe(0.25); // still true, still shown
+    expect(middleBroken.optinPct).toBe(0.25);
+    expect(middleBroken.showPct).toBeNull();
+    expect(middleBroken.closePct).toBeNull();
+  });
+
+  it("reports which half is short, for the UI to explain the blank", () => {
+    // A dash nobody can account for is its own kind of broken.
+    expect(funnelCoherence(funnel({ new_lead: 3, appointment_booked: 25 }))).toEqual({
+      leadsRecorded: false,
+      showsRecorded: true,
+    });
+    expect(
+      funnelCoherence(funnel({ new_lead: 30, appointment_booked: 40, showed: 0, closed_won: 4 })),
+    ).toEqual({ leadsRecorded: false, showsRecorded: false });
+    expect(funnelCoherence(funnel({ new_lead: 100, appointment_booked: 20 }))).toEqual({
+      leadsRecorded: true,
+      showsRecorded: true,
+    });
   });
 });
 

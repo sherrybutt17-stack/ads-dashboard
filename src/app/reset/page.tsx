@@ -4,6 +4,12 @@ import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { MIN_PASSWORD_LENGTH } from "@/lib/password-policy";
+import {
+  AuthShell,
+  AuthHeading,
+  AuthField,
+  AuthError,
+} from "@/components/AuthShell";
 
 /**
  * Choose a new password, having arrived from an emailed link.
@@ -47,128 +53,83 @@ function ResetForm() {
     }
   }
 
-  const inputStyle = {
-    borderColor: "var(--border-strong)",
-    background: "var(--surface-1)",
-    color: "var(--text-primary)",
-  } as const;
-
   if (done) {
     return (
-      <div className="card w-full max-w-sm p-6">
-        <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-          Password changed
-        </h1>
-        <p
-          className="mt-2 text-[13px] leading-relaxed"
-          style={{ color: "var(--text-secondary)" }}
-        >
+      <>
+        <span className="badge badge-good mb-4">Password changed</span>
+        <AuthHeading title="Password changed">
           Sign in with your new password. That link no longer works — using it
           was what expired it.
-        </p>
+        </AuthHeading>
         {/*
           Deliberately not signed in automatically. A link from an inbox should
           not be equivalent to the password, and typing it once confirms it was
           not a typo — which is far cheaper to discover now than at the next
           login, when the reset link is gone.
         */}
-        <Link
-          href="/login"
-          className="btn-accent mt-4 block w-full rounded-[8px] px-3 py-2 text-center text-[13px] font-medium"
-        >
+        <Link href="/login" className="btn-accent mt-5 w-full">
           Sign in
         </Link>
-      </div>
+      </>
     );
   }
 
   if (!token) {
     return (
-      <div className="card w-full max-w-sm p-6">
-        <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-          That link is incomplete
-        </h1>
-        <p className="mt-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+      <>
+        <AuthHeading title="That link is incomplete">
           Some mail clients break long links across lines. Request a fresh one
           and open it in a single click rather than copying it.
-        </p>
-        <Link
-          href="/forgot"
-          className="btn-accent mt-4 block w-full rounded-[8px] px-3 py-2 text-center text-[13px] font-medium"
-        >
+        </AuthHeading>
+        <Link href="/forgot" className="btn-accent mt-5 w-full">
           Request a new link
         </Link>
-      </div>
+      </>
     );
   }
 
   return (
-    <form onSubmit={submit} className="card w-full max-w-sm p-6">
-      <h1 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-        Choose a new password
-      </h1>
-      <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+    <form onSubmit={submit}>
+      <AuthHeading title="Choose a new password">
         At least {MIN_PASSWORD_LENGTH} characters. A passphrase of a few
         unrelated words beats a short one with symbols in it.
-      </p>
+      </AuthHeading>
 
-      <label className="mt-4 block">
-        <span
-          className="text-[11px] font-medium tracking-wider uppercase"
-          style={{ color: "var(--text-muted)" }}
-        >
-          New password
-        </span>
-        <input
-          type="password"
-          autoFocus
-          autoComplete="new-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
-          style={inputStyle}
-        />
-      </label>
+      <AuthField
+        label="New password"
+        type="password"
+        autoFocus
+        autoComplete="new-password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
 
-      <label className="mt-3 block">
-        <span
-          className="text-[11px] font-medium tracking-wider uppercase"
-          style={{ color: "var(--text-muted)" }}
-        >
-          Confirm
-        </span>
-        <input
-          type="password"
-          autoComplete="new-password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
-          style={inputStyle}
-        />
-      </label>
+      <AuthField
+        label="Confirm"
+        type="password"
+        autoComplete="new-password"
+        value={confirm}
+        onChange={(e) => setConfirm(e.target.value)}
+      />
 
       {/* Said while it can still be acted on, rather than after a round trip. */}
       {tooShort && (
-        <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+        <p className="mt-3 text-[12px]" style={{ color: "var(--text-muted)" }}>
           {MIN_PASSWORD_LENGTH - password.length} more character
           {MIN_PASSWORD_LENGTH - password.length === 1 ? "" : "s"} needed.
         </p>
       )}
       {mismatch && (
-        <p className="mt-2 text-xs" style={{ color: "var(--status-warning)" }}>
+        <p className="mt-3 text-[12px]" style={{ color: "var(--status-warning)" }}>
           The two passwords don&rsquo;t match yet.
         </p>
       )}
-      {error && (
-        <p className="mt-2 text-xs" style={{ color: "var(--status-critical)" }}>
-          {error}
-        </p>
-      )}
+      {error && <AuthError>{error}</AuthError>}
 
       <button
         type="submit"
         disabled={busy || !ready}
-        className="btn-accent mt-4 w-full rounded-[8px] px-3 py-2 text-[13px] font-medium"
+        className="btn-accent mt-5 w-full"
       >
         {busy ? "Saving…" : "Set new password"}
       </button>
@@ -178,10 +139,10 @@ function ResetForm() {
 
 export default function ResetPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <Suspense fallback={<div className="skeleton h-64 w-full max-w-sm" />}>
+    <AuthShell pitch="Pick something you'll remember.">
+      <Suspense fallback={<div className="skeleton h-64 w-full rounded-[var(--radius-lg)]" />}>
         <ResetForm />
       </Suspense>
-    </div>
+    </AuthShell>
   );
 }

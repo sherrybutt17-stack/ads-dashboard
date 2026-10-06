@@ -224,7 +224,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
     <section className="card p-5" aria-label="Monthly commentary">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             Monthly commentary
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -274,7 +274,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
 
       {state.error && (
         <p
-          className="mt-4 rounded-[10px] border px-3 py-2 text-xs"
+          className="mt-4 rounded-[var(--radius)] border px-3 py-2 text-xs"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -360,7 +360,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
           }}
           rows={5}
           placeholder="The work behind the numbers — what was changed, tested, cut or launched."
-          className="mt-1.5 w-full rounded-[10px] border px-3 py-2 text-sm leading-relaxed"
+          className="mt-1.5 w-full rounded-[var(--radius)] border px-3 py-2 text-sm leading-relaxed"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",
@@ -408,7 +408,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
           type="button"
           onClick={addCommitment}
           disabled={disabled || commitments.length >= MAX_COMMITMENTS}
-          className="mt-2 inline-flex items-center gap-1.5 rounded-[8px] border px-3 py-1.5 text-xs disabled:opacity-50"
+          className="mt-2 inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-1.5 text-xs disabled:opacity-50"
           style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}
         >
           <span aria-hidden="true">+</span> Add a line
@@ -434,7 +434,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
           title={
             dirty && !canSave ? "Every line needs some text before it can be saved." : undefined
           }
-          className="rounded-[8px] border px-3 py-1.5 text-xs disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] border px-3 py-1.5 text-xs disabled:opacity-50"
           style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}
         >
           {busy === "saving" ? "Saving…" : "Save"}
@@ -453,7 +453,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
               type="button"
               disabled={disabled}
               onClick={() => setPublished(true)}
-              className="rounded-[8px] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+              className="rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
               style={{
                 background: stored.hasUnpublishedChanges ? "var(--accent)" : "transparent",
                 color: stored.hasUnpublishedChanges ? "var(--accent-ink)" : "var(--text-muted)",
@@ -466,7 +466,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
               type="button"
               disabled={disabled}
               onClick={() => setPublished(false)}
-              className="rounded-[8px] border px-3 py-1.5 text-xs disabled:opacity-50"
+              className="rounded-[var(--radius-sm)] border px-3 py-1.5 text-xs disabled:opacity-50"
               style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}
             >
               Withdraw
@@ -482,7 +482,7 @@ export function MonthlyCommentary({ slug, platform, month, months, initial }: Pr
                 : undefined
             }
             onClick={() => setPublished(true)}
-            className="flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
             style={{ background: "var(--accent)", color: "var(--accent-ink)" }}
           >
             <Icon name="check" size={12} />
@@ -523,7 +523,7 @@ function PriorItem({
 
   return (
     <li
-      className="rounded-[10px] border p-3"
+      className="rounded-[var(--radius)] border p-3"
       style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
     >
       <p className="text-[13px]" style={{ color: "var(--text-primary)" }}>
@@ -587,7 +587,7 @@ function PriorItem({
             ? "Optional note — context the number does not carry."
             : "Optional note."
         }
-        className="mt-2 w-full rounded-[8px] border px-2.5 py-1.5 text-[12.5px]"
+        className="mt-2 w-full rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[12.5px]"
         style={{
           borderColor: "var(--border)",
           background: "var(--surface-2)",
@@ -642,7 +642,7 @@ function PlanItem({
 
   return (
     <li
-      className="rounded-[10px] border p-3"
+      className="rounded-[var(--radius)] border p-3"
       style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
     >
       <div className="flex items-start gap-2">
@@ -652,7 +652,7 @@ function PlanItem({
           disabled={disabled}
           maxLength={MAX_COMMITMENT_CHARS}
           placeholder="e.g. Rebuild the top-of-funnel creative around the new offer"
-          className="min-w-0 flex-1 rounded-[8px] border px-2.5 py-1.5 text-[13px]"
+          className="min-w-0 flex-1 rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[13px]"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-2)",
@@ -664,7 +664,7 @@ function PlanItem({
           onClick={onRemove}
           disabled={disabled}
           aria-label="Remove this line"
-          className="btn-ghost rounded-[8px] px-2 py-1.5 disabled:opacity-50"
+          className="btn-ghost rounded-[var(--radius-sm)] px-2 py-1.5 disabled:opacity-50"
           style={{ color: "var(--text-muted)" }}
         >
           <Icon name="x" size={13} />
@@ -683,7 +683,7 @@ function PlanItem({
                 value: 0,
               })
             }
-            className="rounded-[7px] border px-2.5 py-1 text-[11.5px] disabled:opacity-50"
+            className="rounded-[var(--radius-xs)] border px-2.5 py-1 text-[11.5px] disabled:opacity-50"
             style={{ borderColor: "var(--border)", color: "var(--text-secondary)" }}
           >
             Attach a number
@@ -698,7 +698,7 @@ function PlanItem({
               }}
               disabled={disabled}
               aria-label="Metric"
-              className="rounded-[7px] border px-2 py-1 text-[11.5px]"
+              className="rounded-[var(--radius-xs)] border px-2 py-1 text-[11.5px]"
               style={{
                 borderColor: "var(--border)",
                 background: "var(--surface-2)",
@@ -718,7 +718,7 @@ function PlanItem({
               }
               disabled={disabled}
               aria-label="Direction"
-              className="rounded-[7px] border px-2 py-1 text-[11.5px]"
+              className="rounded-[var(--radius-xs)] border px-2 py-1 text-[11.5px]"
               style={{
                 borderColor: "var(--border)",
                 background: "var(--surface-2)",
@@ -736,7 +736,7 @@ function PlanItem({
               onChange={(e) => onTarget({ ...t, value: Number(e.target.value) })}
               disabled={disabled}
               aria-label="Target value"
-              className="tnum w-24 rounded-[7px] border px-2 py-1 text-[11.5px]"
+              className="tnum w-24 rounded-[var(--radius-xs)] border px-2 py-1 text-[11.5px]"
               style={{
                 borderColor: "var(--border)",
                 background: "var(--surface-2)",
@@ -756,7 +756,7 @@ function PlanItem({
               type="button"
               onClick={() => onTarget(null)}
               disabled={disabled}
-              className="btn-ghost rounded-[7px] px-2 py-1 text-[11.5px] disabled:opacity-50"
+              className="btn-ghost rounded-[var(--radius-xs)] px-2 py-1 text-[11.5px] disabled:opacity-50"
               style={{ color: "var(--text-muted)" }}
             >
               Remove number

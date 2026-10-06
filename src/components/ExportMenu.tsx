@@ -60,7 +60,7 @@ export function ExportMenu({
   return (
     <details className="relative">
       <summary
-        className="cursor-pointer list-none rounded-[9px] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)] [&::-webkit-details-marker]:hidden"
+        className="cursor-pointer list-none rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)] [&::-webkit-details-marker]:hidden"
         style={{
           borderColor: "var(--border-strong)",
           color: "var(--text-secondary)",
@@ -69,7 +69,7 @@ export function ExportMenu({
         Export
       </summary>
       <div
-        className="absolute right-0 z-20 mt-1.5 w-72 rounded-[10px] border p-1.5"
+        className="absolute right-0 z-20 mt-1.5 w-72 rounded-[var(--radius)] border p-1.5"
         style={{
           borderColor: "var(--border-strong)",
           background: "var(--surface-1)",
@@ -79,7 +79,7 @@ export function ExportMenu({
         {datasets.map((d) => (
           <div
             key={d.id}
-            className="rounded-[7px] px-2.5 py-2 transition-colors hover:bg-[var(--surface-2)]"
+            className="rounded-[var(--radius-xs)] px-2.5 py-2 transition-colors hover:bg-[var(--surface-2)]"
           >
             <span
               className="block text-[13px] font-medium"
@@ -132,7 +132,7 @@ export function ExportMenu({
                     label={f.label}
                     pendingLabel="Rendering…"
                     title={f.description}
-                    className="rounded-[5px] border px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:bg-[var(--surface-raised)] disabled:opacity-60"
+                    className="rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:bg-[var(--surface-raised)] disabled:opacity-60"
                     style={{
                       borderColor: "var(--border)",
                       color: "var(--text-secondary)",
@@ -150,7 +150,7 @@ export function ExportMenu({
                      */
                     download
                     title={f.description}
-                    className="rounded-[5px] border px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:bg-[var(--surface-raised)]"
+                    className="rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:bg-[var(--surface-raised)]"
                     style={{
                       borderColor: "var(--border)",
                       color: "var(--text-secondary)",

@@ -6,12 +6,22 @@ import type { Insight } from "@/lib/metrics/insights";
  * Turns six tiles the viewer would otherwise have to scan and interpret into a
  * named narrative. Tone is polarity-aware and never colour-alone: each insight
  * carries a small directional caret plus its text.
+ *
+ * It is drawn as the notched dark panel — the one place in the product that
+ * uses it. That is deliberate rationing: the panel is loud, and a second one on
+ * the same screen would make neither read as the headline. The tab is the
+ * section's own name, so the label costs no vertical space inside the panel.
+ *
+ * Tones come from the panel's own on-navy palette (`--panel-*`, declared on
+ * `.panel-notched`), NOT from `--delta-*` — those are measured against the page
+ * surfaces, and `--delta-good` is #006300 in light theme, which on navy is
+ * unreadable.
  */
 
 const TONE: Record<Insight["tone"], { color: string; caret: string }> = {
-  good: { color: "var(--delta-good)", caret: "▲" },
-  bad: { color: "var(--delta-bad)", caret: "▼" },
-  neutral: { color: "var(--text-muted)", caret: "•" },
+  good: { color: "var(--panel-good)", caret: "▲" },
+  bad: { color: "var(--panel-bad)", caret: "▼" },
+  neutral: { color: "var(--panel-ink-soft)", caret: "•" },
 };
 
 export function InsightStrip({ insights }: { insights: Insight[] }) {
@@ -34,7 +44,7 @@ export function InsightStrip({ insights }: { insights: Insight[] }) {
   if (insights.length === 0) {
     return (
       <section
-        className="rounded-[12px] border px-4 py-3 text-xs"
+        className="rounded-[var(--radius)] border px-4 py-3 text-xs"
         style={{
           borderColor: "var(--border)",
           background: "var(--surface-1)",
@@ -54,21 +64,18 @@ export function InsightStrip({ insights }: { insights: Insight[] }) {
 
   return (
     <section
-      className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-[12px] border px-4 py-3"
-      style={{
-        borderColor: "var(--border)",
-        background:
-          "linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--surface-1)) 0%, var(--surface-1) 100%)",
-      }}
+      className="panel-notched mt-[42px] flex flex-wrap items-center gap-x-5 gap-y-2.5 px-5 py-4"
       aria-label="What changed this period"
     >
-      <span
-        className="shrink-0 text-[10.5px] font-semibold tracking-[0.08em] uppercase"
-        style={{ color: "var(--accent)" }}
-      >
+      {/*
+        The tab sits above the panel's top edge (`bottom: 100%`), which is what
+        the 42px top margin on the panel is reserving — without it the tab
+        overlaps whatever is above.
+      */}
+      <span className="panel-tab text-[11px] font-semibold tracking-[0.07em] uppercase">
         What changed
       </span>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         {insights.map((ins, i) => {
           const t = TONE[ins.tone];
           return (
@@ -80,7 +87,7 @@ export function InsightStrip({ insights }: { insights: Insight[] }) {
               >
                 {t.caret}
               </span>
-              <span style={{ color: "var(--text-secondary)" }}>{ins.text}</span>
+              <span style={{ color: "var(--panel-ink)" }}>{ins.text}</span>
             </span>
           );
         })}

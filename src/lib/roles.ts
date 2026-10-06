@@ -65,6 +65,32 @@ export function mayAdminister(
 }
 
 /**
+ * The role as a person would say it, for the sidebar's identity block.
+ *
+ * 🔴 A role and not a name. `SessionPayload` carries `userId`, `agencyId`,
+ * `role` and `slugs` — no name, no email — and the shared-password bootstrap
+ * has no user row behind it at all. Putting a name there would mean a lookup
+ * against the users table on every signed-in page, including the ones a
+ * client-role user opens, which is personal data those pages have no reason to
+ * hold. What you are signed in AS is also the thing that decides what the page
+ * will show you, so it is the more useful of the two.
+ */
+export function roleLabel(role: UserRole | string | undefined): string | null {
+  switch (role) {
+    case "superadmin":
+      return "Superadmin";
+    case "agency":
+      return "Agency operator";
+    case "staff":
+      return "Agency staff";
+    case "client":
+      return "Client access";
+    default:
+      return null;
+  }
+}
+
+/**
  * Does this role operate an agency's book, rather than hold one dashboard?
  *
  * ── 🔴 Why this is here and not spelled out at each call site ─────────────

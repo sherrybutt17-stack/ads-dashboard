@@ -99,7 +99,7 @@ export function AlertSettings({ clientId, initial }: Props) {
 
   return (
     <section className="card p-5">
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Alerts
       </h2>
       <p className="mt-1 text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
@@ -114,7 +114,7 @@ export function AlertSettings({ clientId, initial }: Props) {
       </p>
 
       <div
-        className="mt-4 flex flex-wrap items-center gap-3 rounded-[10px] p-3"
+        className="mt-4 flex flex-wrap items-center gap-3 rounded-[var(--radius)] p-3"
         style={{ background: "var(--surface-2)" }}
       >
         <span className="text-[13px]" style={{ color: "var(--text-primary)" }}>
@@ -143,7 +143,7 @@ export function AlertSettings({ clientId, initial }: Props) {
             type="button"
             onClick={toggle}
             disabled={busy !== null}
-            className="btn-ghost rounded-[8px] px-3 py-1.5 text-[12.5px] font-medium"
+            className="btn-ghost rounded-[var(--radius-sm)] px-3 py-1.5 text-[12.5px] font-medium"
             style={{ color: state.enabled ? "var(--status-warning)" : "var(--accent)" }}
           >
             {busy === "toggle" ? "…" : state.enabled ? "Mute alerts" : "Switch alerts on"}
@@ -173,7 +173,7 @@ export function AlertSettings({ clientId, initial }: Props) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://hooks.slack.com/services/…"
-          className="min-w-[260px] flex-1 rounded-[9px] border px-3 py-2 text-[13px]"
+          className="min-w-[260px] flex-1 rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
           style={{
             borderColor: "var(--border-strong)",
             background: "var(--surface-1)",
@@ -184,7 +184,7 @@ export function AlertSettings({ clientId, initial }: Props) {
           type="button"
           onClick={test}
           disabled={busy !== null || url.trim() === ""}
-          className="btn-ghost rounded-[9px] px-3 py-2 text-[13px] font-medium"
+          className="btn-ghost rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium"
         >
           {busy === "test" ? "Sending…" : "Send a test"}
         </button>
@@ -192,7 +192,7 @@ export function AlertSettings({ clientId, initial }: Props) {
           type="button"
           onClick={save}
           disabled={busy !== null || url.trim() === ""}
-          className="btn-primary rounded-[9px] px-3 py-2 text-[13px] font-medium"
+          className="btn-primary rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium"
         >
           {busy === "save" ? "Saving…" : "Save"}
         </button>

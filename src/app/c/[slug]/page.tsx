@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { after } from "next/server";
-import { Fragment } from "react";
 import { getClientForSession } from "@/lib/clients";
 import { getSessionUser, canAccessSlug, isAgencyOperator } from "@/lib/auth";
 import { loadDashboard } from "@/lib/metrics/dashboard";
@@ -21,10 +20,8 @@ import {
   MAX_RANGE_DAYS,
 } from "@/lib/dates";
 import { formatNumber } from "@/lib/metrics/compute";
-import { SignOut } from "@/components/SignOut";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import { DateRangePicker } from "@/components/DateRangePicker";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { ShareReport } from "@/components/ShareReport";
 import { ExportMenu } from "@/components/ExportMenu";
 import { Icon } from "@/components/Icon";
@@ -46,7 +43,8 @@ import { monthKeyForDateKey, previousMonthKey } from "@/lib/commentary/model";
 import { getLayout } from "@/lib/dashboard/layout-store";
 import { defaultAudience } from "@/lib/dashboard/layout-write";
 import { CustomiseSections } from "@/components/CustomiseSections";
-import { DashboardNav } from "@/components/DashboardNav";
+import { ClientSideNav } from "@/components/ClientSideNav";
+import { DashboardTabs } from "@/components/DashboardTabs";
 import {
   renderSection,
   NoWebhookBanner,
@@ -460,48 +458,61 @@ export default async function ClientDashboard({
   };
 
   return (
-    <div className="flex min-h-full" style={accentVars}>
-      <DashboardNav
+    /*
+     * The page canvas and the frame that floats on it.
+     *
+     * The padding is the design: a flat grey ground showing on all four sides
+     * is what lets the frame read as a single rounded object rather than as a
+     * background colour. It collapses to nothing below `lg`, where 20px of
+     * margin plus a 32px radius would eat the usable width of a phone — see
+     * `.app-frame`, which drops its radius and shadow at the same breakpoint.
+     *
+     * At the same breakpoint the sidebar turns from a labelled column on the
+     * left into a horizontal bar above the frame, which is why this is a
+     * `flex-col` that becomes a `flex-row`.
+     */
+    <div
+      className="flex min-h-full flex-1 flex-col gap-3 lg:flex-row lg:gap-5 lg:p-5"
+      style={accentVars}
+    >
+      <ClientSideNav
         slug={slug}
         brandName={brandName}
-        logoUrl={
-          branding.hasLogo
-            ? `/api/c/${slug}/branding/logo?v=${branding.logoVersion}`
-            : null
-        }
-        groups={availableGroups}
-        activeGroup={activeGroup}
-        hrefForGroup={(g) => hrefWith({ tab: g })}
-        reportHref={reportHref}
-        presentHref={presentHref}
+        session={session}
         staff={staff}
-        showBranding={staff || branding.clientEditable}
+        brandingEditable={branding.clientEditable}
         /*
-         * The dot fires on the two conditions that mean a pipe is actually
+         * 🔴 The dot fires on the two conditions that mean a pipe is actually
          * down, not merely quiet: the CRM has never delivered a webhook, or the
          * ad platform is unreachable. "Paused" is deliberately excluded — an
          * account with no spend is a business decision, and flagging it would
          * train the operator to ignore the one indicator that matters.
          */
-        connectionsWarning={
-          staff &&
-          (!data.client.firstWebhookAt ||
-            adPipe.state === "unreachable" ||
-            adPipe.state === "stale")
+        warnConnections={
+          !data.client.firstWebhookAt ||
+          adPipe.state === "unreachable" ||
+          adPipe.state === "stale"
         }
+        reportHref={reportHref}
+        presentHref={presentHref}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header
-          className="sticky top-0 z-10 border-b"
-          style={{
-            borderColor: "var(--border)",
-            background:
-              "color-mix(in srgb, var(--surface-page) 80%, transparent)",
-            backdropFilter: "saturate(180%) blur(14px)",
-            WebkitBackdropFilter: "saturate(180%) blur(14px)",
-          }}
-        >
+      <div className="app-frame flex min-w-0 flex-1 flex-col">
+        {/*
+          `.glass-bar` carries what four inline declarations used to: the
+          translucent ground, the blur, the bottom hairline and a lit top edge.
+
+          It is mixed from the FRAME's ground (`--surface-app`), not the page's
+          — the header sits inside the frame, and blurring the page colour over
+          it left a visibly cooler band across the top of an otherwise uniform
+          sheet. See the glass block in globals.css.
+
+          🔴 No `border-b` here. `.glass-bar` owns its bottom edge, and
+          globals.css is unlayered while Tailwind's utilities are in
+          `@layer utilities` — so the class would win over the utility anyway
+          and the two would only ever disagree.
+        */}
+        <header className="glass-bar sticky top-0 z-10">
           <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-3 px-4 py-3.5 sm:px-6">
             {/*
               `basis-[15rem]`, not a bare `flex-1`.
@@ -539,7 +550,7 @@ export default async function ClientDashboard({
               ) : (
                 <div
                   aria-hidden="true"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[11px] text-[15px] font-bold text-white"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius)] text-[15px] font-bold text-white"
                   style={{
                     background:
                       "linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 50%, #0d1b30) 100%)",
@@ -581,7 +592,7 @@ export default async function ClientDashboard({
                 <div
                   role="group"
                   aria-label="Ad platform"
-                  className="inline-flex items-center rounded-[9px] border p-0.5"
+                  className="inline-flex items-center rounded-[var(--radius-sm)] border p-0.5"
                   style={{
                     borderColor: "var(--border-strong)",
                     background: "var(--surface-2)",
@@ -594,7 +605,7 @@ export default async function ClientDashboard({
                         key={p}
                         href={platformHref(p)}
                         aria-current={active ? "page" : undefined}
-                        className="rounded-[7px] px-3 py-1.5 text-[13px] font-medium transition-colors"
+                        className="rounded-[var(--radius-xs)] px-3 py-1.5 text-[13px] font-medium transition-colors"
                         style={{
                           background: active
                             ? "var(--surface-1)"
@@ -663,85 +674,43 @@ export default async function ClientDashboard({
                 staff={staff}
               />
               {/*
-              These stay in the header rather than moving to the sidebar with
-              the rest of the account chrome, because the sidebar is `lg:` and
-              up. Signing out and switching theme are not desktop privileges.
+              Sign out and the theme switch used to sit here, because the
+              sidebar beside this frame was `lg:` and up and signing out is not
+              a desktop privilege. The sidebar now lies down into a bar below
+              `lg` and carries both at every width, so keeping a second copy
+              here would put two Sign out buttons on the same phone screen.
             */}
-              <SignOut />
-              <ThemeToggle />
             </div>
           </div>
           {/*
-          Tabs.
+          The section switcher.
 
           Inside the header rather than at the top of <main> on purpose: the
           entrance stagger targets `main > *:nth-child(n)`, so a nav element
           there would take a section's animation slot and push every section one
           step later.
 
-          Horizontally scrollable rather than wrapping, so four tabs plus a long
-          client name cannot push the row into a second line on a narrow screen
-          — the overlapping-controls problem this header already had.
+          The mobile-only duplicate links that used to ride this row — Report,
+          Present, Connections, Branding — are gone, and deliberately so: the
+          sidebar renders as a horizontal bar with visible labels below `lg`,
+          so those destinations are reachable on a phone from the one place they
+          live. Two lists of the same links is how they drift apart.
         */}
           {availableGroups.length > 1 && (
-            <nav
-              aria-label="Dashboard sections"
-              className="-mb-px flex gap-1 overflow-x-auto px-4 sm:px-6"
-            >
-              {availableGroups.map((g) => {
-                const active = g.id === activeGroup;
-                return (
-                  <Link
-                    key={g.id}
-                    href={hrefWith({ tab: g.id })}
-                    aria-current={active ? "page" : undefined}
-                    title={g.blurb}
-                    className="shrink-0 border-b-2 px-3 py-2.5 text-[13.5px] font-medium whitespace-nowrap transition-colors"
-                    style={{
-                      borderColor: active ? "var(--accent)" : "transparent",
-                      color: active
-                        ? "var(--text-primary)"
-                        : "var(--text-muted)",
-                    }}
-                  >
-                    {g.label}
-                  </Link>
-                );
-              })}
+            <div className="px-4 pb-3 sm:px-6">
               {/*
-              Below `lg` the sidebar is hidden, so these would be unreachable —
-              including Connections, which is where someone goes when a feed has
-              died. They ride the same scrollable row rather than getting their
-              own bar, separated by a rule so they read as a different kind of
-              destination than the tabs.
-            */}
-              <span
-                aria-hidden="true"
-                className="mx-1 my-2 w-px shrink-0 lg:hidden"
-                style={{ background: "var(--border-strong)" }}
+                The hrefs are resolved HERE and handed over as strings. See
+                `NavGroup.href`: passing `hrefWith` itself is a runtime-only
+                failure that leaves the tab bar missing and the page at 200.
+              */}
+              <DashboardTabs
+                groups={availableGroups.map((g) => ({
+                  ...g,
+                  href: hrefWith({ tab: g.id }),
+                }))}
+                activeGroup={activeGroup}
               />
-              {[
-                { href: reportHref, label: "Report", show: true },
-                { href: presentHref, label: "Present", show: true },
-                { href: `/c/${slug}/setup`, label: "Connections", show: staff },
-                {
-                  href: `/c/${slug}/branding`,
-                  label: "Branding",
-                  show: staff || branding.clientEditable,
-                },
-              ]
-                .filter((l) => l.show)
-                .map((l) => (
-                  <Link
-                    key={l.href}
-                    href={l.href}
-                    className="shrink-0 px-3 py-2.5 text-[13.5px] font-medium whitespace-nowrap lg:hidden"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {l.label}
-                  </Link>
-                ))}
-            </nav>
+            </div>
           )}
         </header>
 
@@ -770,12 +739,47 @@ export default async function ClientDashboard({
           {/*
           The page body, from the registry.
 
-          Rendered as a flat map with Fragment keys and NO wrapper element — the
-          entrance stagger in globals.css targets `main > *:nth-child(n)`, so an
-          intervening div would collapse every section onto one delay.
+          ONE wrapper per section, never one around the map. The entrance
+          stagger in globals.css targets `main > *:nth-child(n)`, so a single
+          intervening div would collapse every section onto one delay — but a
+          div per section keeps the child indices 1:1 with the sections and the
+          stagger intact. The wrapper is a bare flex item, exactly as the card
+          it replaces was, so it changes no layout.
+
+          It exists to carry the section's hue down to the card as inherited
+          custom properties. Passing colour through CSS variables rather than
+          props is what keeps this to one edit: the heading reads
+          `var(--section-ink, var(--text-primary))`, so a component outside a
+          band — a settings form, a modal — resolves the fallback and is
+          untouched.
         */}
           {tabSections.map((s) => (
-            <Fragment key={s.id}>{renderSection(s.id, sectionCtx)}</Fragment>
+            <div
+              key={s.id}
+              className="section-band"
+              style={
+                {
+                  "--section-band": `var(--series-${s.hue})`,
+                  "--section-ink": `var(--series-${s.hue}-ink)`,
+                  /*
+                   * The wash across the top of the card. Mixed from the MARK
+                   * value, not the ink: the ink is darkened for contrast as
+                   * text, and a tint mixed from it reads muddy rather than
+                   * coloured.
+                   *
+                   * 6% because this sits behind body copy. Measured on the
+                   * darkest of the seven (`--series-7`, indigo) against
+                   * `--surface-1`: at 6% the card ground moves far enough to be
+                   * seen and not far enough to cost the text any contrast — it
+                   * is still a near-white in light mode and a near-black in
+                   * dark. Raising it is how you get a section nobody can read.
+                   */
+                  "--section-tint": `color-mix(in srgb, var(--series-${s.hue}) 6%, transparent)`,
+                } as CSSProperties
+              }
+            >
+              {renderSection(s.id, sectionCtx)}
+            </div>
           ))}
 
           <footer

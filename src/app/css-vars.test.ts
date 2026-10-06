@@ -37,12 +37,13 @@ const GLOBALS = join(__dirname, "globals.css");
 /**
  * Declared somewhere other than the stylesheet.
  *
- * `--font-geist-*` are injected on <html> by next/font; `--accent`/`--accent-glow`
+ * `--font-jakarta`/`--font-geist-mono` are injected on <html> by next/font (see
+ * layout.tsx); `--accent`/`--accent-glow`
  * are written onto a style object per client so each dashboard carries its own
  * accent (see `lib/accent.ts`).
  */
 const RUNTIME_DECLARED = new Set([
-  "--font-geist-sans",
+  "--font-jakarta",
   "--font-geist-mono",
   "--accent",
   "--accent-glow",

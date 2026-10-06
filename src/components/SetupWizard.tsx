@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
   CANONICAL_STAGES,
@@ -261,7 +261,7 @@ function InstallStep({
           </Result>
           <a
             href={`/api/oauth/authorize?clientId=${clientId}`}
-            className="mt-3 inline-block rounded-[8px] border px-3 py-2 text-[13px] font-medium"
+            className="mt-3 inline-block rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
             style={{
               borderColor: "var(--border-strong)",
               color: "var(--text-secondary)",
@@ -282,7 +282,7 @@ function InstallStep({
           </p>
           <a
             href={`/api/oauth/authorize?clientId=${clientId}`}
-            className="mt-3 inline-block rounded-[8px] border px-3 py-2 text-[13px] font-medium"
+            className="mt-3 inline-block rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
             style={{
               borderColor: "var(--border-strong)",
               color: "var(--text-secondary)",
@@ -310,7 +310,7 @@ function InstallStep({
           )}
           <a
             href={`/api/oauth/authorize?clientId=${clientId}`}
-            className="inline-block rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent"
+            className="btn-accent"
           >
             Install on a sub-account
           </a>
@@ -377,7 +377,7 @@ function StashDeadEnd({
       </p>
       <a
         href={authorizeHref}
-        className="inline-flex items-center rounded-[9px] border px-3.5 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90"
+        className="inline-flex items-center rounded-[var(--radius-sm)] border px-3.5 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90"
         style={{
           background: "var(--surface-2)",
           color: "var(--text-primary)",
@@ -489,7 +489,7 @@ function MetaAccountPicker({
 
   return (
     <div
-      className="mb-4 rounded-[10px] border p-3"
+      className="mb-4 rounded-[var(--radius)] border p-3"
       style={{
         borderColor: "var(--border-strong)",
         background: "var(--surface-2)",
@@ -524,7 +524,7 @@ function MetaAccountPicker({
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter by account name or ID…"
-          className="mt-2 w-full rounded-[8px] border px-2.5 py-1.5 text-[13px]"
+          className="mt-2 w-full rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[13px]"
           style={{
             borderColor: "var(--border-strong)",
             background: "var(--surface-1)",
@@ -655,8 +655,7 @@ function MetaAccountPicker({
       <button
         onClick={attach}
         disabled={busy || picked.size === 0}
-        className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-        style={{ background: "var(--accent)" }}
+        className="accent-fill mt-3 rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium disabled:opacity-60"
       >
         {busy
           ? "Attaching…"
@@ -686,7 +685,7 @@ function Card({
           className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
           style={{
             background: done ? "var(--status-good)" : "var(--surface-2)",
-            color: done ? "#fff" : "var(--text-secondary)",
+            color: done ? "var(--status-ink)" : "var(--text-secondary)",
           }}
           aria-hidden="true"
         >
@@ -695,7 +694,7 @@ function Card({
         <div className="min-w-0 flex-1">
           <h2
             className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
+            style={{ color: "var(--section-ink, var(--text-primary))" }}
           >
             {title}
           </h2>
@@ -734,7 +733,7 @@ function Field({
       </span>
       <input
         {...props}
-        className="mt-1 w-full rounded-[8px] border px-3 py-2 text-[13px]"
+        className="mt-1 w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
         style={inputStyle}
       />
     </label>
@@ -828,7 +827,7 @@ function GhlStep({
         <button
           onClick={verify}
           disabled={busy || !locationId}
-          className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
+          className="self-start btn-accent disabled:opacity-50"
         >
           {busy ? "Verifying…" : "Verify & save"}
         </button>
@@ -1002,7 +1001,7 @@ function StageStep({
       <button
         onClick={importStages}
         disabled={busy}
-        className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+        className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
         style={{
           borderColor: "var(--border-strong)",
           color: "var(--text-secondary)",
@@ -1025,7 +1024,7 @@ function StageStep({
             {autoMappable > 0 && (
               <button
                 onClick={() => autoMap()}
-                className="rounded-[8px] border px-2.5 py-1 text-[12px] font-medium"
+                className="rounded-[var(--radius-sm)] border px-2.5 py-1 text-[12px] font-medium"
                 style={{
                   borderColor: "var(--border-strong)",
                   color: "var(--text-secondary)",
@@ -1051,7 +1050,7 @@ function StageStep({
               return (
                 <div
                   key={group.pipeline}
-                  className="rounded-[10px] border"
+                  className="rounded-[var(--radius)] border"
                   style={{ borderColor: "var(--border)" }}
                 >
                   <div className="flex items-center gap-2 px-3 py-2">
@@ -1087,12 +1086,8 @@ function StageStep({
                       {gAutoMappable > 0 && (
                         <button
                           onClick={() => autoMap(group.pipeline)}
-                          className="rounded-[6px] px-2 py-1 text-[11px] font-medium"
-                          style={{
-                            color: "var(--accent)",
-                            background:
-                              "color-mix(in srgb, var(--accent) 12%, transparent)",
-                          }}
+                          className="tint-badge rounded-[var(--radius-xs)] px-2 py-1 text-[11px] font-medium"
+                          style={{ "--tint": "var(--accent)" } as CSSProperties}
                         >
                           Auto-map
                         </button>
@@ -1100,7 +1095,7 @@ function StageStep({
                       {!none && (
                         <button
                           onClick={() => ignorePipeline(group.pipeline)}
-                          className="rounded-[6px] px-2 py-1 text-[11px] font-medium"
+                          className="rounded-[var(--radius-xs)] px-2 py-1 text-[11px] font-medium"
                           style={{
                             color: "var(--text-muted)",
                             background: "var(--surface-2)",
@@ -1120,7 +1115,7 @@ function StageStep({
                       {group.stages.map((row) => (
                         <div
                           key={row.id}
-                          className="flex flex-wrap items-center gap-2 rounded-[8px] px-2 py-1.5"
+                          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5"
                           style={{
                             background: row.canonicalStage
                               ? "transparent"
@@ -1139,7 +1134,7 @@ function StageStep({
                               )}
                               {row.discoveredFromWebhook && (
                                 <span
-                                  className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                  className="ml-2 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium"
                                   style={{
                                     background:
                                       "color-mix(in srgb, var(--status-warning) 22%, transparent)",
@@ -1160,7 +1155,7 @@ function StageStep({
                                   null) as CanonicalStage | null,
                               )
                             }
-                            className="min-w-[150px] rounded-[8px] border px-2 py-1.5 text-[13px]"
+                            className="min-w-[150px] rounded-[var(--radius-sm)] border px-2 py-1.5 text-[13px]"
                             style={inputStyle}
                           >
                             <option value="">— not used —</option>
@@ -1192,7 +1187,7 @@ function StageStep({
           <button
             onClick={save}
             disabled={busy}
-            className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
+            className="mt-3 btn-accent disabled:opacity-50"
           >
             Save mapping
           </button>
@@ -1223,11 +1218,8 @@ function StageBadge({
       : { text: `${mapped}/${total}`, color: "var(--status-warning)" };
   return (
     <span
-      className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums"
-      style={{
-        color,
-        background: `color-mix(in srgb, ${color} 14%, transparent)`,
-      }}
+      className="tint-badge shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums"
+      style={{ "--tint": color } as CSSProperties}
     >
       {text}
     </span>
@@ -1341,7 +1333,7 @@ function MetaAccountsStep({
           {live.map((a) => (
             <li
               key={a.id}
-              className="flex flex-wrap items-center gap-2 rounded-[8px] border p-2.5"
+              className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border p-2.5"
               style={{ borderColor: "var(--border)" }}
             >
               <div className="min-w-0 flex-1">
@@ -1354,7 +1346,7 @@ function MetaAccountsStep({
                   </span>
                   {a.isPrimary && (
                     <span
-                      className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                      className="rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium"
                       style={{
                         background: "var(--surface-2)",
                         color: "var(--text-muted)",
@@ -1393,10 +1385,20 @@ function MetaAccountsStep({
       */}
       {connectConfigured && !stash && (
         <div className="mb-4">
+          {/*
+            #166FE5, not Meta's headline #1877F2: white on the brand blue is
+            4.23:1, under the 4.5 floor. #166FE5 is Meta's own hover step, so
+            the button still reads as theirs, and measures 4.73:1.
+
+            And the hover fades the FILL, not the element. `opacity-90` on a
+            white-on-blue button lightens the ink and the ground together, which
+            took the fixed blue back down to 4.02:1 — a button that passes at
+            rest and fails under the cursor. Darkening the fill moves contrast
+            the right way (5.60:1). Meta's own spec does the same thing.
+          */}
           <a
             href={`/api/oauth/meta/authorize?clientId=${encodeURIComponent(clientId)}`}
-            className="inline-flex items-center gap-2 rounded-[9px] px-3.5 py-2.5 text-[13.5px] font-semibold text-white transition-opacity hover:opacity-90"
-            style={{ background: "#1877F2" }}
+            className="inline-flex items-center gap-2 rounded-[var(--radius-sm)] bg-[#166FE5] px-3.5 py-2.5 text-[13.5px] font-semibold text-white transition-colors hover:bg-[#0C63D4]"
           >
             <svg
               viewBox="0 0 24 24"
@@ -1450,7 +1452,7 @@ function MetaAccountsStep({
         <button
           onClick={add}
           disabled={busy || !accountId}
-          className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
+          className="self-start btn-accent disabled:opacity-50"
         >
           {busy ? "Verifying…" : "Verify & add"}
         </button>
@@ -1625,7 +1627,7 @@ function GoogleAccountPicker({
 
   return (
     <div
-      className="mb-4 rounded-[10px] border p-3"
+      className="mb-4 rounded-[var(--radius)] border p-3"
       style={{
         borderColor: "var(--border-strong)",
         background: "var(--surface-2)",
@@ -1698,7 +1700,7 @@ function GoogleAccountPicker({
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter by name or Customer ID…"
-          className="mt-2 w-full rounded-[8px] border px-2.5 py-1.5 text-[13px]"
+          className="mt-2 w-full rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[13px]"
           style={{
             borderColor: "var(--border-strong)",
             background: "var(--surface-1)",
@@ -1790,7 +1792,7 @@ function GoogleAccountPicker({
       <button
         onClick={attach}
         disabled={busy || picked.size === 0}
-        className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-60"
+        className="mt-3 btn-accent disabled:opacity-60"
       >
         {busy
           ? "Attaching…"
@@ -1907,7 +1909,7 @@ function GoogleAccountsStep({
               {live.map((a) => (
                 <li
                   key={a.id}
-                  className="flex flex-wrap items-center gap-2 rounded-[8px] border p-2.5"
+                  className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border p-2.5"
                   style={{ borderColor: "var(--border)" }}
                 >
                   <div className="min-w-0 flex-1">
@@ -1920,7 +1922,7 @@ function GoogleAccountsStep({
                       </span>
                       {a.isPrimary && (
                         <span
-                          className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                          className="rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[10px] font-medium"
                           style={{
                             background: "var(--surface-2)",
                             color: "var(--text-muted)",
@@ -1961,7 +1963,7 @@ function GoogleAccountsStep({
             <div className="mb-4">
               <a
                 href={`/api/oauth/google/authorize?clientId=${encodeURIComponent(clientId)}`}
-                className="inline-flex items-center gap-2 rounded-[9px] border px-3.5 py-2.5 text-[13.5px] font-semibold transition-opacity hover:opacity-90"
+                className="inline-flex items-center gap-2 rounded-[var(--radius-sm)] border px-3.5 py-2.5 text-[13.5px] font-semibold transition-opacity hover:opacity-90"
                 style={{
                   background: "#ffffff",
                   color: "#1f1f1f",
@@ -2060,7 +2062,7 @@ function GoogleAccountsStep({
             <button
               onClick={add}
               disabled={busy || !customerId}
-              className="self-start rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-50"
+              className="self-start btn-accent disabled:opacity-50"
             >
               {busy ? "Verifying…" : "Verify & add"}
             </button>
@@ -2244,7 +2246,7 @@ function TiktokAccountPicker({
 
   return (
     <div
-      className="mb-4 rounded-[10px] border p-3"
+      className="mb-4 rounded-[var(--radius)] border p-3"
       style={{
         borderColor: "var(--border-strong)",
         background: "var(--surface-2)",
@@ -2283,7 +2285,7 @@ function TiktokAccountPicker({
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter by advertiser name or ID…"
-          className="mt-2 w-full rounded-[8px] border px-2.5 py-1.5 text-[13px]"
+          className="mt-2 w-full rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-[13px]"
           style={{
             borderColor: "var(--border-strong)",
             background: "var(--surface-1)",
@@ -2383,8 +2385,7 @@ function TiktokAccountPicker({
       <button
         onClick={attach}
         disabled={busy || picked.size === 0}
-        className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-        style={{ background: "var(--accent)" }}
+        className="accent-fill mt-3 rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium disabled:opacity-60"
       >
         {busy
           ? "Attaching…"
@@ -2451,7 +2452,7 @@ function TiktokAccountsStep({
           {live.map((a) => (
             <li
               key={a.id}
-              className="flex flex-wrap items-center gap-2 rounded-[8px] border p-2.5"
+              className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border p-2.5"
               style={{ borderColor: "var(--border)" }}
             >
               <div className="min-w-0 flex-1">
@@ -2493,7 +2494,7 @@ function TiktokAccountsStep({
           <div>
             <a
               href={`/api/oauth/tiktok/authorize?clientId=${encodeURIComponent(clientId)}`}
-              className="inline-flex items-center gap-2 rounded-[9px] px-3.5 py-2.5 text-[13.5px] font-semibold text-white transition-opacity hover:opacity-90"
+              className="inline-flex items-center gap-2 rounded-[var(--radius-sm)] px-3.5 py-2.5 text-[13.5px] font-semibold text-white transition-opacity hover:opacity-90"
               style={{ background: "#000000" }}
             >
               <svg
@@ -2593,7 +2594,7 @@ function WebhookStep({
       done={received}
     >
       <div
-        className="flex items-center gap-2 rounded-[8px] border p-2"
+        className="flex items-center gap-2 rounded-[var(--radius-sm)] border p-2"
         style={{
           borderColor: "var(--border-strong)",
           background: "var(--surface-2)",
@@ -2611,7 +2612,7 @@ function WebhookStep({
             setCopied(true);
             setTimeout(() => setCopied(false), 1600);
           }}
-          className="shrink-0 rounded-[6px] border px-2 py-1 text-[12px]"
+          className="shrink-0 rounded-[var(--radius-xs)] border px-2 py-1 text-[12px]"
           style={{
             borderColor: "var(--border-strong)",
             color: "var(--text-secondary)",
@@ -2630,7 +2631,7 @@ function WebhookStep({
           <button
             onClick={() => setListening(true)}
             disabled={listening}
-            className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium btn-accent disabled:opacity-60"
+            className="mt-3 btn-accent disabled:opacity-60"
           >
             {listening ? "Waiting for first event…" : "Test connection"}
           </button>
@@ -2718,7 +2719,7 @@ function BackfillStep({
           value={days}
           onChange={(e) => setDays(Number(e.target.value))}
           disabled={busy !== null}
-          className="rounded-[8px] border px-2 py-2 text-[13px] disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] border px-2 py-2 text-[13px] disabled:opacity-50"
           style={{
             borderColor: "var(--border-strong)",
             color: "var(--text-secondary)",
@@ -2732,7 +2733,7 @@ function BackfillStep({
         <button
           onClick={() => run("meta_backfill")}
           disabled={busy !== null}
-          className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
           style={{
             borderColor: "var(--border-strong)",
             color: "var(--text-secondary)",
@@ -2746,7 +2747,7 @@ function BackfillStep({
           <button
             onClick={() => run("tiktok_backfill")}
             disabled={busy !== null}
-            className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+            className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
             style={{
               borderColor: "var(--border-strong)",
               color: "var(--text-secondary)",
@@ -2760,7 +2761,7 @@ function BackfillStep({
         <button
           onClick={() => run("ghl_backfill")}
           disabled={busy !== null}
-          className="rounded-[8px] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
           style={{
             borderColor: "var(--border-strong)",
             color: "var(--text-secondary)",
@@ -2784,7 +2785,7 @@ function BackfillStep({
       <a
         href={`/c/${slug}`}
         className="mt-4 inline-block text-[13px] font-medium hover:underline"
-        style={{ color: "var(--series-1)" }}
+        style={{ color: "var(--accent)" }}
       >
         Go to dashboard →
       </a>

@@ -4,8 +4,9 @@ import { getClientForSession } from "@/lib/clients";
 import { getSessionUser, canAccessSlug, isAgencyOperator } from "@/lib/auth";
 import { getClientBranding } from "@/lib/branding-store";
 import { ClientBrandingForm } from "@/components/ClientBrandingForm";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { Icon } from "@/components/Icon";
+import { AppShell } from "@/components/AppShell";
+import { ClientSideNav } from "@/components/ClientSideNav";
+import { PageTitle } from "@/components/PageTitle";
 
 export const dynamic = "force-dynamic";
 
@@ -45,29 +46,22 @@ export default async function ClientBrandingPage({
   const branding = await getClientBranding(client.id);
 
   return (
-    <div className="min-h-full">
-      <header className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="mx-auto flex max-w-[720px] items-center gap-3 px-4 py-4 sm:px-6">
-          <div className="min-w-0 flex-1">
-            <Link
-              href={`/c/${slug}`}
-              className="inline-flex items-center gap-1 text-xs hover:underline"
-              style={{ color: "var(--text-muted)" }}
-            >
-              <Icon name="arrowLeft" size={12} /> {branding.displayName ?? client.name}
-            </Link>
-            <h1
-              className="text-lg font-semibold"
-              style={{ color: "var(--text-primary)" }}
-            >
-              Branding
-            </h1>
-          </div>
-          <ThemeToggle />
-        </div>
-      </header>
-
-      <main className="mx-auto flex max-w-[720px] flex-col gap-5 px-4 py-6 sm:px-6">
+    <AppShell
+      nav={
+        <ClientSideNav
+          slug={slug}
+          brandName={branding.displayName ?? client.name}
+          session={session}
+          staff={staff}
+          brandingEditable={branding.clientEditable}
+        />
+      }
+    >
+      <main className="mx-auto w-full max-w-[720px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <PageTitle
+          title="Branding"
+          subtitle={branding.displayName ?? client.name}
+        />
         <ClientBrandingForm
           slug={slug}
           clientName={client.name}
@@ -96,6 +90,6 @@ export default async function ClientBrandingPage({
           </p>
         )}
       </main>
-    </div>
+    </AppShell>
   );
 }

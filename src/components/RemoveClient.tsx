@@ -71,7 +71,7 @@ export function RemoveClient({
           onClick={remove}
           disabled={busy}
           aria-label={`Remove ${clientName}`}
-          className="rounded-[7px] border px-2 py-1 text-[12px] font-medium transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50"
+          className="rounded-[var(--radius-xs)] border px-2 py-1 text-[12px] font-medium transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50"
           style={{ color: "var(--status-critical)", borderColor: "var(--border)" }}
         >
           {busy ? "Removing…" : "Remove"}
@@ -87,7 +87,7 @@ export function RemoveClient({
         borderColor: "color-mix(in srgb, var(--status-critical) 40%, var(--border))",
       }}
     >
-      <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+      <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
         Remove this client
       </h2>
       <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -98,7 +98,7 @@ export function RemoveClient({
       <button
         onClick={remove}
         disabled={busy}
-        className="mt-3 rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-50"
+        className="mt-3 rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--status-ink)] disabled:opacity-50"
         style={{ background: "var(--status-critical)" }}
       >
         {busy ? "Removing…" : "Remove client"}

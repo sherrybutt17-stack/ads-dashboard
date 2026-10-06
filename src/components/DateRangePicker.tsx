@@ -141,7 +141,7 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
         {pending ? "Updating figures for the new date range" : ""}
       </span>
       <div
-        className="flex items-center gap-0.5 rounded-[10px] p-0.5"
+        className="flex items-center gap-0.5 rounded-[var(--radius)] p-0.5"
         style={{
           background: "var(--surface-2)",
           border: "1px solid var(--border)",
@@ -156,10 +156,12 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
               key={p.id}
               onClick={() => selectPreset(p.days, p.id)}
               aria-pressed={active}
-              className="tnum rounded-[7px] px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors"
+              className={`tnum rounded-[var(--radius-xs)] px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors${
+                active ? " accent-fill" : ""
+              }`}
               style={
                 active
-                  ? { background: "var(--series-1)", color: "#fff" }
+                  ? undefined
                   : {
                       background: "transparent",
                       color: "var(--text-secondary)",
@@ -183,10 +185,12 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
             aria-pressed={activeId === "custom"}
             aria-expanded={open}
             aria-haspopup="dialog"
-            className="flex items-center gap-1 rounded-[7px] px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors"
+            className={`flex items-center gap-1 rounded-[var(--radius-xs)] px-2.5 py-1.5 text-[12.5px] font-semibold transition-colors${
+              activeId === "custom" ? " accent-fill" : ""
+            }`}
             style={
               activeId === "custom"
-                ? { background: "var(--series-1)", color: "#fff" }
+                ? undefined
                 : { background: "transparent", color: "var(--text-secondary)" }
             }
             title="Custom range"
@@ -226,16 +230,14 @@ export function DateRangePicker({ currentLabel }: { currentLabel: string }) {
               <div
                 role="dialog"
                 aria-label="Pick a custom date range"
-                className="fixed z-[101] rounded-[12px] p-3"
+                // Ground, edge and shadow come from `.glass-panel`.
+                className="glass-panel fixed z-[101] rounded-[var(--radius)] p-3"
                 style={{
                   top: anchor?.top ?? 0,
                   // Clamped so the popover cannot be pushed off-screen on a
                   // narrow viewport, where the trigger sits near the edge.
                   right: Math.max(8, anchor?.right ?? 8),
                   visibility: anchor ? "visible" : "hidden",
-                  background: "var(--surface-raised)",
-                  border: "1px solid var(--border-strong)",
-                  boxShadow: "var(--shadow-overlay)",
                 }}
               >
                 <div

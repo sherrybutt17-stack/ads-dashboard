@@ -91,7 +91,7 @@ export function MonthForecast({
     <section className="card p-5" aria-label="Month-end forecast">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             Where this month lands
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -114,7 +114,7 @@ export function MonthForecast({
 
       {verdict !== "ok" ? (
         <p
-          className="mt-4 rounded-[10px] border px-3 py-2.5 text-[13px] leading-relaxed"
+          className="mt-4 rounded-[var(--radius)] border px-3 py-2.5 text-[13px] leading-relaxed"
           style={{
             borderColor: "var(--border)",
             background: "var(--surface-1)",

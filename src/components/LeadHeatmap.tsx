@@ -92,7 +92,7 @@ export function LeadHeatmap({
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h2
           className="text-sm font-semibold"
-          style={{ color: "var(--text-primary)" }}
+          style={{ color: "var(--section-ink, var(--text-primary))" }}
         >
           When leads arrive
         </h2>

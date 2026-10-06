@@ -166,18 +166,22 @@ export function RangeCalendar({
               onMouseEnter={() => setHover(d)}
               disabled={isFuture}
               aria-label={format(d, "MMMM d, yyyy")}
-              className="relative h-8 text-[12.5px] transition-colors"
+              className={`relative h-8 text-[12.5px] transition-colors${
+                isEndpoint ? " accent-fill" : ""
+              }`}
               style={{
                 cursor: isFuture ? "default" : "pointer",
                 opacity: isFuture ? 0.28 : isCur ? 1 : 0.4,
-                borderRadius: isEndpoint ? 8 : within ? 0 : 8,
+                borderRadius: isEndpoint || !within ? "var(--radius-sm)" : 0,
+                // The endpoint's fill and ink come from .accent-fill; an
+                // inline value here would beat the class and undo it.
                 background: isEndpoint
-                  ? "var(--series-1)"
+                  ? undefined
                   : within
-                    ? "color-mix(in srgb, var(--series-1) 18%, transparent)"
+                    ? "color-mix(in srgb, var(--accent) 18%, transparent)"
                     : "transparent",
                 color: isEndpoint
-                  ? "#fff"
+                  ? undefined
                   : within
                     ? "var(--text-primary)"
                     : "var(--text-secondary)",
@@ -188,7 +192,7 @@ export function RangeCalendar({
               {isToday && !isEndpoint && (
                 <span
                   className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full"
-                  style={{ background: "var(--series-1)" }}
+                  style={{ background: "var(--accent)" }}
                   aria-hidden="true"
                 />
               )}
@@ -235,7 +239,7 @@ function NavBtn({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-[7px] text-[15px] transition-colors disabled:opacity-30"
+      className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-xs)] text-[15px] transition-colors disabled:opacity-30"
       style={{ color: "var(--text-secondary)", background: "var(--surface-2)" }}
     >
       {children}

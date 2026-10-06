@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Modal } from "@/components/Modal";
 import { Icon } from "@/components/Icon";
@@ -181,7 +181,7 @@ export function CustomiseSections({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)]"
+        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)]"
         style={{
           borderColor: "var(--border-strong)",
           color: "var(--text-secondary)",
@@ -212,7 +212,7 @@ export function CustomiseSections({
         <div className="flex flex-col gap-3">
           {readOnly && (
             <div
-              className="flex items-start gap-2 rounded-[8px] border p-3 text-xs"
+              className="flex items-start gap-2 rounded-[var(--radius-sm)] border p-3 text-xs"
               style={{
                 borderColor: "var(--border-strong)",
                 background: "var(--surface-2)",
@@ -278,11 +278,8 @@ export function CustomiseSections({
                     {c.label}
                     {c.isNew && (
                       <span
-                        className="rounded-full px-1.5 py-px text-[10px] font-semibold"
-                        style={{
-                          background: "color-mix(in srgb, var(--accent) 18%, transparent)",
-                          color: "var(--accent)",
-                        }}
+                        className="tint-badge rounded-full px-1.5 py-px text-[10px] font-semibold"
+                        style={{ "--tint": "var(--accent)" } as CSSProperties}
                       >
                         New
                       </span>
@@ -344,8 +341,8 @@ export function CustomiseSections({
               type="button"
               onClick={() => void save()}
               disabled={busy || readOnly}
-              className="rounded-[8px] px-3 py-2 text-[13px] font-medium text-white disabled:opacity-60"
-              style={{ background: "var(--brand, var(--series-1))" }}
+              className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium text-[var(--accent-ink)] disabled:opacity-60"
+              style={{ background: "var(--brand, var(--accent))" }}
             >
               {busy ? "Saving…" : "Save"}
             </button>

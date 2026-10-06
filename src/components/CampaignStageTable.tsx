@@ -9,6 +9,7 @@ import {
 } from "@/lib/metrics/campaign-stages";
 import { formatCurrency, formatNumber, DASH } from "@/lib/metrics/compute";
 import { DataState, PipeNotice, type DataStateProps } from "@/components/DataState";
+import { CategoryChart } from "@/components/CategoryChart";
 
 /**
  * Which campaign brought the *business*, not just the leads.
@@ -91,7 +92,7 @@ export function CampaignStageTable({
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 px-5 py-4">
         <div>
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          <h2 className="text-sm font-semibold" style={{ color: "var(--section-ink, var(--text-primary))" }}>
             Which campaign brought the {option.noun}
           </h2>
           <p className="mt-0.5 text-xs" style={{ color: "var(--text-muted)" }}>
@@ -106,7 +107,7 @@ export function CampaignStageTable({
         </div>
 
         <div
-          className="flex flex-wrap gap-1 rounded-[9px] p-0.5"
+          className="flex flex-wrap gap-1 rounded-[var(--radius-sm)] p-0.5"
           style={{ background: "var(--surface-2)" }}
           role="group"
           aria-label="Funnel stage"
@@ -126,7 +127,7 @@ export function CampaignStageTable({
                  * stage is mapped to shows" — and the second is a broken setup
                  * that has to be reachable to be noticed.
                  */
-                className="rounded-[7px] px-2.5 py-1 text-[12px] font-medium transition-colors"
+                className="rounded-[var(--radius-xs)] px-2.5 py-1 text-[12px] font-medium transition-colors"
                 style={{
                   background: active ? "var(--surface-1)" : "transparent",
                   color: active
@@ -173,6 +174,34 @@ export function CampaignStageTable({
 
       {rows.length > 0 && (
         <>
+          {/*
+            The selected stage, as a shape. It redraws when the stage control
+            changes, which is the whole argument for that control — the table
+            re-ranks and the chart changes shape at the same time, so the fact
+            that the biggest source of leads is not the biggest source of closed
+            deals is something you SEE rather than something you reconstruct by
+            reading two orderings.
+
+            Colours come from `campaignColors`, not from the chart's own ramp,
+            so a campaign is the same hue here as in the dot beside its name in
+            the table below and in the explorer on the Overview tab.
+          */}
+          <div className="border-t px-5 pt-4" style={{ borderColor: "var(--border)" }}>
+            <CategoryChart
+              storageKey="campaignStages"
+              measure={option.label}
+              format={{ kind: "count" }}
+              height={200}
+              data={rows.map((r) => ({
+                key: r.campaignId || r.campaignName,
+                label: r.campaignName,
+                value: r.counts[stage],
+                color: colorFor(r.campaignId),
+              }))}
+              empty={`No campaign reached ${option.noun} in this period`}
+            />
+          </div>
+
           <div className="table-scroll border-t" style={{ borderColor: "var(--border)" }}>
             <table className="w-full text-[13px]">
               <thead>
@@ -224,7 +253,7 @@ export function CampaignStageTable({
                             {r.campaignName}
                           </span>
                           <span
-                            className="shrink-0 rounded-[5px] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase"
+                            className="shrink-0 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-wide uppercase"
                             style={{
                               background: "var(--surface-2)",
                               color: "var(--text-muted)",
