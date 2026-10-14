@@ -64,7 +64,7 @@ export const DATASETS: ReadonlyArray<{
   {
     id: "leads",
     label: "Leads",
-    description: "One row per paid lead: who they are and where they sit now.",
+    description: "One row per paid lead: who they are and where they sit now. Ignores the date range.",
     personal: true,
   },
 ];

@@ -16,7 +16,7 @@ import { parseAdPlatform } from "@/lib/platforms";
 import {
   trailingWindow,
   isValidDateKey,
-  rangeLabel,
+  todayKey,
   MAX_RANGE_DAYS,
 } from "@/lib/dates";
 import { formatNumber } from "@/lib/metrics/compute";
@@ -576,20 +576,43 @@ export default async function ClientDashboard({
                 >
                   <Icon name="arrowLeft" size={12} /> All clients
                 </Link>
-                <h1
-                  className="truncate text-[17px] leading-tight font-semibold"
-                  style={{
-                    color: "var(--text-primary)",
-                    letterSpacing: "-0.012em",
-                  }}
-                >
-                  {brandName}
-                </h1>
+                {/*
+                  Freshness sits beside the name it describes. On the controls
+                  side it wrapped onto a line of its own above the picker, and
+                  the header read as a ragged staircase of three rows.
+                */}
+                <div className="flex min-w-0 items-baseline gap-2.5">
+                  <h1
+                    className="min-w-0 truncate text-[17px] leading-tight font-semibold"
+                    style={{
+                      color: "var(--text-primary)",
+                      letterSpacing: "-0.012em",
+                    }}
+                  >
+                    {brandName}
+                  </h1>
+                  <SyncIndicator syncedAt={data.client.lastSyncedAt} />
+                </div>
               </div>
             </div>
 
-            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
-              <SyncIndicator syncedAt={data.client.lastSyncedAt} />
+            {/*
+              🔴 Sized to its content (`flex: 0 1 auto`), NOT `flex-1`.
+
+              As `flex-1` this block had a zero basis and split the spare width
+              evenly with the name block, so on a laptop the controls were
+              squeezed into about a third of the header and wrapped into two or
+              three rows. The header grew to their height and the client name
+              sat centred in it, leaving a band of empty space above the tabs.
+
+              Now the controls take the width they need and stay on one line
+              beside the name. When the two cannot share a line, the parent's
+              `flex-wrap` drops the controls to a line of their own, and inside
+              it the two groups (what you are looking at · what you can do with
+              it) break as whole groups, both flush right, never mid-group.
+            */}
+            <div className="flex max-w-full min-w-0 flex-[0_1_auto] flex-wrap items-center justify-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
               {platforms.length > 1 && (
                 <div
                   role="group"
@@ -629,6 +652,8 @@ export default async function ClientDashboard({
                 </div>
               )}
               <DateRangePicker currentLabel={data.range.label} />
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
               <CustomiseSections
                 slug={slug}
                 staff={staff}
@@ -657,8 +682,9 @@ export default async function ClientDashboard({
                   clientId={client.id}
                   rangeStart={range.startKey}
                   rangeEnd={range.endKey}
-                  rangeText={rangeLabel(range.startKey, range.endKey)}
                   platform={platform}
+                  platforms={platforms}
+                  today={todayKey(client.timezone)}
                 />
               )}
               {/*
@@ -673,6 +699,8 @@ export default async function ClientDashboard({
                 start={range.startKey}
                 end={range.endKey}
                 platform={platform}
+                platforms={platforms}
+                today={todayKey(client.timezone)}
                 staff={staff}
               />
               {/*
@@ -682,6 +710,7 @@ export default async function ClientDashboard({
               `lg` and carries both at every width, so keeping a second copy
               here would put two Sign out buttons on the same phone screen.
             */}
+              </div>
             </div>
           </div>
           {/*

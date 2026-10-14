@@ -3,6 +3,12 @@
 import { useCallback, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Icon } from "@/components/Icon";
+import {
+  PeriodFilter,
+  periodProblem,
+  type PeriodSelection,
+} from "@/components/PeriodFilter";
+import type { AdPlatform } from "@/lib/platforms";
 
 /**
  * Create and manage share links for one client.
@@ -12,8 +18,9 @@ import { Icon } from "@/components/Icon";
  * arranged to make the consequences visible at the moment of the decision
  * rather than in a settings page nobody opens:
  *
- *   · The period is shown, fixed, and stated as permanent — this is not a live
- *     link, and someone expecting one would otherwise find out next quarter.
+ *   · The period is chosen here (it starts as what is on screen), and is stated
+ *     as permanent — this is not a live link, and someone expecting one would
+ *     otherwise find out next quarter.
  *   · Expiry is a required choice, not a default hidden behind "advanced".
  *   · The token appears exactly once and says so. It is not recoverable,
  *     because only its hash was ever stored.
@@ -60,16 +67,22 @@ export function ShareReport({
   clientId,
   rangeStart,
   rangeEnd,
-  rangeText,
   platform,
+  platforms,
+  today,
 }: {
   clientId: string;
   rangeStart: string;
   rangeEnd: string;
-  /** The human range label, so the modal and the header agree exactly. */
-  rangeText: string;
-  platform: string;
+  platform: AdPlatform;
+  /** Platforms this client has connected — the dialog offers a choice of them. */
+  platforms: readonly AdPlatform[];
+  /** Today's date key in the client's timezone. */
+  today: string;
 }) {
+  const screen: PeriodSelection = { start: rangeStart, end: rangeEnd, platform };
+  const [period, setPeriod] = useState<PeriodSelection>(screen);
+  const periodError = periodProblem(period, today);
   const [open, setOpen] = useState(false);
   const [links, setLinks] = useState<ShareLinkView[] | null>(null);
   const [label, setLabel] = useState("");
@@ -133,9 +146,9 @@ export function ShareReport({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          rangeStart,
-          rangeEnd,
-          platform,
+          rangeStart: period.start,
+          rangeEnd: period.end,
+          platform: period.platform,
           label: label.trim() || null,
           ttlDays,
           password: password.trim() || null,
@@ -168,9 +181,9 @@ export function ShareReport({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: recipients,
-          rangeStart,
-          rangeEnd,
-          platform,
+          rangeStart: period.start,
+          rangeEnd: period.end,
+          platform: period.platform,
           label: label.trim() || undefined,
           ttlDays,
           password: password.trim() || undefined,
@@ -242,6 +255,8 @@ export function ShareReport({
       <button
         type="button"
         onClick={() => {
+          // Every opening starts from what is on screen.
+          setPeriod(screen);
           setOpen(true);
           // Fetched on the click that opens the dialog rather than from an
           // effect watching `open`: the list is only ever needed as a result of
@@ -458,21 +473,23 @@ export function ShareReport({
                 </>
               )}
 
-              <Field
-                label="Period"
-                hint="Fixed permanently. The link will always show this period, not whatever is current when it is opened."
-              >
-                <div
-                  className="tnum rounded-[var(--radius-sm)] border px-3 py-2 text-[13px]"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--surface-2)",
-                    color: "var(--text-primary)",
-                  }}
+              <div>
+                <PeriodFilter
+                  value={period}
+                  onChange={setPeriod}
+                  screen={screen}
+                  today={today}
+                  platforms={platforms.length > 0 ? platforms : [platform]}
+                  headings="field"
+                />
+                <span
+                  className="mt-1 block text-[11px] leading-snug"
+                  style={{ color: "var(--text-muted)" }}
                 >
-                  {rangeText}
-                </div>
-              </Field>
+                  Fixed permanently. The link will always show this period, not
+                  whatever is current when it is opened.
+                </span>
+              </div>
 
               <Field label="Label" hint="Your own note. The recipient never sees it.">
                 <input
@@ -542,6 +559,7 @@ export function ShareReport({
                    */
                   disabled={
                     busy ||
+                    periodError !== null ||
                     (mode === "email" &&
                       (recipients.length === 0 ||
                         recipients.length > 5 ||
