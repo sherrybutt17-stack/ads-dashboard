@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
+import { MAX_ATTACH_PER_SIGN_IN } from "@/lib/connect-picker";
 import { isSuperadmin, requireClient } from "@/lib/auth";
 import { safeFailure, safeFailureMessage } from "@/lib/api-failure";
 import { kickFirstSync } from "@/lib/first-sync";
@@ -36,7 +37,7 @@ export const maxDuration = 300;
 const AttachSchema = z
   .object({
     stash: z.string().min(8).max(64),
-    adAccountIds: z.array(z.string().min(1).max(32)).min(1).max(50),
+    adAccountIds: z.array(z.string().min(1).max(32)).min(1).max(MAX_ATTACH_PER_SIGN_IN),
   })
   .strict();
 

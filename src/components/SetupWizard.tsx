@@ -3,6 +3,14 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
+  CONFIRM_ATTACH_ABOVE,
+  MAX_ATTACH_PER_SIGN_IN,
+  accountsByManager,
+  coverage,
+  deselectAll,
+  selectAll,
+} from "@/lib/connect-picker";
+import {
   CANONICAL_STAGES,
   REQUIRED_CANONICAL_STAGES,
   STAGE_LABELS,
@@ -43,6 +51,153 @@ function failureText(
   // Our redacted messages are written without a full stop; a passed-through
   // message of ours may have one. Joining blindly gives "valid.. Reconnect".
   return `${head.replace(/\.$/, "")}. ${body.hint}`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Shared by the Facebook, Google and TikTok account pickers           */
+/* ------------------------------------------------------------------ */
+
+/** What a successful attach reports back to the step that hosts the picker. */
+interface AttachSummary {
+  attached: number;
+  /** Per-account failures and warnings, already worded for the operator. */
+  notes: string[];
+}
+
+/**
+ * A response that could not be read is NOT a failure we can report as one.
+ *
+ * Attaching verifies every account with the platform inside one request, so a
+ * long one can be cut off after some accounts were stored. Saying "failed" here
+ * invites a second click on a sign-in the first one may already have used.
+ */
+const NO_CLEAR_ANSWER =
+  "No clear answer from the server, so some accounts may already be attached. " +
+  "Reload the page and check the list above before trying again.";
+
+/** True when the operator confirms, or when the attach is small enough not to ask. */
+function confirmLargeAttach(count: number, noun: string): boolean {
+  if (count <= CONFIRM_ATTACH_ABOVE) return true;
+  return confirm(
+    `Attach ${count} ${noun} to this client?\n\n` +
+      "Their spend is added together on this client's dashboard. " +
+      `Continue only if all ${count} really are this client's.`,
+  );
+}
+
+/**
+ * "Select all", scoped to what is SHOWN — so it works with the filter: type a
+ * name, then select every match. Offered only up to what one sign-in can
+ * attach, because a selection the attach route will refuse is a dead end.
+ */
+function SelectionBar({
+  shownIds,
+  picked,
+  onChange,
+  busy,
+  filtered,
+  noun,
+}: {
+  /** Selectable ids in the current (possibly filtered) view. */
+  shownIds: readonly string[];
+  picked: ReadonlySet<string>;
+  onChange: (next: Set<string>) => void;
+  busy: boolean;
+  filtered: boolean;
+  noun: string;
+}) {
+  const n = shownIds.length;
+  if (n < 2 && picked.size === 0) return null;
+  const all = coverage(picked, shownIds) === "all";
+  const scope = filtered ? " shown" : "";
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+      {n >= 2 &&
+        (n > MAX_ATTACH_PER_SIGN_IN ? (
+          <span style={{ color: "var(--text-muted)" }}>
+            {n} {filtered ? "match" : noun}. Filter to {MAX_ATTACH_PER_SIGN_IN} or
+            fewer to select them all at once.
+          </span>
+        ) : (
+          <button
+            type="button"
+            disabled={busy || all}
+            onClick={() => onChange(selectAll(picked, shownIds))}
+            className="font-medium hover:underline disabled:opacity-60 disabled:hover:no-underline"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            {all ? `All ${n}${scope} selected` : `Select all ${n}${scope}`}
+          </button>
+        ))}
+      {picked.size > 0 && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onChange(new Set())}
+          className="hover:underline disabled:opacity-60"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Clear selection ({picked.size})
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Said beside the Attach button, which stays disabled while this shows. */
+function AttachCapNote({ count, noun }: { count: number; noun: string }) {
+  if (count <= MAX_ATTACH_PER_SIGN_IN) return null;
+  return (
+    <p className="mt-2 text-[12px]" style={{ color: "var(--status-warning)" }}>
+      {count} selected. Up to {MAX_ATTACH_PER_SIGN_IN} {noun} can be attached per
+      sign-in, so untick some; sign in again afterwards to add the rest.
+    </p>
+  );
+}
+
+/**
+ * Shown in the picker's place once an attach succeeded.
+ *
+ * 🔴 The picker must not stay on screen afterwards. The sign-in it holds is
+ * used up by a successful attach, so a picker left showing its ticked boxes
+ * invited a second click, which then reported the sign-in as "expired" — on an
+ * attach that had in fact worked.
+ */
+function AttachedNotice({
+  summary,
+  one,
+  many,
+}: {
+  summary: AttachSummary;
+  one: string;
+  many: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // The picker it replaces can be hundreds of rows tall: bring the result into
+  // view and give it focus, so neither eyes nor a screen reader lose the place.
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: "nearest" });
+    ref.current?.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div ref={ref} role="status" tabIndex={-1} className="mb-4 outline-none">
+      <Result ok>
+        Attached {summary.attached} {summary.attached === 1 ? one : many}. On
+        this client&rsquo;s first connection to the platform, the last 90 days
+        import within a few minutes; otherwise their figures fill in with the
+        next nightly update.
+      </Result>
+      {summary.notes.map((n) => (
+        <p
+          key={n}
+          className="mt-1.5 text-[12px]"
+          style={{ color: "var(--status-warning)" }}
+        >
+          ⚠ {n}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 interface StageRow {
@@ -147,6 +302,23 @@ export function SetupWizard({
   const router = useRouter();
   const usingOauth = initial.ghlAuthMethod === "oauth" || oauthAvailable;
 
+  /*
+   * After a successful attach, take the used-up sign-in out of the address.
+   * Left there, the page re-rendered the picker on every refresh and a reload
+   * met a stash the server had already dropped.
+   */
+  const clearStash = (key: "metaStash" | "googleStash" | "tiktokStash") => {
+    const url = new URL(window.location.href);
+    // A late callback after the operator moved on must not touch that page.
+    if (!url.searchParams.has(key)) return;
+    url.searchParams.delete(key);
+    // Synchronous, so Back or a quick reload can never land on the used
+    // sign-in; Next's router follows native history updates. The refresh then
+    // re-renders with fresh data and keeps this component's state.
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    router.refresh();
+  };
+
   return (
     <div className="flex flex-col gap-5">
       {usingOauth ? (
@@ -175,6 +347,7 @@ export function SetupWizard({
         connectConfigured={metaConnectConfigured}
         stash={metaStash}
         onDone={() => router.refresh()}
+        onConnected={() => clearStash("metaStash")}
       />
       <GoogleAccountsStep
         clientId={clientId}
@@ -182,6 +355,7 @@ export function SetupWizard({
         configured={googleConfigured}
         stash={googleStash}
         onDone={() => router.refresh()}
+        onConnected={() => clearStash("googleStash")}
       />
       <TiktokAccountsStep
         clientId={clientId}
@@ -189,6 +363,7 @@ export function SetupWizard({
         connectConfigured={tiktokConfigured}
         stash={tiktokStash}
         onDone={() => router.refresh()}
+        onConnected={() => clearStash("tiktokStash")}
       />
       {!usingOauth && (
         <WebhookStep
@@ -394,10 +569,12 @@ function MetaAccountPicker({
   clientId,
   stash,
   onDone,
+  onAttached,
 }: {
   clientId: string;
   stash: string;
   onDone: () => void;
+  onAttached: (summary: AttachSummary) => void;
 }) {
   const [accounts, setAccounts] = useState<DiscoveredMetaAccount[] | null>(
     null,
@@ -433,6 +610,7 @@ function MetaAccountPicker({
   }, [clientId, stash]);
 
   async function attach() {
+    if (!confirmLargeAttach(picked.size, "ad accounts")) return;
     setBusy(true);
     setError(null);
     try {
@@ -441,21 +619,31 @@ function MetaAccountPicker({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stash, adAccountIds: [...picked] }),
       });
-      const body = await res.json();
+      const body = await res.json().catch(() => null);
+      if (!body) {
+        setError(NO_CLEAR_ANSWER);
+        onDone();
+        return;
+      }
       if (!res.ok) {
         setError(failureText(body, "Could not attach those accounts."));
         return;
       }
-      if (body.failed?.length) {
-        setError(
-          body.failed
-            .map(
-              (f: { adAccountId: string; error: string }) =>
-                `act_${f.adAccountId}: ${f.error}`,
-            )
-            .join(" · "),
-        );
+      const failures: string[] = (body.failed ?? []).map(
+        (f: { adAccountId: string; error: string }) =>
+          `act_${f.adAccountId}: ${f.error}`,
+      );
+      const attached = Array.isArray(body.attached) ? body.attached.length : 0;
+      if (attached > 0) {
+        onAttached({ attached, notes: failures });
+        return;
       }
+      setError(failures.join(" · ") || "Nothing was attached.");
+      onDone();
+    } catch {
+      // The request may have reached the server and attached before the
+      // connection dropped, so this is an unknown outcome, not a failure.
+      setError(NO_CLEAR_ANSWER);
       onDone();
     } finally {
       setBusy(false);
@@ -486,6 +674,19 @@ function MetaAccountPicker({
       </p>
     );
   }
+
+  const metaQuery = filter.trim().toLowerCase();
+  // Inactive accounts cannot be ticked, so "select all" leaves them out too.
+  const metaShownIds = accounts
+    .filter(
+      (a) =>
+        a.active &&
+        (!metaQuery ||
+          [a.name, a.adAccountId]
+            .filter(Boolean)
+            .some((v) => String(v).toLowerCase().includes(metaQuery))),
+    )
+    .map((a) => a.adAccountId);
 
   return (
     <div
@@ -532,6 +733,15 @@ function MetaAccountPicker({
           }}
         />
       )}
+
+      <SelectionBar
+        shownIds={metaShownIds}
+        picked={picked}
+        onChange={setPicked}
+        busy={busy}
+        filtered={metaQuery !== ""}
+        noun="ad accounts"
+      />
 
       {(() => {
         const q = filter.trim().toLowerCase();
@@ -652,14 +862,18 @@ function MetaAccountPicker({
         </p>
       )}
 
+      <AttachCapNote count={picked.size} noun="ad accounts" />
+
       <button
         onClick={attach}
-        disabled={busy || picked.size === 0}
+        disabled={busy || picked.size === 0 || picked.size > MAX_ATTACH_PER_SIGN_IN}
         className="accent-fill mt-3 rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium disabled:opacity-60"
       >
         {busy
           ? "Attaching…"
-          : `Attach ${picked.size || ""} ${picked.size === 1 ? "account" : "accounts"}`.trim()}
+          : picked.size
+            ? `Attach ${picked.size} ${picked.size === 1 ? "account" : "accounts"}`
+            : "Attach accounts"}
       </button>
     </div>
   );
@@ -1242,17 +1456,24 @@ function MetaAccountsStep({
   clientId,
   accounts,
   onDone,
+  onConnected,
   connectConfigured,
   stash,
 }: {
   clientId: string;
   accounts: MetaAccountRow[];
   onDone: () => void;
+  /** After a successful attach: drops the used-up sign-in from the URL. */
+  onConnected: () => void;
   /** META_APP_ID + META_APP_SECRET are set, so the consent flow can run. */
   connectConfigured: boolean;
   /** Present when we have just returned from Facebook — opens the picker. */
   stash: string | null;
 }) {
+  const [attachedSummary, setAttachedSummary] = useState<AttachSummary | null>(
+    null,
+  );
+  const openStash = attachedSummary ? null : stash;
   const [accountId, setAccountId] = useState("");
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
@@ -1383,7 +1604,11 @@ function MetaAccountsStep({
         that works before Meta App Review passes for anyone without a role on
         the app, and the only one that uses the never-expiring system user token.
       */}
-      {connectConfigured && !stash && (
+      {attachedSummary && (
+        <AttachedNotice summary={attachedSummary} one="ad account" many="ad accounts" />
+      )}
+
+      {connectConfigured && !openStash && (
         <div className="mb-4">
           {/*
             #166FE5, not Meta's headline #1877F2: white on the brand blue is
@@ -1420,8 +1645,16 @@ function MetaAccountsStep({
         </div>
       )}
 
-      {stash && (
-        <MetaAccountPicker clientId={clientId} stash={stash} onDone={onDone} />
+      {openStash && (
+        <MetaAccountPicker
+          clientId={clientId}
+          stash={openStash}
+          onDone={onDone}
+          onAttached={(summary) => {
+            setAttachedSummary(summary);
+            onConnected();
+          }}
+        />
       )}
 
       <div className="flex flex-col gap-3">
@@ -1495,6 +1728,50 @@ interface DiscoveredGoogleAccount {
   timezone: string | null;
   isManager: boolean;
   level: number;
+  /** The manager this account is reached through; `""` when reached directly. */
+  loginCustomerId?: string;
+}
+
+/**
+ * A manager row's checkbox: ticks every account reached through that manager.
+ *
+ * Mixed when only some of them are picked, so a manager whose accounts were
+ * partly chosen by hand reads as exactly that rather than as unticked.
+ */
+function ManagerCheckbox({
+  id,
+  ids,
+  picked,
+  onChange,
+  busy,
+}: {
+  id: string;
+  ids: readonly string[];
+  picked: ReadonlySet<string>;
+  onChange: (next: Set<string>) => void;
+  busy: boolean;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const cov = coverage(picked, ids);
+  // Like "Select all", never offer a selection the attach route will refuse;
+  // unticking a box that is already (partly) ticked always stays possible.
+  const tooMany = ids.length > MAX_ATTACH_PER_SIGN_IN && cov === "none";
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = cov === "some";
+  }, [cov]);
+  return (
+    <input
+      ref={ref}
+      id={id}
+      type="checkbox"
+      className="mt-1"
+      disabled={busy || ids.length === 0 || tooMany}
+      checked={cov === "all"}
+      onChange={(e) =>
+        onChange(e.target.checked ? selectAll(picked, ids) : deselectAll(picked, ids))
+      }
+    />
+  );
 }
 
 /**
@@ -1502,11 +1779,12 @@ interface DiscoveredGoogleAccount {
  *
  * Two differences from the Meta picker, both forced by how Google Ads is shaped:
  *
- * 🔴 **Manager (MCC) accounts are shown but not selectable.** A manager holds no
- * campaigns of its own, so attaching one produces an account that reports zero
- * spend forever — which on the dashboard is indistinguishable from a paused
- * account. It is listed rather than hidden because it is the thing an operator
- * recognises by name, and seeing it is how they find the child underneath it.
+ * 🔴 **Manager (MCC) accounts are never attached themselves.** A manager holds
+ * no campaigns of its own, so attaching one produces an account that reports
+ * zero spend forever — which on the dashboard is indistinguishable from a paused
+ * account. Its checkbox instead selects every account reached through it, and
+ * each account names the manager it sits under, because the rows are sorted by
+ * name and the tree is otherwise invisible.
  *
  * The tree is flattened with indentation rather than collapsed, because a media
  * buyer identifies a client's account by where it sits under the manager at
@@ -1516,10 +1794,12 @@ function GoogleAccountPicker({
   clientId,
   stash,
   onDone,
+  onAttached,
 }: {
   clientId: string;
   stash: string;
   onDone: () => void;
+  onAttached: (summary: AttachSummary) => void;
 }) {
   const [accounts, setAccounts] = useState<DiscoveredGoogleAccount[] | null>(
     null,
@@ -1561,6 +1841,7 @@ function GoogleAccountPicker({
   }, [clientId, stash]);
 
   async function attach() {
+    if (!confirmLargeAttach(picked.size, "Google Ads accounts")) return;
     setBusy(true);
     setError(null);
     try {
@@ -1569,21 +1850,30 @@ function GoogleAccountPicker({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stash, customerIds: [...picked] }),
       });
-      const body = await res.json();
+      const body = await res.json().catch(() => null);
+      if (!body) {
+        setError(NO_CLEAR_ANSWER);
+        onDone();
+        return;
+      }
       if (!res.ok) {
         setError(failureText(body, "Could not attach those accounts."));
         return;
       }
-      if (body.failed?.length) {
-        setError(
-          body.failed
-            .map(
-              (f: { customerId: string; error: string }) =>
-                `${f.customerId}: ${f.error}`,
-            )
-            .join(" · "),
-        );
+      const failures: string[] = (body.failed ?? []).map(
+        (f: { customerId: string; error: string }) => `${f.customerId}: ${f.error}`,
+      );
+      const attached = Array.isArray(body.attached) ? body.attached.length : 0;
+      if (attached > 0) {
+        onAttached({ attached, notes: failures });
+        return;
       }
+      setError(failures.join(" · ") || "Nothing was attached.");
+      onDone();
+    } catch {
+      // The request may have reached the server and attached before the
+      // connection dropped, so this is an unknown outcome, not a failure.
+      setError(NO_CLEAR_ANSWER);
       onDone();
     } finally {
       setBusy(false);
@@ -1624,6 +1914,13 @@ function GoogleAccountPicker({
       )
     : accounts;
   const selectable = accounts.filter((a) => !a.isManager).length;
+  const byManager = accountsByManager(accounts);
+  const managerName = new Map(
+    accounts
+      .filter((a) => a.isManager)
+      .map((a) => [a.customerId, a.name ?? a.customerId] as const),
+  );
+  const shownIds = shown.filter((a) => !a.isManager).map((a) => a.customerId);
 
   return (
     <div
@@ -1709,6 +2006,15 @@ function GoogleAccountPicker({
         />
       )}
 
+      <SelectionBar
+        shownIds={shownIds}
+        picked={picked}
+        onChange={setPicked}
+        busy={busy}
+        filtered={q !== ""}
+        noun="accounts"
+      />
+
       {shown.length === 0 ? (
         <p
           className="mt-2 text-[12.5px]"
@@ -1726,23 +2032,38 @@ function GoogleAccountPicker({
               // the manager the operator recognises.
               style={{ paddingLeft: `${Math.min(a.level, 4) * 14}px` }}
             >
-              <input
-                id={`g-${a.customerId}`}
-                type="checkbox"
-                className="mt-1"
-                disabled={a.isManager || busy}
-                checked={picked.has(a.customerId)}
-                onChange={(e) => {
-                  const next = new Set(picked);
-                  if (e.target.checked) next.add(a.customerId);
-                  else next.delete(a.customerId);
-                  setPicked(next);
-                }}
-              />
+              {a.isManager ? (
+                <ManagerCheckbox
+                  id={`g-${a.customerId}`}
+                  ids={byManager.get(a.customerId) ?? []}
+                  picked={picked}
+                  onChange={setPicked}
+                  busy={busy}
+                />
+              ) : (
+                <input
+                  id={`g-${a.customerId}`}
+                  type="checkbox"
+                  className="mt-1"
+                  disabled={busy}
+                  checked={picked.has(a.customerId)}
+                  onChange={(e) => {
+                    const next = new Set(picked);
+                    if (e.target.checked) next.add(a.customerId);
+                    else next.delete(a.customerId);
+                    setPicked(next);
+                  }}
+                />
+              )}
               <label
                 htmlFor={`g-${a.customerId}`}
                 className="min-w-0 flex-1 cursor-pointer"
-                style={{ opacity: a.isManager ? 0.55 : 1 }}
+                style={{
+                  opacity:
+                    a.isManager && !(byManager.get(a.customerId)?.length ?? 0)
+                      ? 0.55
+                      : 1,
+                }}
               >
                 <span
                   className="block text-[13px] font-medium"
@@ -1754,7 +2075,22 @@ function GoogleAccountPicker({
                       className="ml-1.5 text-[11px] font-normal"
                       style={{ color: "var(--text-muted)" }}
                     >
-                      · manager account — holds no campaigns
+                      {(() => {
+                        const n = byManager.get(a.customerId)?.length ?? 0;
+                        if (n > MAX_ATTACH_PER_SIGN_IN)
+                          return `· manager account — ${n} accounts, more than the ${MAX_ATTACH_PER_SIGN_IN} that can be attached at once; tick them individually or filter and use Select all`;
+                        if (n > 0)
+                          return `· manager account — tick to select its ${n} account${n === 1 ? "" : "s"}`;
+                        // A sub-manager: its accounts are reached through the
+                        // manager above it, so they are grouped there.
+                        const parent =
+                          a.loginCustomerId && a.loginCustomerId !== a.customerId
+                            ? managerName.get(a.loginCustomerId)
+                            : undefined;
+                        return parent
+                          ? `· manager account — its accounts are selected under ${parent}`
+                          : "· manager account — holds no campaigns";
+                      })()}
                     </span>
                   )}
                 </span>
@@ -1763,6 +2099,10 @@ function GoogleAccountPicker({
                   style={{ color: "var(--text-muted)" }}
                 >
                   {a.customerId} · {a.currency ?? "?"} · {a.timezone ?? "?"}
+                  {!a.isManager &&
+                    a.loginCustomerId &&
+                    managerName.has(a.loginCustomerId) &&
+                    ` · via ${managerName.get(a.loginCustomerId)}`}
                 </span>
               </label>
             </li>
@@ -1780,6 +2120,8 @@ function GoogleAccountPicker({
         </p>
       )}
 
+      <AttachCapNote count={picked.size} noun="accounts" />
+
       {error && (
         <p
           className="mt-2 text-[12px]"
@@ -1791,12 +2133,14 @@ function GoogleAccountPicker({
 
       <button
         onClick={attach}
-        disabled={busy || picked.size === 0}
+        disabled={busy || picked.size === 0 || picked.size > MAX_ATTACH_PER_SIGN_IN}
         className="mt-3 btn-accent disabled:opacity-60"
       >
         {busy
           ? "Attaching…"
-          : `Attach ${picked.size || ""} ${picked.size === 1 ? "account" : "accounts"}`.trim()}
+          : picked.size
+            ? `Attach ${picked.size} ${picked.size === 1 ? "account" : "accounts"}`
+            : "Attach accounts"}
       </button>
     </div>
   );
@@ -1808,13 +2152,20 @@ function GoogleAccountsStep({
   configured,
   stash,
   onDone,
+  onConnected,
 }: {
   clientId: string;
   accounts: GoogleAccountRow[];
   configured: boolean;
   stash: string | null;
   onDone: () => void;
+  /** After a successful attach: drops the used-up sign-in from the URL. */
+  onConnected: () => void;
 }) {
+  const [attachedSummary, setAttachedSummary] = useState<AttachSummary | null>(
+    null,
+  );
+  const openStash = attachedSummary ? null : stash;
   const [customerId, setCustomerId] = useState("");
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
@@ -1959,7 +2310,11 @@ function GoogleAccountsStep({
             token, which is the agency-MCC path and the worst first-run moment
             in the product. Mirrors the Meta step above.
           */}
-          {!stash && (
+          {attachedSummary && (
+            <AttachedNotice summary={attachedSummary} one="account" many="accounts" />
+          )}
+
+          {!openStash && (
             <div className="mb-4">
               <a
                 href={`/api/oauth/google/authorize?clientId=${encodeURIComponent(clientId)}`}
@@ -2026,11 +2381,15 @@ function GoogleAccountsStep({
             </div>
           )}
 
-          {stash && (
+          {openStash && (
             <GoogleAccountPicker
               clientId={clientId}
-              stash={stash}
+              stash={openStash}
               onDone={onDone}
+              onAttached={(summary) => {
+                setAttachedSummary(summary);
+                onConnected();
+              }}
             />
           )}
 
@@ -2113,10 +2472,12 @@ function TiktokAccountPicker({
   clientId,
   stash,
   onDone,
+  onAttached,
 }: {
   clientId: string;
   stash: string;
   onDone: () => void;
+  onAttached: (summary: AttachSummary) => void;
 }) {
   const [advertisers, setAdvertisers] = useState<
     DiscoveredTiktokAdvertiser[] | null
@@ -2166,6 +2527,7 @@ function TiktokAccountPicker({
   }, [clientId, stash]);
 
   async function attach() {
+    if (!confirmLargeAttach(picked.size, "advertisers")) return;
     setBusy(true);
     setError(null);
     setWarnings([]);
@@ -2175,34 +2537,42 @@ function TiktokAccountPicker({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stash, advertiserIds: [...picked] }),
       });
-      const body = await res.json();
+      const body = await res.json().catch(() => null);
+      if (!body) {
+        setError(NO_CLEAR_ANSWER);
+        onDone();
+        return;
+      }
       if (!res.ok) {
         setError(failureText(body, "Could not attach those advertisers."));
         return;
       }
-      if (body.failed?.length) {
-        setError(
-          body.failed
-            .map(
-              (f: { advertiserId: string; error: string }) =>
-                `${f.advertiserId}: ${f.error}`,
-            )
-            .join(" · "),
-        );
-      }
+      const failures: string[] = (body.failed ?? []).map(
+        (f: { advertiserId: string; error: string }) =>
+          `${f.advertiserId}: ${f.error}`,
+      );
       /*
        * Mixed currencies cannot be summed and mismatched timezones make "a day"
        * mean two things across platforms. Neither blocks the attach — the
-       * operator may know exactly why — but neither may be silent.
+       * operator may know exactly why — but neither may be silent, so both
+       * travel with the summary that replaces this picker.
        */
-      if (body.warnings?.length) {
-        setWarnings(
-          body.warnings.map(
-            (w: { advertiserId: string; message: string }) =>
-              `${w.advertiserId}: ${w.message}`,
-          ),
-        );
+      const warned: string[] = (body.warnings ?? []).map(
+        (w: { advertiserId: string; message: string }) =>
+          `${w.advertiserId}: ${w.message}`,
+      );
+      const attached = Array.isArray(body.attached) ? body.attached.length : 0;
+      if (attached > 0) {
+        onAttached({ attached, notes: [...failures, ...warned] });
+        return;
       }
+      setError(failures.join(" · ") || "Nothing was attached.");
+      setWarnings(warned);
+      onDone();
+    } catch {
+      // The request may have reached the server and attached before the
+      // connection dropped, so this is an unknown outcome, not a failure.
+      setError(NO_CLEAR_ANSWER);
       onDone();
     } finally {
       setBusy(false);
@@ -2294,6 +2664,15 @@ function TiktokAccountPicker({
         />
       )}
 
+      <SelectionBar
+        shownIds={shown.map((a) => a.advertiserId)}
+        picked={picked}
+        onChange={setPicked}
+        busy={busy}
+        filtered={q !== ""}
+        noun="advertisers"
+      />
+
       {shown.length === 0 ? (
         <p
           className="mt-2 text-[12.5px]"
@@ -2382,14 +2761,18 @@ function TiktokAccountPicker({
         </p>
       ))}
 
+      <AttachCapNote count={picked.size} noun="advertisers" />
+
       <button
         onClick={attach}
-        disabled={busy || picked.size === 0}
+        disabled={busy || picked.size === 0 || picked.size > MAX_ATTACH_PER_SIGN_IN}
         className="accent-fill mt-3 rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium disabled:opacity-60"
       >
         {busy
           ? "Attaching…"
-          : `Attach ${picked.size || ""} ${picked.size === 1 ? "advertiser" : "advertisers"}`.trim()}
+          : picked.size
+            ? `Attach ${picked.size} ${picked.size === 1 ? "advertiser" : "advertisers"}`
+            : "Attach advertisers"}
       </button>
     </div>
   );
@@ -2409,17 +2792,24 @@ function TiktokAccountsStep({
   clientId,
   accounts,
   onDone,
+  onConnected,
   connectConfigured,
   stash,
 }: {
   clientId: string;
   accounts: TiktokAccountRow[];
   onDone: () => void;
+  /** After a successful attach: drops the used-up sign-in from the URL. */
+  onConnected: () => void;
   /** TIKTOK_APP_ID + TIKTOK_APP_SECRET are set, so the flow can run. */
   connectConfigured: boolean;
   /** Present when we have just returned from TikTok — opens the picker. */
   stash: string | null;
 }) {
+  const [attachedSummary, setAttachedSummary] = useState<AttachSummary | null>(
+    null,
+  );
+  const openStash = attachedSummary ? null : stash;
   const [busy, setBusy] = useState(false);
   const live = accounts.filter((a) => a.status !== "removed");
 
@@ -2482,6 +2872,10 @@ function TiktokAccountsStep({
         </ul>
       )}
 
+      {attachedSummary && (
+        <AttachedNotice summary={attachedSummary} one="advertiser" many="advertisers" />
+      )}
+
       {!connectConfigured ? (
         <p className="text-[12.5px]" style={{ color: "var(--text-muted)" }}>
           TikTok isn’t configured on this installation. Set{" "}
@@ -2490,7 +2884,7 @@ function TiktokAccountsStep({
           client can run Meta and Google only.
         </p>
       ) : (
-        !stash && (
+        !openStash && (
           <div>
             <a
               href={`/api/oauth/tiktok/authorize?clientId=${encodeURIComponent(clientId)}`}
@@ -2536,11 +2930,15 @@ function TiktokAccountsStep({
         )
       )}
 
-      {stash && (
+      {openStash && (
         <TiktokAccountPicker
           clientId={clientId}
-          stash={stash}
+          stash={openStash}
           onDone={onDone}
+          onAttached={(summary) => {
+            setAttachedSummary(summary);
+            onConnected();
+          }}
         />
       )}
     </Card>
