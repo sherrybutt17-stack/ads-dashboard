@@ -3,7 +3,7 @@ import {
   previousWindow,
   shiftDateKey,
   todayKey,
-  trailingWindowInclusive,
+  trailingWindow,
   windowFromKeys,
   type DateWindow,
 } from "@/lib/dates";
@@ -77,7 +77,7 @@ function windowFor(c: Client, opts: BookOptions): { current: DateWindow; previou
   const current =
     opts.startKey && opts.endKey
       ? windowFromKeys(opts.startKey, opts.endKey, c.timezone)
-      : trailingWindowInclusive(DEFAULT_DAYS, c.timezone);
+      : trailingWindow(DEFAULT_DAYS, c.timezone);
   return { current, previous: previousWindow(current, c.timezone) };
 }
 

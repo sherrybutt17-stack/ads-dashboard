@@ -14,7 +14,7 @@ import { getAdDataExtent } from "@/lib/metrics/queries";
 import { outOfRangeNotice } from "@/lib/metrics/data-extent";
 import { parseAdPlatform } from "@/lib/platforms";
 import {
-  trailingWindowInclusive,
+  trailingWindow,
   isValidDateKey,
   rangeLabel,
   MAX_RANGE_DAYS,
@@ -125,7 +125,9 @@ export default async function ClientDashboard({
   const range = hasValidRange
     ? { startKey: sp.start as string, endKey: sp.end as string }
     : (() => {
-        const w = trailingWindowInclusive(safeDays, client.timezone);
+        // Presets end YESTERDAY: today is partial, and a part-day measured against
+        // a previous period of full days showed a fake drop every morning.
+        const w = trailingWindow(safeDays, client.timezone);
         return { startKey: w.startKey, endKey: w.endKey };
       })();
 

@@ -72,13 +72,24 @@ export async function syncClientGoogleMetrics(
     const until = opts.until ?? window.endKey;
 
     let written = 0;
+    // One account's failure must not stop the others. A closed location's
+    // revoked access used to freeze every healthy account after it, while the
+    // health check said only the dead account was missing. Each account now
+    // syncs on its own; the run still ends failed (so not reconciled, and
+    // retried) when any account failed, so the dead one stays visible.
+    const failures: unknown[] = [];
     for (const account of accounts) {
-      written += await syncAccountGoogleMetrics(client, account, since, until);
-      await db
-        .update(googleAdAccounts)
-        .set({ lastSyncedAt: new Date() })
-        .where(eq(googleAdAccounts.id, account.id));
+      try {
+        written += await syncAccountGoogleMetrics(client, account, since, until);
+        await db
+          .update(googleAdAccounts)
+          .set({ lastSyncedAt: new Date() })
+          .where(eq(googleAdAccounts.id, account.id));
+      } catch (err) {
+        failures.push(err);
+      }
     }
+    if (failures.length > 0) throw failures[0];
 
     // Stamped only on success — a failed run must never look reconciled.
     const finishedAt = new Date();

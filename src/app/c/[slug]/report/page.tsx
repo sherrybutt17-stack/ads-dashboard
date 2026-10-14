@@ -7,7 +7,7 @@ import { getClientBranding, getAgencySettings } from "@/lib/branding-store";
 import type { AdPlatform } from "@/lib/metrics/queries";
 import { parseAdPlatform } from "@/lib/platforms";
 import {
-  trailingWindowInclusive,
+  trailingWindow,
   isValidDateKey,
   MAX_RANGE_DAYS,
 } from "@/lib/dates";
@@ -68,7 +68,7 @@ export default async function ReportPage({
   const range = valid
     ? { startKey: sp.start as string, endKey: sp.end as string }
     : (() => {
-        const w = trailingWindowInclusive(safeDays, client.timezone);
+        const w = trailingWindow(safeDays, client.timezone);
         return { startKey: w.startKey, endKey: w.endKey };
       })();
 

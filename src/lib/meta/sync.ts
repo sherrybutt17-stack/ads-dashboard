@@ -133,45 +133,56 @@ export async function syncClientMetrics(
      * failure is visible without being fatal.
      */
     const breakdownFailures: string[] = [];
+    // One account's failure must not stop the others. A closed location's
+    // revoked access used to freeze every healthy account after it, while the
+    // health check said only the dead account was missing. Each account now
+    // syncs on its own; the run still ends failed (so not reconciled, and
+    // retried) when any account failed, so the dead one stays visible.
+    const failures: unknown[] = [];
     // Serialised per account — Meta warns that firing several insights queries
     // at once invites throttling.
     for (const account of accounts) {
-      written += await syncAccountMetrics(client, account, since, until, tz);
+      try {
+        written += await syncAccountMetrics(client, account, since, until, tz);
 
-      /*
-       * The ad-level pass. Creatives are resolved FIRST because the metrics
-       * rows carry the creative key — running insights before the mapping
-       * exists would write a window of ad rows with empty creative keys that
-       * only the next night's run would repair, and any leaderboard read in
-       * between would silently omit them.
-       */
-      if (opts.includeAdLevel) {
-        const creatives = await syncAccountCreatives(client, account);
-        written += await syncAccountMetrics(
-          client,
-          account,
-          since,
-          until,
-          tz,
-          "ad",
-          creatives,
-        );
-      }
+        /*
+         * The ad-level pass. Creatives are resolved FIRST because the metrics
+         * rows carry the creative key — running insights before the mapping
+         * exists would write a window of ad rows with empty creative keys that
+         * only the next night's run would repair, and any leaderboard read in
+         * between would silently omit them.
+         */
+        if (opts.includeAdLevel) {
+          const creatives = await syncAccountCreatives(client, account);
+          written += await syncAccountMetrics(
+            client,
+            account,
+            since,
+            until,
+            tz,
+            "ad",
+            creatives,
+          );
+        }
 
-      if (opts.includeBreakdowns) {
-        const b = await syncAccountBreakdowns(client, account, since, until);
-        written += b.rowsWritten;
-        breakdownFailures.push(...b.failures);
-      }
+        if (opts.includeBreakdowns) {
+          const b = await syncAccountBreakdowns(client, account, since, until);
+          written += b.rowsWritten;
+          breakdownFailures.push(...b.failures);
+        }
 
-      if (opts.includeReach) {
-        await syncAccountPeriodReach(client, account, since, until);
+        if (opts.includeReach) {
+          await syncAccountPeriodReach(client, account, since, until);
+        }
+        await db
+          .update(metaAdAccounts)
+          .set({ lastSyncedAt: new Date() })
+          .where(eq(metaAdAccounts.id, account.id));
+      } catch (err) {
+        failures.push(err);
       }
-      await db
-        .update(metaAdAccounts)
-        .set({ lastSyncedAt: new Date() })
-        .where(eq(metaAdAccounts.id, account.id));
     }
+    if (failures.length > 0) throw failures[0];
 
     // Stamped only on success — a failed run must never look reconciled, or the
     // overdue gate would skip the client until tomorrow.

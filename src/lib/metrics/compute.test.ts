@@ -119,6 +119,24 @@ describe("rates the funnel contradicts", () => {
     expect(d.bookPct).toBeNull();
   });
 
+  it("suppresses cost per lead when appointments outnumber leads", () => {
+    // Same live window: $2,312.51 / 3 leads printed $770.84 a lead, about nine
+    // times the real figure, because calendar bookings never enter New Lead.
+    const d = derive(
+      funnel({ new_lead: 3, appointment_booked: 25, disqualified: 1, new_lead_qualified: 2 }),
+      ads({ spend: 2312.51 }),
+    );
+    expect(d.cpLead).toBeNull();
+    expect(d.cpLeadQualified).toBeNull();
+    // The stages that ARE recorded keep their cost.
+    expect(d.cpAppt).toBeCloseTo(92.5, 2);
+  });
+
+  it("keeps cost per lead when the funnel is coherent", () => {
+    const d = derive(funnel({ new_lead: 25, appointment_booked: 25 }), ads({ spend: 2500 }));
+    expect(d.cpLead).toBe(100);
+  });
+
   it("keeps a booking rate of exactly 100%", () => {
     // Every lead booked. Unusual, not impossible — the boundary is `>`, not `>=`.
     const d = derive(funnel({ new_lead: 12, appointment_booked: 12 }), ads());

@@ -236,7 +236,13 @@ export function derive(
   return {
     // Cost per stage — denominators come from the CRM ledger, which is the
     // source of truth for what actually happened downstream of the click.
-    cpLead: costPer(spend, funnel.new_lead),
+    //
+    // Cost per lead shares bookPct's denominator, so it shares its guard. When
+    // appointments outnumber new leads, leads are entering the pipeline below
+    // its top (a calendar funnel) and spend ÷ new leads overstates the cost
+    // several times over. Blank, with the reason on the tile, beats a confident
+    // wrong number.
+    cpLead: leadsRecorded ? costPer(spend, funnel.new_lead) : null,
     /**
      * Cost per lead that was actually a prospect.
      *
@@ -250,7 +256,9 @@ export function derive(
      * where it says something the first does not.
      */
     cpLeadQualified:
-      funnel.disqualified > 0 ? costPer(spend, funnel.new_lead_qualified) : null,
+      leadsRecorded && funnel.disqualified > 0
+        ? costPer(spend, funnel.new_lead_qualified)
+        : null,
     cpAppt: costPer(spend, funnel.appointment_booked),
     cpShow: costPer(spend, funnel.showed),
     cpWon: costPer(spend, funnel.closed_won),

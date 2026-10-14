@@ -7,7 +7,6 @@ import {
   todayKey,
   trailingMonths,
   trailingWindow,
-  trailingWindowInclusive,
   windowFromKeys,
   dayLabel,
   type DateWindow,
@@ -39,6 +38,7 @@ import {
 import {
   buildFunnelSteps,
   derive,
+  funnelCoherence,
   pctChange,
   type FunnelStep,
 } from "./compute";
@@ -415,7 +415,7 @@ export async function loadDashboard(
   const range: DateWindow =
     opts.startKey && opts.endKey
       ? windowFromKeys(opts.startKey, opts.endKey, tz)
-      : trailingWindowInclusive(30, tz);
+      : trailingWindow(30, tz);
 
   const prevRange = previousWindow(range, tz);
 
@@ -679,6 +679,9 @@ export async function loadDashboard(
     roas: pctChange(current.derived.roas, previous.derived.roas),
   };
 
+  // Same guard as the headline cost per lead (see `derive`): when the funnel's
+  // top is short, every campaign's lead count is short too.
+  const cplTrusted = funnelCoherence(current.funnel).leadsRecorded;
   const campaigns = campaignRows
     .map((c) => {
       const leads = leadsByCampaign.get(c.campaignId) ?? 0;
@@ -693,7 +696,8 @@ export async function loadDashboard(
         impressions: c.ads.impressions,
         linkClicks: c.ads.linkClicks,
         leads,
-        cpLead: leads > 0 && c.ads.spend > 0 ? c.ads.spend / leads : null,
+        cpLead:
+          cplTrusted && leads > 0 && c.ads.spend > 0 ? c.ads.spend / leads : null,
       };
     })
     .sort((a, b) => b.spend - a.spend);
@@ -1209,7 +1213,7 @@ export async function loadDeferredTables(
       ),
       getPeriodMetrics(
         client.id,
-        trailingWindowInclusive(7, tz),
+        trailingWindow(7, tz),
         "Last 7 Days",
         undefined,
         filter,
@@ -1219,7 +1223,7 @@ export async function loadDeferredTables(
       ),
       getPeriodMetrics(
         client.id,
-        previousWindow(trailingWindowInclusive(7, tz), tz),
+        previousWindow(trailingWindow(7, tz), tz),
         "Previous Period",
         undefined,
         filter,
@@ -1228,7 +1232,7 @@ export async function loadDeferredTables(
         "reached",
       ),
       (async () => {
-        const w = trailingWindowInclusive(14, tz);
+        const w = trailingWindow(14, tz);
         return getDailySeries(
           client.id,
           w,

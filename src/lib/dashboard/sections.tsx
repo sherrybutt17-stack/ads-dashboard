@@ -311,11 +311,13 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
            * under-mark it; with both on screen neither move works.
            */
           footnote={
-            current.derived.cpLead === null && current.funnel.new_lead > 0
-              ? "No spend recorded"
-              : current.derived.cpLeadQualified !== null
-                ? `${formatCurrency(current.derived.cpLeadQualified, currency)} excluding ${formatNumber(current.funnel.disqualified)} disqualified`
-                : undefined
+            !funnelCoherence(current.funnel).leadsRecorded
+              ? "not shown: more appts than leads recorded"
+              : current.derived.cpLead === null && current.funnel.new_lead > 0
+                ? "No spend recorded"
+                : current.derived.cpLeadQualified !== null
+                  ? `${formatCurrency(current.derived.cpLeadQualified, currency)} excluding ${formatNumber(current.funnel.disqualified)} disqualified`
+                  : undefined
           }
         />
         <StatTile
@@ -1029,7 +1031,7 @@ async function ReportTables({
 
       <MetricsTable
         title="7-day change"
-        subtitle="Last 7 days against the 7 before"
+        subtitle="Last 7 full days, ending yesterday, against the 7 before"
         firstColumnLabel="Period"
         rows={[
           {
@@ -1057,7 +1059,7 @@ async function ReportTables({
 
       <MetricsTable
         title="14-day daily report"
-        subtitle="One row per day, most recent first"
+        subtitle="One row per full day, most recent first — today is left out because it is partial"
         firstColumnLabel="Date"
         rows={t.fourteenDayDaily.map((d) => ({
           label: d.label,
