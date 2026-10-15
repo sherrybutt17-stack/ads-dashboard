@@ -9,6 +9,13 @@ import {
   type PeriodSelection,
 } from "@/components/PeriodFilter";
 import type { AdPlatform } from "@/lib/platforms";
+import { ViewPicker } from "@/components/ViewPicker";
+import {
+  DEFAULT_VIEW,
+  encodeView,
+  normalizeView,
+  type ReportView,
+} from "@/lib/report/view";
 
 /**
  * Create and manage share links for one client.
@@ -42,6 +49,8 @@ interface ShareLinkView {
   createdAt: string;
   viewCount: number;
   lastViewedAt: string | null;
+  /** What the link includes, when it is not the standard report. */
+  contents: string | null;
 }
 
 /** Whether this deployment can send mail, as the share GET reports it. */
@@ -65,6 +74,7 @@ const INPUT_CLASS = "w-full rounded-[var(--radius-sm)] border px-3 py-2 text-[13
 
 export function ShareReport({
   clientId,
+  slug,
   rangeStart,
   rangeEnd,
   platform,
@@ -72,6 +82,8 @@ export function ShareReport({
   today,
 }: {
   clientId: string;
+  /** For the Preview link to the report page. */
+  slug: string;
   rangeStart: string;
   rangeEnd: string;
   platform: AdPlatform;
@@ -83,6 +95,10 @@ export function ShareReport({
   const screen: PeriodSelection = { start: rangeStart, end: rangeEnd, platform };
   const [period, setPeriod] = useState<PeriodSelection>(screen);
   const periodError = periodProblem(period, today);
+  // Starts as the standard report on every opening: a choice that included
+  // lead names last time must not quietly carry into the next link.
+  const [view, setView] = useState<ReportView>(DEFAULT_VIEW);
+  const chosen = normalizeView(view);
   const [open, setOpen] = useState(false);
   const [links, setLinks] = useState<ShareLinkView[] | null>(null);
   const [label, setLabel] = useState("");
@@ -149,6 +165,7 @@ export function ShareReport({
           rangeStart: period.start,
           rangeEnd: period.end,
           platform: period.platform,
+          view: chosen,
           label: label.trim() || null,
           ttlDays,
           password: password.trim() || null,
@@ -184,6 +201,7 @@ export function ShareReport({
           rangeStart: period.start,
           rangeEnd: period.end,
           platform: period.platform,
+          view: chosen,
           label: label.trim() || undefined,
           ttlDays,
           password: password.trim() || undefined,
@@ -257,6 +275,7 @@ export function ShareReport({
         onClick={() => {
           // Every opening starts from what is on screen.
           setPeriod(screen);
+          setView(DEFAULT_VIEW);
           setOpen(true);
           // Fetched on the click that opens the dialog rather than from an
           // effect watching `open`: the list is only ever needed as a result of
@@ -491,6 +510,29 @@ export function ShareReport({
                 </span>
               </div>
 
+              <div>
+                <ViewPicker
+                  value={view}
+                  onChange={setView}
+                  staff
+                  mode="share"
+                  headings="field"
+                />
+                {chosen && !periodError && (
+                  <a
+                    href={`/c/${encodeURIComponent(slug)}/report?start=${period.start}&end=${period.end}${
+                      period.platform !== "meta" ? `&platform=${period.platform}` : ""
+                    }&v=${encodeURIComponent(encodeView(chosen))}`}
+                    target="_blank"
+                    rel="noopener"
+                    className="mt-1.5 inline-block text-[12px] font-medium hover:underline"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    Preview what they will see
+                  </a>
+                )}
+              </div>
+
               <Field label="Label" hint="Your own note. The recipient never sees it.">
                 <input
                   value={label}
@@ -560,6 +602,7 @@ export function ShareReport({
                   disabled={
                     busy ||
                     periodError !== null ||
+                    !chosen ||
                     (mode === "email" &&
                       (recipients.length === 0 ||
                         recipients.length > 5 ||
@@ -751,6 +794,7 @@ function ExistingLinks({
                   ? "never opened"
                   : `${l.viewCount} view${l.viewCount === 1 ? "" : "s"}`}
               </span>
+              {l.contents && <span className="block">{l.contents}</span>}
             </span>
             <button
               type="button"

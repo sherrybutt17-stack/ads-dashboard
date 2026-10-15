@@ -5,6 +5,12 @@ import { shareLinks, type ShareLink } from "@/db/schema";
 import { hashPassword, verifyPassword } from "@/lib/crypto";
 import { parseAdPlatform } from "@/lib/platforms";
 import { appBaseUrlOr } from "@/lib/app-url";
+import {
+  DEFAULT_VIEW,
+  isDefaultView,
+  normalizeView,
+  type ReportView,
+} from "@/lib/report/view";
 
 /**
  * Share links — a read-only URL onto one client's report for one fixed period.
@@ -45,6 +51,8 @@ export interface MintShareInput {
   ttlDays: number;
   password?: string | null;
   createdBy?: string | null;
+  /** Sections and headline numbers to show. Omitted = the standard report. */
+  view?: ReportView | null;
 }
 
 export interface MintedShare {
@@ -89,10 +97,22 @@ export async function mintShareLink(input: MintShareInput): Promise<MintedShare>
       passwordHash: input.password ? hashPassword(input.password) : null,
       expiresAt: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
       createdBy: input.createdBy ?? null,
+      // Stored only when it differs from the standard report, so a link made
+      // with the defaults keeps meaning "the standard report" even if that
+      // standard is ever widened.
+      view:
+        input.view && !isDefaultView(input.view)
+          ? { sections: input.view.sections, kpis: input.view.kpis }
+          : null,
     })
     .returning();
 
   return { token, row };
+}
+
+/** What a stored link shows. Unreadable or absent means the standard report. */
+export function viewForLink(link: Pick<ShareLink, "view">): ReportView {
+  return normalizeView(link.view) ?? DEFAULT_VIEW;
 }
 
 /**

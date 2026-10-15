@@ -26,11 +26,14 @@ export function DownloadPdfButton({
   start,
   end,
   platform,
+  view,
 }: {
   slug: string;
   start: string;
   end: string;
   platform: AdPlatform;
+  /** The selection the report is showing, as `encodeView` writes it. */
+  view?: string;
 }) {
   const [state, setState] = useState<"idle" | "working" | "failed">("idle");
   const [problem, setProblem] = useState<string | null>(null);
@@ -40,7 +43,7 @@ export function DownloadPdfButton({
     setProblem(null);
     try {
       const res = await fetch(
-        `/api/c/${encodeURIComponent(slug)}/report-pdf?platform=${platform}&start=${start}&end=${end}`,
+        `/api/c/${encodeURIComponent(slug)}/report-pdf?platform=${platform}&start=${start}&end=${end}${view ? `&v=${encodeURIComponent(view)}` : ""}`,
       );
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;

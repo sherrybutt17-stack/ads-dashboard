@@ -20,6 +20,7 @@ import {
   type SectionContext,
 } from "@/lib/dashboard/sections";
 import { REPORT_SECTIONS } from "@/lib/dashboard/registry";
+import type { ReportView } from "@/lib/report/view";
 import { getPublishedSummaries } from "@/lib/ai/store";
 import { loadCommentaryForReport } from "@/lib/commentary/report";
 import { monthKeyForDateKey } from "@/lib/commentary/model";
@@ -38,12 +39,14 @@ import type { CSSProperties } from "react";
  *
  * ── Why these sections and not the whole dashboard ──────────────────────
  *
- * 🔴 **The pipeline explorer is excluded, permanently.** It lists every lead by
- * name, email and phone. A share URL is a bearer credential that travels through
- * mail servers and reply chains, and a board pack does not need forty people's
- * contact details to answer "is the money working?". This is a list of sections
- * rather than "the dashboard minus the chrome" precisely so that adding a new
- * section to the dashboard cannot silently start publishing lead PII.
+ * 🔴 **Sections that list people are never included by default.** The pipeline
+ * explorer, the call list and the duplicate and aging panels show leads by name
+ * and phone, and a share URL is a bearer credential that travels through mail
+ * servers and reply chains. The sender may include them deliberately — the
+ * agency decided its own clients may receive their own leads — and the picker
+ * labels each one, but nothing adds them unasked. This stays a list of sections
+ * rather than "the dashboard minus the chrome" so that adding a new section to
+ * the dashboard cannot silently start publishing lead PII.
  *
  * The lead-source note stays, at the top, for everyone. It is what tells the
  * reader WHICH leads these figures count — omitting it to make the page tidier
@@ -72,6 +75,12 @@ export interface ReportDocumentProps {
   rangeEnd: string;
   /** Rendered above the document — a print button, an "expires" note. */
   toolbar?: React.ReactNode;
+  /**
+   * Which sections and headline numbers to include, as chosen in Share or
+   * Export. Omitted means the standard report: `REPORT_SECTIONS`, all eight
+   * headline numbers — what every link created before the choice existed shows.
+   */
+  view?: ReportView;
 }
 
 export async function ReportDocument({
@@ -83,6 +92,7 @@ export async function ReportDocument({
   rangeStart,
   rangeEnd,
   toolbar,
+  view,
 }: ReportDocumentProps) {
   const [adPipe, logoDataUri, agencyLogoDataUri, written, commentary] = await Promise.all([
     getAdPipeStatus(client, platform),
@@ -199,6 +209,7 @@ export async function ReportDocument({
     valuesMissing,
     revenueFootnote,
     printWidth: CHART_WIDTH,
+    kpis: view ? new Set(view.kpis) : undefined,
   };
 
   const accentVars = {
@@ -301,7 +312,7 @@ export async function ReportDocument({
          */}
         {commentary && <CommentaryBlock commentary={commentary} />}
 
-        {REPORT_SECTIONS.map((id) => (
+        {(view?.sections ?? REPORT_SECTIONS).map((id) => (
           <Fragment key={id}>{renderSection(id, ctx)}</Fragment>
         ))}
 

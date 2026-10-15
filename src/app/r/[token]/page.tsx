@@ -16,6 +16,7 @@ import {
   checkPassProof,
   passCookieName,
   type ShareFailure,
+  viewForLink,
 } from "@/lib/share";
 import { rateLimit } from "@/lib/rate-limit";
 import { ReportDocument, REPORT_WIDTH } from "@/components/report/ReportDocument";
@@ -87,10 +88,17 @@ export default async function SharedReportPage({
   if (!client) return <ShareProblem reason="not_found" />;
 
   const platform: AdPlatform = parseAdPlatform(link.platform);
+  // What the sender chose to include; the standard report for older links.
+  const view = viewForLink(link);
   const [data, branding, agency] = await Promise.all([
     loadDashboard(
       client,
-      { startKey: link.rangeStart, endKey: link.rangeEnd },
+      {
+        startKey: link.rangeStart,
+        endKey: link.rangeEnd,
+        // Only what is shown is loaded.
+        sections: new Set(view.sections),
+      },
       platform,
     ),
     getClientBranding(client.id),
@@ -118,6 +126,7 @@ export default async function SharedReportPage({
       platform={platform}
       rangeStart={link.rangeStart}
       rangeEnd={link.rangeEnd}
+      view={view}
       toolbar={
         <div
           className="no-print mx-auto flex flex-wrap items-center justify-between gap-3 px-4 pt-6"

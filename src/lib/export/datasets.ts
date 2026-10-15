@@ -105,9 +105,17 @@ export function dailyTable(daily: readonly DailyPoint[]): CsvTable {
  * they were looking at.
  */
 export function monthlyTable(months: readonly PeriodMetrics[]): CsvTable {
+  return periodsTable(months, "Month");
+}
+
+/** One row per period — a month, a moving-average window, a 7-day block. */
+export function periodsTable(
+  periods: readonly PeriodMetrics[],
+  firstHeader: string,
+): CsvTable {
   return {
-    headers: ["Month", "From", "To", ...METRIC_HEADERS],
-    rows: months.map((m) => [
+    headers: [firstHeader, "From", "To", ...METRIC_HEADERS],
+    rows: periods.map((m) => [
       text(m.label),
       text(m.window.startKey),
       text(m.window.endKey),

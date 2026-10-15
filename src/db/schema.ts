@@ -1930,6 +1930,14 @@ export const shareLinks = pgTable(
     /** Which ad platform's figures the link was created against. */
     platform: text("platform").notNull().default("meta"),
 
+    /**
+     * Which sections and headline numbers the link shows, as chosen when it
+     * was made: `{ sections: string[], kpis: string[] }`, validated through
+     * `normalizeView` on every read. Null means the standard report, which is
+     * what every link made before the choice existed keeps showing.
+     */
+    view: jsonb("view").$type<{ sections: string[]; kpis: string[] }>(),
+
     /** scrypt hash, same scheme as user passwords. Null = no gate. */
     passwordHash: text("password_hash"),
 

@@ -9,6 +9,14 @@ import {
   periodProblem,
   type PeriodSelection,
 } from "@/components/PeriodFilter";
+import { ViewPicker } from "@/components/ViewPicker";
+import {
+  DEFAULT_VIEW,
+  describeView,
+  encodeView,
+  normalizeView,
+  type ReportView,
+} from "@/lib/report/view";
 import type { AdPlatform } from "@/lib/platforms";
 
 export interface ExportDataset {
@@ -26,7 +34,9 @@ const LINK_STYLE = {
 } as const;
 
 /**
- * The Export popover: choose a period and platform, then a dataset and format.
+ * The Export popover: choose a period and platform, then the whole dashboard
+ * (with the sections and headline numbers you pick) or a single dataset, then a
+ * format.
  *
  * ── Why this became a client component ────────────────────────────────
  *
@@ -46,6 +56,7 @@ export function ExportPanel({
   platforms,
   datasets,
   pdfEnabled,
+  staff,
 }: {
   slug: string;
   screen: PeriodSelection;
@@ -53,9 +64,15 @@ export function ExportPanel({
   platforms: readonly AdPlatform[];
   datasets: readonly ExportDataset[];
   pdfEnabled: boolean;
+  /** Lead-list sections of the dashboard export are offered to staff only. */
+  staff: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState<PeriodSelection>(screen);
+  // Kept while the page is open, so the same selection can be downloaded in
+  // several formats without ticking it again.
+  const [view, setView] = useState<ReportView>(DEFAULT_VIEW);
+  const [choosing, setChoosing] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);
@@ -73,13 +90,55 @@ export function ExportPanel({
   }, [open, close]);
 
   const problem = periodProblem(sel, today);
+  const chosen = normalizeView(view);
   const formats = EXPORT_FORMATS.filter((f) => f.id !== "pdf" || pdfEnabled);
+  const range = `&platform=${sel.platform}&start=${sel.start}&end=${sel.end}`;
   const href = (dataset: string, format: ExportFormat) =>
-    `/api/c/${encodeURIComponent(slug)}/export?dataset=${dataset}` +
-    `&format=${format}&platform=${sel.platform}&start=${sel.start}&end=${sel.end}`;
+    `/api/c/${encodeURIComponent(slug)}/export?dataset=${dataset}&format=${format}${range}`;
+  const dashboardHref = (format: ExportFormat) =>
+    `${href("dashboard", format)}&v=${encodeURIComponent(encodeView(chosen ?? DEFAULT_VIEW))}`;
   const reportHref =
     `/c/${encodeURIComponent(slug)}/report?start=${sel.start}&end=${sel.end}` +
     (sel.platform !== "meta" ? `&platform=${sel.platform}` : "");
+  const previewHref = `${reportHref}&v=${encodeURIComponent(encodeView(chosen ?? DEFAULT_VIEW))}`;
+
+  /** The format buttons for one export; disabled, with the reason, when blocked. */
+  const formatButtons = (urlFor: (f: ExportFormat) => string, blocked: string | null) =>
+    formats.map((f) =>
+      blocked ? (
+        <button
+          key={f.id}
+          type="button"
+          disabled
+          title={blocked}
+          className={LINK_CLASS}
+          style={LINK_STYLE}
+        >
+          {f.label}
+        </button>
+      ) : f.metered ? (
+        <FetchDownloadButton
+          key={f.id}
+          url={urlFor(f.id)}
+          label={f.label}
+          pendingLabel="Rendering…"
+          title={f.description}
+          className={LINK_CLASS}
+          style={LINK_STYLE}
+        />
+      ) : (
+        <a
+          key={f.id}
+          href={urlFor(f.id)}
+          download
+          title={f.description}
+          className={LINK_CLASS}
+          style={LINK_STYLE}
+        >
+          {f.label}
+        </a>
+      ),
+    );
 
   return (
     <div ref={root} className="relative">
@@ -127,6 +186,65 @@ export function ExportPanel({
             />
           </div>
 
+          {/* The whole dashboard — or just the parts chosen for it. */}
+          <div
+            className="mb-1 border-b px-2.5 py-2"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <span
+              className="block text-[13px] font-medium"
+              style={{ color: "var(--text-primary)" }}
+            >
+              Dashboard
+            </span>
+            <span
+              className="mt-0.5 block text-[11.5px] leading-snug"
+              style={{ color: "var(--text-muted)" }}
+            >
+              The sections and headline numbers you choose. Excel gets one sheet
+              per section, CSV one table after another, PDF the report itself.
+            </span>
+            <button
+              type="button"
+              aria-expanded={choosing}
+              onClick={() => setChoosing((c) => !c)}
+              className="mt-1.5 text-[12px] font-medium hover:underline"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              {choosing ? "Hide choices" : "Choose what to include"} ·{" "}
+              <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                {chosen ? describeView(chosen) : "nothing chosen"}
+              </span>
+            </button>
+            {choosing && (
+              <div className="mt-2">
+                <ViewPicker
+                  value={view}
+                  onChange={setView}
+                  staff={staff}
+                  mode="export"
+                />
+              </div>
+            )}
+            <span className="mt-2 flex min-w-0 flex-wrap items-start gap-1.5">
+              {formatButtons(
+                dashboardHref,
+                problem ?? (chosen ? null : "Pick at least one section."),
+              )}
+              {chosen && !problem && (
+                <a
+                  href={previewHref}
+                  target="_blank"
+                  rel="noopener"
+                  className="px-1 py-0.5 text-[11px] font-medium hover:underline"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Preview
+                </a>
+              )}
+            </span>
+          </div>
+
           {datasets.map((d) => (
             <div
               key={d.id}
@@ -155,41 +273,7 @@ export function ExportPanel({
                 {d.description}
               </span>
               <span className="mt-1.5 flex min-w-0 flex-wrap items-start gap-1.5">
-                {formats.map((f) =>
-                  problem ? (
-                    <button
-                      key={f.id}
-                      type="button"
-                      disabled
-                      title={problem}
-                      className={LINK_CLASS}
-                      style={LINK_STYLE}
-                    >
-                      {f.label}
-                    </button>
-                  ) : f.metered ? (
-                    <FetchDownloadButton
-                      key={f.id}
-                      url={href(d.id, f.id)}
-                      label={f.label}
-                      pendingLabel="Rendering…"
-                      title={f.description}
-                      className={LINK_CLASS}
-                      style={LINK_STYLE}
-                    />
-                  ) : (
-                    <a
-                      key={f.id}
-                      href={href(d.id, f.id)}
-                      download
-                      title={f.description}
-                      className={LINK_CLASS}
-                      style={LINK_STYLE}
-                    >
-                      {f.label}
-                    </a>
-                  ),
-                )}
+                {formatButtons((f) => href(d.id, f), problem)}
               </span>
             </div>
           ))}
@@ -205,7 +289,7 @@ export function ExportPanel({
                 {" "}
                 For a PDF, open the{" "}
                 <a
-                  href={reportHref}
+                  href={chosen ? previewHref : reportHref}
                   className="underline underline-offset-2"
                   style={{ color: "var(--text-secondary)" }}
                 >

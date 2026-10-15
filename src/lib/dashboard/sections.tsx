@@ -107,6 +107,11 @@ export interface SectionContext {
    */
   printWidth?: number;
   /**
+   * Which headline tiles to show. Undefined shows all eight — the dashboard
+   * itself never restricts them; a shared or exported document may.
+   */
+  kpis?: ReadonlySet<string>;
+  /**
    * Stored written summaries for this period, plus whether drafting is wired
    * up. Loaded only for staff — the section is absent from a client registry,
    * so a client render never needs it and never pays for the query.
@@ -260,114 +265,137 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
         </>
       );
 
-    case "kpis":
+    case "kpis": {
+      const showKpi = (key: string) => !ctx.kpis || ctx.kpis.has(key);
       return (
         <>
       {/* Headline KPIs */}
       <section
-        className="grid grid-cols-2 gap-3.5 md:grid-cols-3 lg:grid-cols-4"
+        /*
+         * Two across in a document. The report is a fixed 720px column, but the
+         * breakpoints below follow the WINDOW, so on a laptop the report got
+         * four tiles of ~170px and cut "$3,072.00" off mid-figure — in the
+         * share link and the PDF alike.
+         */
+        className={
+          printWidth
+            ? "grid grid-cols-2 gap-3.5"
+            : "grid grid-cols-2 gap-3.5 md:grid-cols-3 lg:grid-cols-4"
+        }
         aria-label="Headline metrics"
       >
-        <StatTile
-          label="Ad spend"
-          value={formatCurrency(current.ads.spend, currency)}
-          numeric={current.ads.spend}
-          format="currency"
-          currency={currency}
-          metricKey="spend"
-          basis={basis}
-          change={deltas.spend}
-          spark={sparkSpend}
-        />
-        <StatTile
-          label="New leads"
-          value={formatNumber(current.funnel.new_lead)}
-          numeric={current.funnel.new_lead}
-          format="number"
-          metricKey="new_lead"
-          basis={basis}
-          change={deltas.new_lead}
-          spark={sparkLeads}
-          emphasis
-        />
-        <StatTile
-          label="Cost per lead"
-          value={formatCurrency(current.derived.cpLead, currency)}
-          numeric={current.derived.cpLead}
-          format="currency"
-          currency={currency}
-          metricKey="cpLead"
-          basis={basis}
-          change={deltas.cpLead}
-          /*
-           * Both numbers, never only the flattering one.
-           *
-           * Once junk leads are being marked, cost per lead has two honest
-           * readings: what every lead cost, and what the leads that were
-           * actually prospects cost. Showing only the second quietly drops junk
-           * from the denominator, which is exactly the massaging this product
-           * replaced. Showing both also cancels the incentive split — the client
-           * has reason to over-mark junk to argue the ads are bad, the agency to
-           * under-mark it; with both on screen neither move works.
-           */
-          footnote={
-            !funnelCoherence(current.funnel).leadsRecorded
-              ? "not shown: more appts than leads recorded"
-              : current.derived.cpLead === null && current.funnel.new_lead > 0
-                ? "No spend recorded"
-                : current.derived.cpLeadQualified !== null
-                  ? `${formatCurrency(current.derived.cpLeadQualified, currency)} excluding ${formatNumber(current.funnel.disqualified)} disqualified`
-                  : undefined
-          }
-        />
-        <StatTile
-          label="Appointments"
-          value={formatNumber(current.funnel.appointment_booked)}
-          numeric={current.funnel.appointment_booked}
-          format="number"
-          metricKey="appointment_booked"
-          basis={basis}
-          change={deltas.appointment_booked}
-          spark={sparkAppts}
-          /*
-           * 🔴 A suppressed rate needs a reason, not a dash. `bookPct` is null
-           * whenever appointments outnumber leads — the funnel's top is not
-           * being recorded — and "— of leads" under a tile reads as a broken
-           * renderer rather than as the finding it is. The Reports tab carries
-           * the full explanation; this is the one line that fits here.
-           */
-          footnote={
-            !funnelCoherence(current.funnel).leadsRecorded
-              ? "more appts than leads recorded"
-              : `${formatPercent(current.derived.bookPct, 1)} of leads`
-          }
-        />
-        <StatTile
-          label="Showed"
-          value={formatNumber(current.funnel.showed)}
-          numeric={current.funnel.showed}
-          format="number"
-          metricKey="showed"
-          basis={basis}
-          change={deltas.showed}
-          // Same rule, the other break: wins downstream of zero recorded shows.
-          footnote={
-            !funnelCoherence(current.funnel).showsRecorded
-              ? "attendance not recorded"
-              : `${formatPercent(current.derived.showPct, 1)} of appts`
-          }
-        />
-        <StatTile
-          label="Closed / won"
-          value={formatNumber(current.funnel.closed_won)}
-          numeric={current.funnel.closed_won}
-          format="number"
-          metricKey="closed_won"
-          basis={basis}
-          change={deltas.closed_won}
-          spark={sparkWon}
-          footnote={`${formatCurrency(current.derived.cpWon, currency)} each`}
-        />
+        {showKpi("spend") && (
+          <StatTile
+            label="Ad spend"
+            value={formatCurrency(current.ads.spend, currency)}
+            numeric={current.ads.spend}
+            format="currency"
+            currency={currency}
+            metricKey="spend"
+            basis={basis}
+            change={deltas.spend}
+            spark={sparkSpend}
+          />
+        )}
+        {showKpi("new_lead") && (
+          <StatTile
+            label="New leads"
+            value={formatNumber(current.funnel.new_lead)}
+            numeric={current.funnel.new_lead}
+            format="number"
+            metricKey="new_lead"
+            basis={basis}
+            change={deltas.new_lead}
+            spark={sparkLeads}
+            emphasis
+          />
+        )}
+        {showKpi("cpLead") && (
+          <StatTile
+            label="Cost per lead"
+            value={formatCurrency(current.derived.cpLead, currency)}
+            numeric={current.derived.cpLead}
+            format="currency"
+            currency={currency}
+            metricKey="cpLead"
+            basis={basis}
+            change={deltas.cpLead}
+            /*
+             * Both numbers, never only the flattering one.
+             *
+             * Once junk leads are being marked, cost per lead has two honest
+             * readings: what every lead cost, and what the leads that were
+             * actually prospects cost. Showing only the second quietly drops junk
+             * from the denominator, which is exactly the massaging this product
+             * replaced. Showing both also cancels the incentive split — the client
+             * has reason to over-mark junk to argue the ads are bad, the agency to
+             * under-mark it; with both on screen neither move works.
+             */
+            footnote={
+              !funnelCoherence(current.funnel).leadsRecorded
+                ? "not shown: more appts than leads recorded"
+                : current.derived.cpLead === null && current.funnel.new_lead > 0
+                  ? "No spend recorded"
+                  : current.derived.cpLeadQualified !== null
+                    ? `${formatCurrency(current.derived.cpLeadQualified, currency)} excluding ${formatNumber(current.funnel.disqualified)} disqualified`
+                    : undefined
+            }
+          />
+        )}
+        {showKpi("appointment_booked") && (
+          <StatTile
+            label="Appointments"
+            value={formatNumber(current.funnel.appointment_booked)}
+            numeric={current.funnel.appointment_booked}
+            format="number"
+            metricKey="appointment_booked"
+            basis={basis}
+            change={deltas.appointment_booked}
+            spark={sparkAppts}
+            /*
+             * 🔴 A suppressed rate needs a reason, not a dash. `bookPct` is null
+             * whenever appointments outnumber leads — the funnel's top is not
+             * being recorded — and "— of leads" under a tile reads as a broken
+             * renderer rather than as the finding it is. The Reports tab carries
+             * the full explanation; this is the one line that fits here.
+             */
+            footnote={
+              !funnelCoherence(current.funnel).leadsRecorded
+                ? "more appts than leads recorded"
+                : `${formatPercent(current.derived.bookPct, 1)} of leads`
+            }
+          />
+        )}
+        {showKpi("showed") && (
+          <StatTile
+            label="Showed"
+            value={formatNumber(current.funnel.showed)}
+            numeric={current.funnel.showed}
+            format="number"
+            metricKey="showed"
+            basis={basis}
+            change={deltas.showed}
+            // Same rule, the other break: wins downstream of zero recorded shows.
+            footnote={
+              !funnelCoherence(current.funnel).showsRecorded
+                ? "attendance not recorded"
+                : `${formatPercent(current.derived.showPct, 1)} of appts`
+            }
+          />
+        )}
+        {showKpi("closed_won") && (
+          <StatTile
+            label="Closed / won"
+            value={formatNumber(current.funnel.closed_won)}
+            numeric={current.funnel.closed_won}
+            format="number"
+            metricKey="closed_won"
+            basis={basis}
+            change={deltas.closed_won}
+            spark={sparkWon}
+            footnote={`${formatCurrency(current.derived.cpWon, currency)} each`}
+          />
+        )}
         {/*
          * Revenue and ROAS: the two tiles that let a client answer "did this
          * make money", which six cost metrics could not.
@@ -378,40 +406,45 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
          * is that nobody filled the field. Same failure shape as the source
          * sheet's $0.00 cost-per-lead. Show a dash and name the reason.
          */}
-        <StatTile
-          label="Revenue"
-          value={
-            valuesMissing || !current.revenue
-              ? DASH
-              : formatCurrency(current.revenue.revenue, currency)
-          }
-          numeric={valuesMissing ? null : (current.revenue?.revenue ?? null)}
-          format="currency"
-          currency={currency}
-          metricKey="revenue"
-          basis={basis}
-          change={valuesMissing ? null : deltas.revenue}
-          footnote={revenueFootnote}
-        />
-        <StatTile
-          label="ROAS"
-          value={formatMultiple(current.derived.roas)}
-          numeric={current.derived.roas}
-          format="multiple"
-          metricKey="roas"
-          basis={basis}
-          change={deltas.roas}
-          footnote={
-            valuesMissing
-              ? "Needs deal values in GHL"
-              : current.derived.avgDeal !== null
-                ? `${formatCurrency(current.derived.avgDeal, currency)} avg deal`
-                : undefined
-          }
-        />
+        {showKpi("revenue") && (
+          <StatTile
+            label="Revenue"
+            value={
+              valuesMissing || !current.revenue
+                ? DASH
+                : formatCurrency(current.revenue.revenue, currency)
+            }
+            numeric={valuesMissing ? null : (current.revenue?.revenue ?? null)}
+            format="currency"
+            currency={currency}
+            metricKey="revenue"
+            basis={basis}
+            change={valuesMissing ? null : deltas.revenue}
+            footnote={revenueFootnote}
+          />
+        )}
+        {showKpi("roas") && (
+          <StatTile
+            label="ROAS"
+            value={formatMultiple(current.derived.roas)}
+            numeric={current.derived.roas}
+            format="multiple"
+            metricKey="roas"
+            basis={basis}
+            change={deltas.roas}
+            footnote={
+              valuesMissing
+                ? "Needs deal values in GHL"
+                : current.derived.avgDeal !== null
+                  ? `${formatCurrency(current.derived.avgDeal, currency)} avg deal`
+                  : undefined
+            }
+          />
+        )}
       </section>
         </>
       );
+    }
 
     case "budget_delivery": {
       // Absent, not empty, when the load failed or nothing was ever agreed —

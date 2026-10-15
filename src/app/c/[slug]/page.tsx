@@ -680,6 +680,7 @@ export default async function ClientDashboard({
               {staff && (
                 <ShareReport
                   clientId={client.id}
+                  slug={slug}
                   rangeStart={range.startKey}
                   rangeEnd={range.endKey}
                   platform={platform}

@@ -12,6 +12,7 @@ import {
   DEFAULT_SHARE_TTL_DAYS,
   MIN_SHARE_PASSWORD,
 } from "@/lib/share";
+import { normalizeView, viewHasPersonal } from "@/lib/report/view";
 import {
   emailConfig,
   emailConfigured,
@@ -86,6 +87,8 @@ const Body = z
       .default(DEFAULT_SHARE_TTL_DAYS),
     password: z.string().min(MIN_SHARE_PASSWORD).max(64).optional(),
     message: z.string().max(500).optional(),
+    // Sections and headline numbers; validated by `normalizeView` below.
+    view: z.unknown().optional(),
   })
   .strict()
   .refine((b) => b.rangeStart <= b.rangeEnd, {
@@ -156,7 +159,7 @@ export async function POST(
       { status: 400 },
     );
   }
-  const { to, rangeStart, rangeEnd, platform, label, ttlDays, password, message } =
+  const { to, rangeStart, rangeEnd, platform, label, ttlDays, password, message, view: rawView } =
     parsed.data;
 
   const session = await getSessionUser();
@@ -186,6 +189,15 @@ export async function POST(
     );
   }
 
+  const view =
+    rawView === undefined || rawView === null ? null : normalizeView(rawView);
+  if (rawView !== undefined && rawView !== null && !view) {
+    return NextResponse.json(
+      { error: "Pick at least one section to include." },
+      { status: 400 },
+    );
+  }
+
   let token: string;
   let row: Awaited<ReturnType<typeof mintShareLink>>["row"];
   try {
@@ -204,6 +216,7 @@ export async function POST(
       ttlDays,
       password: password || null,
       createdBy: session?.userId ?? null,
+      view,
     }));
   } catch (err) {
     console.error("[share-email] mint failed:", err);
@@ -314,6 +327,8 @@ export async function POST(
       recipients: to,
       providerId,
       hasMessage: Boolean(message?.trim()),
+      sections: view?.sections ?? null,
+      includesLeadNames: view ? viewHasPersonal(view) : false,
       rangeStart: row.rangeStart,
       rangeEnd: row.rangeEnd,
       expiresAt: row.expiresAt.toISOString(),

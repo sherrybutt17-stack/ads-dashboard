@@ -17,6 +17,7 @@ const CLAIMS: RenderClaims = {
   end: "2026-07-31",
   platform: "meta",
   dataset: "report",
+  view: "",
 };
 
 const NOW = Date.UTC(2026, 6, 14, 12, 0, 0);
@@ -81,7 +82,7 @@ describe("🔴 forgery", () => {
     const [body, sig] = token.split(".");
     const decoded = Buffer.from(body, "base64url").toString("utf8");
     const parts = decoded.split("\n");
-    parts[4] = String(Number(parts[4]) + 86_400);
+    parts[6] = String(Number(parts[6]) + 86_400);
     const forged = `${Buffer.from(parts.join("\n")).toString("base64url")}.${sig}`;
     expect(verifyRenderToken(forged, NOW).ok).toBe(false);
   });
@@ -102,11 +103,11 @@ describe("🔴 forgery", () => {
      * it was not issued for.
      */
     const a = mintRenderToken(
-      { clientId: "ab", start: "cd", end: "e", platform: "meta", dataset: "report" },
+      { clientId: "ab", start: "cd", end: "e", platform: "meta", dataset: "report", view: "" },
       NOW,
     );
     const b = mintRenderToken(
-      { clientId: "abc", start: "d", end: "e", platform: "meta", dataset: "report" },
+      { clientId: "abc", start: "d", end: "e", platform: "meta", dataset: "report", view: "" },
       NOW,
     );
     expect(a).not.toBe(b);
@@ -170,7 +171,7 @@ describe("🔴 forgery", () => {
      * validating one would authorise an unspecified table. Signed with the v2
      * key so the signature passes and only the shape check stands in the way.
      */
-    expect(verifyRenderToken(signAs("report-render-token/v2", fiveFields()), NOW)).toEqual({
+    expect(verifyRenderToken(signAs("report-render-token/v3", fiveFields()), NOW)).toEqual({
       ok: false,
       reason: "malformed",
     });
@@ -232,10 +233,40 @@ describe("malformed input", () => {
     // and stops testing the field count it was written for.
     const body = "only\nthree\nfields";
     const key = createHmac("sha256", process.env.ENCRYPTION_KEY!)
-      .update("report-render-token/v2")
+      .update("report-render-token/v3")
       .digest();
     const sig = createHmac("sha256", key).update(body).digest("base64url");
     const token = `${Buffer.from(body).toString("base64url")}.${sig}`;
     expect(verifyRenderToken(token, NOW)).toEqual({ ok: false, reason: "malformed" });
+  });
+});
+
+describe("v3: the report's selection", () => {
+  const VIEW = "s=lead_filter_note,kpis,pipeline;k=spend,new_lead";
+
+  it("round-trips the view claim", () => {
+    const got = verifyRenderToken(mintRenderToken({ ...CLAIMS, view: VIEW }, NOW), NOW);
+    expect(got.ok && got.claims.view).toBe(VIEW);
+  });
+
+  it("🔴 signs the view, so a standard-report token cannot render another selection", () => {
+    // The lead list is the reason this matters: editing the view of a token
+    // minted for the standard report must not turn it into a lead export.
+    const token = mintRenderToken(CLAIMS, NOW);
+    const [body, sig] = token.split(".");
+    const parts = Buffer.from(body, "base64url").toString("utf8").split("\n");
+    parts[5] = VIEW;
+    const forged = `${Buffer.from(parts.join("\n")).toString("base64url")}.${sig}`;
+    expect(verifyRenderToken(forged, NOW)).toEqual({ ok: false, reason: "bad_signature" });
+  });
+
+  it("🔴 refuses a GENUINE v2 token on its signature", () => {
+    const key = createHmac("sha256", process.env.ENCRYPTION_KEY!)
+      .update("report-render-token/v2")
+      .digest();
+    const body = [CLAIMS.clientId, CLAIMS.start, CLAIMS.end, "meta", "report", Math.floor(NOW / 1000) + 90].join("\n");
+    const sig = createHmac("sha256", key).update(body).digest("base64url");
+    const token = `${Buffer.from(body).toString("base64url")}.${sig}`;
+    expect(verifyRenderToken(token, NOW)).toEqual({ ok: false, reason: "bad_signature" });
   });
 });

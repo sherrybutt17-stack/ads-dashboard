@@ -318,8 +318,13 @@ describe("the export route", () => {
      * deleting or inverting the gate fails here.
      */
     expect(code).toMatch(
-      /\.personal\s*&&\s*!isAgencyOperator\(\s*session\s*\)\s*\)\s*\{\s*return\s+NextResponse\.json\([\s\S]{0,300}?status:\s*403/,
+      /\bpersonal\s*&&\s*!isAgencyOperator\(\s*session\s*\)\s*\)\s*\{\s*return\s+NextResponse\.json\([\s\S]{0,300}?status:\s*403/,
     );
+    // And `personal` is decided for both kinds of export: the dataset's own
+    // flag, or — for the dashboard export — whether a chosen section lists
+    // people. A dashboard export must not be a way around the gate.
+    expect(code).toMatch(/viewHasPersonal\(\s*view\s*\)/);
+    expect(code).toMatch(/DATASETS\.find\(\(d\)\s*=>\s*d\.id\s*===\s*dataset\)\?\.personal\s*===\s*true/);
   });
 
   it("🔴 sends the file as an attachment, not inline", () => {
@@ -338,7 +343,7 @@ describe("the export route", () => {
 
   it("audits every export, recording whether it carried personal data", () => {
     expect(src).toContain("client.exported");
-    expect(src).toContain("personal:");
+    expect(src).toMatch(/\bpersonal[,:]/);
   });
 });
 

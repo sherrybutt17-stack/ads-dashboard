@@ -10,7 +10,9 @@ import {
   SHARE_TTL_DAYS,
   DEFAULT_SHARE_TTL_DAYS,
   MIN_SHARE_PASSWORD,
+  viewForLink,
 } from "@/lib/share";
+import { describeView, isDefaultView, normalizeView, viewHasPersonal } from "@/lib/report/view";
 
 /**
  * Share links for one client — list and create.
@@ -84,6 +86,8 @@ export async function GET(
       createdBy: l.createdBy,
       viewCount: l.viewCount,
       lastViewedAt: l.lastViewedAt?.toISOString() ?? null,
+      // Null for the standard report, so the list only calls out a choice.
+      contents: isDefaultView(viewForLink(l)) ? null : describeView(viewForLink(l)),
     })),
   });
 }
@@ -105,8 +109,8 @@ export async function POST(
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  const { rangeStart, rangeEnd, platform, label, ttlDays, password } = body as
-    Record<string, unknown>;
+  const { rangeStart, rangeEnd, platform, label, ttlDays, password, view: rawView } =
+    body as Record<string, unknown>;
 
   /*
    * Validate the range here rather than trusting the caller: it is frozen into
@@ -137,6 +141,16 @@ export async function POST(
     );
   }
 
+  // Absent means the standard report. Present but empty or unreadable is a
+  // mistake to report, not a reason to quietly send something else.
+  const view = rawView === undefined || rawView === null ? null : normalizeView(rawView);
+  if (rawView !== undefined && rawView !== null && !view) {
+    return NextResponse.json(
+      { error: "Pick at least one section to include." },
+      { status: 400 },
+    );
+  }
+
   const session = await getSessionUser();
   let token: string;
   let row: Awaited<ReturnType<typeof mintShareLink>>["row"];
@@ -150,6 +164,7 @@ export async function POST(
       ttlDays: ttlDays === undefined ? DEFAULT_SHARE_TTL_DAYS : ttl,
       password: pass || null,
       createdBy: session?.userId ?? null,
+      view,
     }));
   } catch (err) {
     /*
@@ -183,6 +198,8 @@ export async function POST(
       rangeEnd: row.rangeEnd,
       expiresAt: row.expiresAt.toISOString(),
       hasPassword: Boolean(row.passwordHash),
+      sections: view?.sections ?? null,
+      includesLeadNames: view ? viewHasPersonal(view) : false,
     },
   });
 

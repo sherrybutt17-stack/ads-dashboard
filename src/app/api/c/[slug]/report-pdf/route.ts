@@ -6,6 +6,8 @@ import { record, requestContext } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 import { isValidDateKey, rangeLabel } from "@/lib/dates";
 import { mintRenderToken } from "@/lib/report/render-token";
+import { decodeView, encodeView, isDefaultView } from "@/lib/report/view";
+import { AD_PLATFORMS } from "@/lib/platforms";
 import { PdfRenderError, isPdfConfigured, renderPdf } from "@/lib/report/pdf";
 import { exportFilename } from "@/lib/export/csv";
 import { appBaseUrl } from "@/lib/app-url";
@@ -36,7 +38,9 @@ import { appBaseUrl } from "@/lib/app-url";
  */
 
 const QuerySchema = z.object({
-  platform: z.enum(["meta", "google"]).default("meta"),
+  // Every platform with a dashboard tab — this refused TikTok, so a TikTok
+  // report could be previewed but not downloaded.
+  platform: z.enum(AD_PLATFORMS).default("meta"),
   start: z.string().refine(isValidDateKey, "Invalid start"),
   end: z.string().refine(isValidDateKey, "Invalid end"),
 });
@@ -93,6 +97,9 @@ export async function GET(
     return NextResponse.json({ error: "Invalid range" }, { status: 400 });
   }
   const { platform, start, end } = parsed.data;
+  // The sections and headline numbers the report page is showing; absent or
+  // unreadable means the standard report, exactly as before.
+  const view = decodeView(sp.get("v"));
 
   const gate = rateLimit(`pdf:${client.id}`, PDF_LIMIT, PDF_WINDOW_MS);
   if (!gate.ok) {
@@ -127,6 +134,7 @@ export async function GET(
      * choose between `ReportDocument` and a single-dataset page.
      */
     dataset: "report",
+    view: view && !isDefaultView(view) ? encodeView(view) : "",
   });
 
   let bytes: Uint8Array;

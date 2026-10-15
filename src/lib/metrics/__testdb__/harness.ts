@@ -312,6 +312,7 @@ CREATE TABLE share_links (
   range_start date NOT NULL,
   range_end date NOT NULL,
   platform text NOT NULL DEFAULT 'meta',
+  view jsonb,
   password_hash text,
   expires_at timestamptz NOT NULL,
   revoked_at timestamptz,

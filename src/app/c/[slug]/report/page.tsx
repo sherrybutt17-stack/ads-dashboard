@@ -16,6 +16,7 @@ import { PrintButton } from "@/components/report/PrintButton";
 import { DownloadPdfButton } from "@/components/report/DownloadPdfButton";
 import { isPdfConfigured } from "@/lib/report/pdf";
 import { Icon } from "@/components/Icon";
+import { DEFAULT_VIEW, decodeView, encodeView, isDefaultView } from "@/lib/report/view";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,10 @@ export default async function ReportPage({
   if (!canAccessSlug(await getSessionUser(), slug)) redirect("/");
 
   const platform: AdPlatform = parseAdPlatform(sp.platform);
+  // A selection from the Share or Export picker's "Preview"; the standard
+  // report otherwise.
+  const view = decodeView(sp.v) ?? DEFAULT_VIEW;
+  const viewParam = isDefaultView(view) ? undefined : encodeView(view);
 
   // Same validation as the dashboard: the range arrives from a URL, so junk
   // must be rejected before it reaches date maths or SQL.
@@ -73,7 +78,7 @@ export default async function ReportPage({
       })();
 
   const [data, branding, agency] = await Promise.all([
-    loadDashboard(client, range, platform),
+    loadDashboard(client, { ...range, sections: new Set(view.sections) }, platform),
     getClientBranding(client.id),
     // Branding follows the client's OWNER, not the viewer: a report is signed
     // by the agency whose client it is, wherever it is being read from.
@@ -102,6 +107,7 @@ export default async function ReportPage({
       platform={platform}
       rangeStart={range.startKey}
       rangeEnd={range.endKey}
+      view={view}
       toolbar={
         <div
           className="no-print mx-auto flex flex-wrap items-center justify-between gap-3 px-4 pt-6"
@@ -130,6 +136,7 @@ export default async function ReportPage({
                 start={range.startKey}
                 end={range.endKey}
                 platform={platform}
+                view={viewParam}
               />
             )}
             <PrintButton />

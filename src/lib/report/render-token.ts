@@ -47,7 +47,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const TTL_SECONDS = 90;
 /*
- * 🔴 Bumped to v2 when `dataset` joined the claims.
+ * 🔴 Bumped to v2 when `dataset` joined the claims, and to v3 for `view`.
  *
  * The label is mixed into the signing key, so a v1 token cannot validate here
  * however the parser is later loosened — the key it was signed with no longer
@@ -55,7 +55,7 @@ const TTL_SECONDS = 90;
  * survives a deploy by more than ninety seconds, so the worst case is one
  * failed render and a retry.
  */
-const LABEL = "report-render-token/v2";
+const LABEL = "report-render-token/v3";
 
 export interface RenderClaims {
   clientId: string;
@@ -78,6 +78,13 @@ export interface RenderClaims {
    * render page validates the value with `isDatasetId` before using it.
    */
   dataset: string;
+  /**
+   * For the report: which sections and headline numbers, as `encodeView`
+   * writes them. Empty means the standard report. Inside the signature for the
+   * same reason as `dataset` — a token minted for the standard report must not
+   * render any other selection, lead lists included, for its ninety seconds.
+   */
+  view: string;
 }
 
 function signingKey(): Buffer {
@@ -107,6 +114,7 @@ function canonical(claims: RenderClaims, exp: number): string {
     claims.end,
     claims.platform,
     claims.dataset,
+    claims.view,
     exp,
   ].join("\n");
 }
@@ -158,9 +166,9 @@ export function verifyRenderToken(
   }
 
   const parts = body.split("\n");
-  // Six since v2. A five-part body is a v1 token and is not accepted.
-  if (parts.length !== 6) return { ok: false, reason: "malformed" };
-  const [clientId, start, end, platform, dataset, expRaw] = parts;
+  // Seven since v3 (six in v2, five in v1); older shapes are not accepted.
+  if (parts.length !== 7) return { ok: false, reason: "malformed" };
+  const [clientId, start, end, platform, dataset, view, expRaw] = parts;
 
   const exp = Number(expRaw);
   if (!Number.isFinite(exp)) return { ok: false, reason: "malformed" };
@@ -174,7 +182,7 @@ export function verifyRenderToken(
   if (!clientId || !start || !end || !platform || !dataset) {
     return { ok: false, reason: "malformed" };
   }
-  return { ok: true, claims: { clientId, start, end, platform, dataset } };
+  return { ok: true, claims: { clientId, start, end, platform, dataset, view } };
 }
 
 export const RENDER_TOKEN_TTL_SECONDS = TTL_SECONDS;

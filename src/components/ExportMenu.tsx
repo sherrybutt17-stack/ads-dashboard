@@ -56,6 +56,7 @@ export function ExportMenu({
       platforms={platforms.length > 0 ? platforms : [platform]}
       datasets={datasets}
       pdfEnabled={isPdfConfigured()}
+      staff={staff}
     />
   );
 }

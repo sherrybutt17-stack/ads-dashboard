@@ -5,14 +5,27 @@ import { getClientForSession } from "@/lib/clients";
 import { record, requestContext } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 import { loadDashboard, loadDeferredTables } from "@/lib/metrics/dashboard";
-import { buildCsv, exportFilename, type CsvTable } from "@/lib/export/csv";
+import {
+  buildCsv,
+  buildCsvSections,
+  exportFilename,
+  type CsvTable,
+} from "@/lib/export/csv";
 import { buildXlsx } from "@/lib/export/xlsx";
 import { formatMeta, isExportFormat } from "@/lib/export/formats";
 import { isPdfConfigured, renderPdf, PdfRenderError } from "@/lib/report/pdf";
 import { mintRenderToken } from "@/lib/report/render-token";
 import { appBaseUrl } from "@/lib/app-url";
 import { AD_PLATFORMS } from "@/lib/platforms";
-import { isValidDateKey } from "@/lib/dates";
+import { isValidDateKey, trailingWindow } from "@/lib/dates";
+import { buildDashboardSheets } from "@/lib/export/dashboard-tables";
+import {
+  DEFAULT_VIEW,
+  decodeView,
+  encodeView,
+  isDefaultView,
+  viewHasPersonal,
+} from "@/lib/report/view";
 import {
   DATASETS,
   DATASET_BUILDERS,
@@ -55,8 +68,19 @@ export const runtime = "nodejs";
  * and reconciles against nothing.
  */
 
+/**
+ * The whole dashboard — or the sections and headline numbers chosen for it —
+ * rather than one table. Not a `DatasetId`: it is many tables (one sheet each
+ * in Excel), or the report document itself as a PDF.
+ */
+const DASHBOARD = "dashboard";
+
 const QuerySchema = z.object({
-  dataset: z.string().refine(isDatasetId, "Unknown dataset"),
+  dataset: z
+    .string()
+    .refine((v) => v === DASHBOARD || isDatasetId(v), "Unknown dataset"),
+  /** For `dashboard`: the selection, as `encodeView` writes it. */
+  view: z.string().max(2000).optional(),
   /*
    * Defaulted, so every link that predates formats keeps working untouched.
    * The menu has always linked without a `format`, and those URLs live on in
@@ -126,11 +150,17 @@ export async function GET(
     platform: sp.get("platform") ?? "meta",
     start: sp.get("start") ?? undefined,
     end: sp.get("end") ?? undefined,
+    view: sp.get("v") ?? undefined,
   });
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid export request" }, { status: 400 });
   }
   const { dataset, format, platform, start, end } = parsed.data;
+  const isDashboard = dataset === DASHBOARD;
+  const view = isDashboard ? (decodeView(parsed.data.view) ?? DEFAULT_VIEW) : null;
+  const personal = view
+    ? viewHasPersonal(view)
+    : DATASETS.find((d) => d.id === dataset)?.personal === true;
 
   /*
    * 🔴 The lead list does not leave with a client-role user.
@@ -143,10 +173,7 @@ export async function GET(
    *
    * The menu filters these out, so reaching this line means a hand-typed URL.
    */
-  if (
-    DATASETS.find((d) => d.id === dataset)?.personal &&
-    !isAgencyOperator(session)
-  ) {
+  if (personal && !isAgencyOperator(session)) {
     return NextResponse.json(
       {
         error:
@@ -237,75 +264,33 @@ export async function GET(
   let truncated = false;
 
   try {
-    const builder = DATASET_BUILDERS[dataset];
-    let table: CsvTable;
-
-    if (builder.source === "deferred") {
+    if (view) {
       /*
-       * The one shape that does not read the date range. `monthOnMonth` is a
-       * fixed trailing 12 months by design — the same reason the table on the
-       * page carries a "Fixed trailing windows" label — so the bounds come from
-       * the rows themselves rather than from the range the operator happened to
-       * have selected.
+       * The dashboard export. Spreadsheets get one table per chosen section
+       * from the same data the dashboard renders; a PDF is the report document
+       * itself, drawn by the renderer from a token that signs the selection.
        */
-      const tables = await loadDeferredTables(client, platform);
-      table = builder.build(tables);
-      [rangeStart, rangeEnd] = builder.range(tables);
-    } else {
-      const data = await loadDashboard(
-        client,
-        start && end ? { startKey: start, endKey: end } : {},
-        platform,
-      );
-      rangeStart = data.range.startKey;
-      rangeEnd = data.range.endKey;
-      table = builder.build(data);
-    }
-
-    rows = table.rows.length;
-    /*
-     * 🔴 The source query has a ceiling and used to hit it in silence — the
-     * file simply ended. A client reconciling a busy month against their CRM
-     * then finds a shortfall with nothing on the page or in the file to explain
-     * it. Equality rather than `>=` because the cap IS the limit: more rows
-     * than the cap cannot come back.
-     */
-    const cap = DATASET_ROW_CAP[dataset];
-    truncated = cap !== undefined && rows === cap;
-
-    switch (format) {
-      case "xlsx": {
-        const label = DATASETS.find((d) => d.id === dataset)?.label ?? dataset;
-        const bytes = await buildXlsx([{ name: label, table }]);
-        body = bytes.buffer.slice(
-          bytes.byteOffset,
-          bytes.byteOffset + bytes.byteLength,
-        ) as ArrayBuffer;
-        break;
-      }
-      case "pdf": {
-        // Preconditions and the PDF budget were settled before any data load.
-        const base = renderBase!;
-        /*
-         * Minted immediately before the fetch, so the 90-second token TTL has
-         * ~45 seconds of headroom over the abort below rather than being spent
-         * on the queries above.
-         */
+      if (format === "pdf") {
+        const window =
+          start && end
+            ? { startKey: start, endKey: end }
+            : trailingWindow(30, client.timezone);
+        rangeStart = window.startKey;
+        rangeEnd = window.endKey;
+        rows = 0;
         const renderToken = mintRenderToken({
           clientId: client.id,
           start: rangeStart,
           end: rangeEnd,
           platform,
-          dataset,
+          dataset: "report",
+          view: isDefaultView(view) ? "" : encodeView(view),
         });
-
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), PDF_TIMEOUT_MS);
         try {
-          const bytes = await renderPdf(`${base}/render/${renderToken}`, {
+          const bytes = await renderPdf(`${renderBase!}/render/${renderToken}`, {
             signal: controller.signal,
-            /* Dataset tables are wide — `daily` alone is nineteen columns. */
-            landscape: true,
           });
           body = bytes.buffer.slice(
             bytes.byteOffset,
@@ -314,10 +299,121 @@ export async function GET(
         } finally {
           clearTimeout(timer);
         }
-        break;
+      } else {
+        const [data, deferred] = await Promise.all([
+          loadDashboard(
+            client,
+            {
+              ...(start && end ? { startKey: start, endKey: end } : {}),
+              sections: new Set(view.sections),
+            },
+            platform,
+          ),
+          view.sections.includes("report_tables")
+            ? loadDeferredTables(client, platform)
+            : Promise.resolve(null),
+        ]);
+        rangeStart = data.range.startKey;
+        rangeEnd = data.range.endKey;
+        const sheets = buildDashboardSheets({ data, deferred, view, platform });
+        rows = sheets.reduce((n, sh) => n + sh.table.rows.length, 0);
+        truncated =
+          view.sections.includes("pipeline") &&
+          data.leads.length === DATASET_ROW_CAP.leads;
+        if (format === "xlsx") {
+          const bytes = await buildXlsx(sheets);
+          body = bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ) as ArrayBuffer;
+        } else {
+          body = buildCsvSections(sheets);
+        }
       }
-      default:
-        body = buildCsv(table);
+    } else {
+      const builder = DATASET_BUILDERS[dataset as keyof typeof DATASET_BUILDERS];
+      let table: CsvTable;
+
+      if (builder.source === "deferred") {
+        /*
+         * The one shape that does not read the date range. `monthOnMonth` is a
+         * fixed trailing 12 months by design — the same reason the table on the
+         * page carries a "Fixed trailing windows" label — so the bounds come from
+         * the rows themselves rather than from the range the operator happened to
+         * have selected.
+         */
+        const tables = await loadDeferredTables(client, platform);
+        table = builder.build(tables);
+        [rangeStart, rangeEnd] = builder.range(tables);
+      } else {
+        const data = await loadDashboard(
+          client,
+          start && end ? { startKey: start, endKey: end } : {},
+          platform,
+        );
+        rangeStart = data.range.startKey;
+        rangeEnd = data.range.endKey;
+        table = builder.build(data);
+      }
+
+      rows = table.rows.length;
+      /*
+       * 🔴 The source query has a ceiling and used to hit it in silence — the
+       * file simply ended. A client reconciling a busy month against their CRM
+       * then finds a shortfall with nothing on the page or in the file to explain
+       * it. Equality rather than `>=` because the cap IS the limit: more rows
+       * than the cap cannot come back.
+       */
+      const cap = DATASET_ROW_CAP[dataset as keyof typeof DATASET_BUILDERS];
+      truncated = cap !== undefined && rows === cap;
+
+      switch (format) {
+        case "xlsx": {
+          const label = DATASETS.find((d) => d.id === dataset)?.label ?? dataset;
+          const bytes = await buildXlsx([{ name: label, table }]);
+          body = bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ) as ArrayBuffer;
+          break;
+        }
+        case "pdf": {
+          // Preconditions and the PDF budget were settled before any data load.
+          const base = renderBase!;
+          /*
+           * Minted immediately before the fetch, so the 90-second token TTL has
+           * ~45 seconds of headroom over the abort below rather than being spent
+           * on the queries above.
+           */
+          const renderToken = mintRenderToken({
+            clientId: client.id,
+            start: rangeStart,
+            end: rangeEnd,
+            platform,
+            dataset,
+            view: "",
+          });
+
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), PDF_TIMEOUT_MS);
+          try {
+            const bytes = await renderPdf(`${base}/render/${renderToken}`, {
+              signal: controller.signal,
+              /* Dataset tables are wide — `daily` alone is nineteen columns. */
+              landscape: true,
+            });
+            body = bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength,
+            ) as ArrayBuffer;
+          } finally {
+            clearTimeout(timer);
+          }
+          break;
+        }
+        default:
+          body = buildCsv(table);
+      }
     }
   } catch (err) {
     console.error("[export] failed:", err);
@@ -369,7 +465,10 @@ export async function GET(
        * Recorded because the leads dataset carries names, and "who took a copy
        * of the lead list, when" is the question an audit log exists to answer.
        */
-      personal: DATASETS.find((d) => d.id === dataset)?.personal === true,
+      personal,
+      // Which sections a dashboard export carried, so "what did they take
+      // away" is answerable later. Null for single-table exports.
+      sections: view?.sections ?? null,
       format,
       /** Recorded so "their copy was short" is answerable after the fact. */
       truncated,

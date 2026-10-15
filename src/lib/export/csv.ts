@@ -137,6 +137,22 @@ export function buildCsv(table: CsvTable): string {
 }
 
 /**
+ * Several tables in one CSV: each under its own title line, separated by a
+ * blank line. CSV has no sheets, and this is the shape every spreadsheet opens
+ * cleanly — one file per table would hand the reader a zip to unpack instead.
+ */
+export function buildCsvSections(
+  sections: ReadonlyArray<{ name: string; table: CsvTable }>,
+): string {
+  return (
+    BOM +
+    sections
+      .map((s) => escapeText(s.name) + CRLF + buildCsv(s.table).slice(BOM.length))
+      .join(CRLF)
+  );
+}
+
+/**
  * A filename a human can find again in six months.
  *
  * `parfaire-daily-2026-07-01_2026-07-31.csv`. Slugified hard, because this

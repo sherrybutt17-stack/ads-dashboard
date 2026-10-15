@@ -14,6 +14,7 @@ import {
   isDatasetId,
 } from "@/lib/export/datasets";
 import { verifyRenderToken } from "@/lib/report/render-token";
+import { DEFAULT_VIEW, decodeView } from "@/lib/report/view";
 import { parseAdPlatform } from "@/lib/platforms";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,7 @@ export default async function RenderReportPage({
     end,
     platform: rawPlatform,
     dataset,
+    view: rawView,
   } = verified.claims;
 
   /*
@@ -136,8 +138,14 @@ export default async function RenderReportPage({
     );
   }
 
+  // Signed into the token with everything else; empty is the standard report.
+  const view = decodeView(rawView) ?? DEFAULT_VIEW;
   const [data, branding, agency] = await Promise.all([
-    loadDashboard(client, { startKey: start, endKey: end }, platform),
+    loadDashboard(
+      client,
+      { startKey: start, endKey: end, sections: new Set(view.sections) },
+      platform,
+    ),
     getClientBranding(client.id),
     // Branding follows the client's OWNER, not the viewer: a report is signed
     // by the agency whose client it is, wherever it is being read from.
@@ -153,6 +161,7 @@ export default async function RenderReportPage({
       platform={platform}
       rangeStart={start}
       rangeEnd={end}
+      view={view}
     />
   );
 }
