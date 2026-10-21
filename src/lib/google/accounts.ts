@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { clients, googleAdAccounts, type GoogleAdAccount } from "@/db/schema";
 import { encrypt, decryptNullable } from "@/lib/crypto";
@@ -125,6 +125,10 @@ export async function addGoogleAccount(
    * rejection confirms another tenant holds it). Within one agency the check is
    * still worth making — the same account on two clients double-counts its
    * spend in that agency's roll-up.
+   *
+   * A removed (archived) client holds nothing, for the reason given on the Meta
+   * check: the roll-up and the crons already leave it out, and otherwise a test
+   * client keeps a real account from its real client forever.
    */
   const agencyId = await agencyIdForClient(clientId);
   if (!agencyId) throw new Error("Unknown client");
@@ -137,12 +141,13 @@ export async function addGoogleAccount(
       and(
         eq(googleAdAccounts.customerId, customerId),
         eq(clients.agencyId, agencyId),
+        ne(clients.status, "archived"),
       ),
     )
     .limit(1);
   if (clash && clash.clientId !== clientId) {
     throw new Error(
-      `That Google Ads account is already attached to ${clash.name}. An account can only belong to one client (otherwise its spend would be double-counted).`,
+      `That Google Ads account is already attached to ${clash.name}. An account can only belong to one client (otherwise its spend would be double-counted). If ${clash.name} was only a test, remove that client first (its Connections page → Remove client), then add the account here.`,
     );
   }
 

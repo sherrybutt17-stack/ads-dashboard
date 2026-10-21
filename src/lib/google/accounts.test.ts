@@ -182,6 +182,35 @@ describe("addGoogleAccount — clash detection", () => {
     expect(accounts).toHaveLength(1);
     expect(accounts[0].timezone).toBe("America/Denver");
   });
+
+  it("still refuses an account removed from a live sibling, and says how to release it", async () => {
+    await mod.addGoogleAccount(CLIENT_A1, "1234567890");
+    const [row] = (await run(
+      `SELECT id::text AS id FROM google_ad_accounts WHERE client_id = '${CLIENT_A1}'`,
+    )).rows;
+    await mod.removeGoogleAccount(CLIENT_A1, row.id as string);
+
+    // The history pulled under it is still reported by that client.
+    await expect(mod.addGoogleAccount(CLIENT_A2, "1234567890")).rejects.toThrow(
+      /already attached to acme\b.*remove that client first/i,
+    );
+  });
+
+  it("🔴 releases the accounts of a removed (archived) client", async () => {
+    await mod.addGoogleAccount(CLIENT_A1, "1234567890");
+    // What removing a client leaves behind (`client-removal.ts`).
+    await run(`UPDATE clients SET status = 'archived' WHERE id = '${CLIENT_A1}'`);
+    await run(
+      `UPDATE google_ad_accounts SET status = 'removed', refresh_token_encrypted = NULL
+        WHERE client_id = '${CLIENT_A1}'`,
+    );
+
+    await mod.addGoogleAccount(CLIENT_A2, "1234567890");
+
+    expect(await mod.activeGoogleAccounts(CLIENT_A2)).toHaveLength(1);
+    const [old] = await mod.listGoogleAccounts(CLIENT_A1, { includeRemoved: true });
+    expect(old.status).toBe("removed");
+  });
 });
 
 describe("addGoogleAccount — display currency", () => {

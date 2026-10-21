@@ -248,6 +248,36 @@ describe("addAdAccount — clash detection", () => {
       /already attached/i,
     );
   });
+
+  it("tells the operator how to release an account a live client holds", async () => {
+    await mod.addAdAccount(CLIENT_A1, "123456");
+
+    await expect(mod.addAdAccount(CLIENT_A2, "123456")).rejects.toThrow(
+      /remove that client first/i,
+    );
+  });
+
+  it("🔴 releases the accounts of a removed (archived) client", async () => {
+    await mod.addAdAccount(CLIENT_A1, "123456");
+    // What removing a client leaves behind (`client-removal.ts`): the client
+    // archived, its accounts soft-removed with their tokens cleared.
+    await run(`UPDATE clients SET status = 'archived' WHERE id = '${CLIENT_A1}'`);
+    await run(
+      `UPDATE meta_ad_accounts SET status = 'removed', token_encrypted = NULL
+        WHERE client_id = '${CLIENT_A1}'`,
+    );
+
+    // The roll-up leaves archived clients out, so there is nothing to
+    // double-count — and a test client must not keep a real account from the
+    // client it belongs to.
+    const res = await mod.addAdAccount(CLIENT_A2, "123456");
+
+    expect(res.account.status).toBe("active");
+    expect(await accountsFor(CLIENT_A2)).toHaveLength(1);
+    // The archived client's row is left as it was, so its history keeps its owner.
+    const [old] = await accountsFor(CLIENT_A1);
+    expect(old.status).toBe("removed");
+  });
 });
 
 /* ------------------------------------------------------------------ *

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { clients, metaAdAccounts, type MetaAdAccount } from "@/db/schema";
 import { encrypt, decryptNullable } from "@/lib/crypto";
@@ -98,6 +98,14 @@ export async function addAdAccount(
    * of an agency's clients double-counts its spend in their roll-up, and a
    * named message is far better than a raw constraint violation. Across
    * agencies there is nothing to say and nothing worth confirming.
+   *
+   * 🔴 Except a client that has been removed (archived). The roll-up already
+   * leaves archived clients out (`src/app/page.tsx`) and the crons stop syncing
+   * them, so the history kept under one is never summed — there is nothing to
+   * double-count. Holding its accounts anyway made a test client a permanent
+   * squat: attach a real account to a test client once, even remove it or the
+   * whole client afterwards, and the real client could never have it without
+   * a database edit. Removing the old client is now the way to release them.
    */
   const agencyId = await agencyIdForClient(clientId);
   if (!agencyId) throw new Error("Unknown client");
@@ -110,12 +118,13 @@ export async function addAdAccount(
       and(
         eq(metaAdAccounts.adAccountId, adAccountId),
         eq(clients.agencyId, agencyId),
+        ne(clients.status, "archived"),
       ),
     )
     .limit(1);
   if (clash && clash.clientId !== clientId) {
     throw new Error(
-      `That ad account is already attached to ${clash.name}. An ad account can only belong to one client (otherwise its spend would be double-counted).`,
+      `That ad account is already attached to ${clash.name}. An ad account can only belong to one client (otherwise its spend would be double-counted). If ${clash.name} was only a test, remove that client first (its Connections page → Remove client), then add the account here.`,
     );
   }
 
