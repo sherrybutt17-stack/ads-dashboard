@@ -109,6 +109,12 @@ export async function exchangeCode(
     client_secret: process.env.GHL_CLIENT_SECRET!,
     grant_type: "authorization_code",
     code,
+    /*
+     * 🔴 Without this GHL answers with a Company token — no locationId — even
+     * for a single sub-account install (`installType: "Location"` on the
+     * INSTALL webhook). Every install hit the agency-level refusal below.
+     */
+    user_type: "Location",
     redirect_uri: redirectUri(),
   });
 
@@ -215,6 +221,9 @@ export async function getValidAccessToken(
     client_secret: process.env.GHL_CLIENT_SECRET!,
     grant_type: "refresh_token",
     refresh_token: decrypt(installation.refreshTokenEncrypted),
+    // Same as the exchange: a refresh must not trade a location token for a
+    // Company one that the location-scoped reads cannot use.
+    user_type: "Location",
   });
 
   const expiresAt = new Date(Date.now() + (token.expires_in - 60) * 1000);

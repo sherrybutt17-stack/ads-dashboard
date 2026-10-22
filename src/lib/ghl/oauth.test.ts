@@ -298,6 +298,17 @@ describe("exchangeCode", () => {
     expect(decrypt(stored!.refresh_token_encrypted as string)).toBe("refresh-1");
   });
 
+  it("🔴 asks for a Location token, not GHL's Company default", async () => {
+    const fetchMock = mockToken(token());
+
+    await mod.exchangeCode("code-1", null);
+
+    const body = new URLSearchParams(
+      (fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body,
+    );
+    expect(body.get("user_type")).toBe("Location");
+  });
+
   it("rejects an agency-level install that carries no locationId", async () => {
     mockToken(token({ locationId: undefined }));
 
@@ -424,6 +435,28 @@ describe("getValidAccessToken", () => {
     const stored = await installRow();
     expect(decrypt(stored!.access_token_encrypted as string)).toBe("access-2");
     expect(decrypt(stored!.refresh_token_encrypted as string)).toBe("refresh-2");
+  });
+
+  it("🔴 refreshes as a Location token", async () => {
+    const { encrypt } = await import("@/lib/crypto");
+    await seedInstall({ clientId: CLIENT_A1 });
+    const fetchMock = mockToken({
+      access_token: "access-2",
+      refresh_token: "refresh-2",
+      expires_in: 86400,
+    });
+
+    await mod.getValidAccessToken({
+      id: INSTALL,
+      accessTokenEncrypted: encrypt("expired"),
+      refreshTokenEncrypted: encrypt("refresh-1"),
+      expiresAt: new Date(Date.now() - 60_000),
+    } as never);
+
+    const body = new URLSearchParams(
+      (fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body,
+    );
+    expect(body.get("user_type")).toBe("Location");
   });
 });
 
