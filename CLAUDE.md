@@ -1,4 +1,4 @@
-# Facebook Ads + GHL Live KPI Dashboard
+# Facebook Ads + GHL Live KPI Dashboardd
 
 > **Status: built, not yet connected.** All code is written and verified
 > (typecheck, lint, production build, 33 tests). Nothing runs until credentials
