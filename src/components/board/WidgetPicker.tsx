@@ -34,6 +34,7 @@ import { boxHeightPx } from "@/lib/board/grid";
 import { encodeWidgetQuery, widgetQueryKey } from "@/lib/board/query";
 import type { BoardWidget, WidgetData, WidgetQuery } from "@/lib/board/types";
 import { PLATFORM_LABEL, type AdPlatform } from "@/lib/platforms";
+import { resultTypeChoices } from "@/lib/metrics/results";
 import { BoardWidget as WidgetCard } from "./BoardWidget";
 
 export interface PickerResult {
@@ -60,6 +61,8 @@ interface Draft {
   text: string;
   textSize: "heading" | "body";
   title: string;
+  /** A pinned result type; "" counts the range's main type. */
+  resultType: string;
 }
 
 const BLANK: Omit<Draft, "platform"> = {
@@ -75,6 +78,7 @@ const BLANK: Omit<Draft, "platform"> = {
   text: "",
   textSize: "heading",
   title: "",
+  resultType: "",
 };
 
 const LOADING: WidgetData = { kind: "pending", reason: "load" };
@@ -93,13 +97,20 @@ function draftFrom(q: WidgetQuery, title: string | undefined, platform: AdPlatfo
   };
   switch (q.kind) {
     case "kpi":
-      return { ...d, metric: q.metric };
+      return { ...d, metric: q.metric, resultType: q.resultType ?? "" };
     case "series":
-      return { ...d, metric: q.metric, compare: q.compare };
+      return { ...d, metric: q.metric, compare: q.compare, resultType: q.resultType ?? "" };
     case "category":
-      return { ...d, metric: q.metric, dimension: q.dimension, topN: q.topN };
+      return { ...d, metric: q.metric, dimension: q.dimension, topN: q.topN, resultType: q.resultType ?? "" };
     case "table":
-      return { ...d, tableDimension: q.dimension, columns: [...q.metrics], sort: q.sort, rows: q.topN };
+      return {
+        ...d,
+        tableDimension: q.dimension,
+        columns: [...q.metrics],
+        sort: q.sort,
+        rows: q.topN,
+        resultType: q.resultType ?? "",
+      };
     case "text":
       return { ...d, text: q.text, textSize: q.size };
     default:
@@ -109,11 +120,20 @@ function draftFrom(q: WidgetQuery, title: string | undefined, platform: AdPlatfo
 
 function queryOf(d: Draft): WidgetQuery {
   const v = VISUALS.find((x) => x.id === d.visual) ?? VISUALS[0];
+  // Only a results widget carries a pinned type; "" means the main type.
+  const pin = d.resultType ? { resultType: d.resultType } : {};
   switch (v.kind) {
     case "kpi":
-      return { kind: "kpi", platform: d.platform, metric: d.metric };
+      return { kind: "kpi", platform: d.platform, metric: d.metric, ...pin };
     case "series":
-      return { kind: "series", platform: d.platform, metric: d.metric, form: v.form as SeriesForm, compare: d.compare };
+      return {
+        kind: "series",
+        platform: d.platform,
+        metric: d.metric,
+        form: v.form as SeriesForm,
+        compare: d.compare,
+        ...pin,
+      };
     case "category":
       return {
         kind: "category",
@@ -122,6 +142,7 @@ function queryOf(d: Draft): WidgetQuery {
         dimension: d.dimension,
         form: v.form as CategoryForm,
         topN: d.topN,
+        ...pin,
       };
     case "table":
       return {
@@ -131,6 +152,7 @@ function queryOf(d: Draft): WidgetQuery {
         metrics: d.columns,
         sort: d.sort,
         topN: d.rows,
+        ...pin,
       };
     case "funnel":
       return { kind: "funnel", platform: d.platform };
@@ -201,7 +223,22 @@ function fixUp(d: Draft): Draft {
     if (!next.columns.includes(next.sort)) next.sort = next.columns[0] ?? "spend";
     next.rows = Math.min(TABLE_ROWS.max, Math.max(TABLE_ROWS.min, next.rows));
   }
+  // A pinned result type only on a results widget it can apply to.
+  if (!pinsResultType(next) || !resultTypeChoices(next.platform).some((c) => c.key === next.resultType)) {
+    next.resultType = "";
+  }
   return next;
+}
+
+/** Whether this draft counts results of one type — so a type can be pinned. */
+function pinsResultType(d: Draft): boolean {
+  const kind = VISUALS.find((x) => x.id === d.visual)?.kind;
+  if (d.platform === "google") return false;
+  const reads = (m: MetricId) => METRICS[m].needs.includes("results");
+  if (kind === "kpi" || kind === "series") return reads(d.metric);
+  if (kind === "category") return reads(d.metric) && d.dimension !== "result_type";
+  if (kind === "table") return d.tableDimension !== "result_type" && d.columns.some(reads);
+  return false;
 }
 
 /**
@@ -518,6 +555,24 @@ export function WidgetPicker({
 
                 {kind === "table" && (
                   <TableFields draft={draft} update={update} ids={ids} />
+                )}
+
+                {pinsResultType(draft) && (
+                  <Field label="Result type" htmlFor={`${ids}-rtype`}>
+                    <select
+                      id={`${ids}-rtype`}
+                      className="field w-full"
+                      value={draft.resultType}
+                      onChange={(e) => update({ resultType: e.target.value })}
+                    >
+                      <option value="">The kind most spend went to (automatic)</option>
+                      {resultTypeChoices(draft.platform).map((c) => (
+                        <option key={c.key} value={c.key}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
                 )}
 
                 {kind === "text" && (

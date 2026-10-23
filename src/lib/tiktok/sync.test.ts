@@ -36,6 +36,8 @@ vi.mock("@/db", () => ({
 
 let insightRows: unknown[] = [];
 let insightsError: Error | null = null;
+let adgroupRows: unknown[] = [];
+let adgroupError: Error | null = null;
 const calls: { advertiser: string; since: string; until: string }[] = [];
 
 vi.mock("./client", async (importOriginal) => {
@@ -49,6 +51,10 @@ vi.mock("./client", async (importOriginal) => {
         calls.push({ advertiser: advertiserId, since, until });
         if (insightsError) throw insightsError;
         return insightRows;
+      }
+      async getAdgroupResults() {
+        if (adgroupError) throw adgroupError;
+        return adgroupRows;
       }
     },
   };
@@ -144,6 +150,8 @@ beforeEach(async () => {
   calls.length = 0;
   insightRows = [insight()];
   insightsError = null;
+  adgroupRows = [];
+  adgroupError = null;
   await run(
     `TRUNCATE sync_runs, tiktok_daily_metrics, tiktok_ad_accounts, clients RESTART IDENTITY CASCADE`,
   );
@@ -380,6 +388,48 @@ describe("syncClientTiktokMetrics — rows", () => {
     await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
     expect((await run(`SELECT campaign_name FROM tiktok_daily_metrics`)).rows[0].campaign_name)
       .toBeNull();
+  });
+});
+
+describe("syncClientTiktokMetrics — results", () => {
+  const results = async () =>
+    (await run(`SELECT raw->'results' AS results FROM tiktok_daily_metrics`)).rows[0]?.results;
+  const adgroup = (campaign: string, day: string, result: number) => ({
+    campaignId: campaign,
+    statTimeDay: day,
+    result,
+    objective: "LEAD_GENERATION",
+  });
+
+  it("🔴 sums the ad group report onto its campaign-day — TikTok says 0 at campaign level", async () => {
+    adgroupRows = [
+      adgroup("tcamp_1", "2026-07-20 00:00:00", 30),
+      adgroup("tcamp_1", "2026-07-20", 18),
+      adgroup("tcamp_other", "2026-07-20 00:00:00", 99),
+      adgroup("tcamp_1", "2026-07-21 00:00:00", 7),
+    ];
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+    expect(await results()).toEqual({ value: 48, objective: "LEAD_GENERATION" });
+  });
+
+  it("records 0, not unknown, for a campaign-day with no ad group results", async () => {
+    insightRows = [{ ...insight(), metrics: { ...insight().metrics, objective_type: "TRAFFIC" } }];
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+    // The type survives from the campaign row's own objective.
+    expect(await results()).toEqual({ value: 0, objective: "TRAFFIC" });
+  });
+
+  it("🔴 a failed results report still writes spend, and keeps the results already stored", async () => {
+    adgroupRows = [adgroup("tcamp_1", "2026-07-20 00:00:00", 12)];
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+
+    adgroupError = new Error("ad group report unavailable");
+    insightRows = [insight({ spend: "200.00" })];
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+
+    const [row] = (await run(`SELECT spend FROM tiktok_daily_metrics`)).rows;
+    expect(Number(row.spend)).toBe(200);
+    expect(await results()).toEqual({ value: 12, objective: "LEAD_GENERATION" });
   });
 });
 

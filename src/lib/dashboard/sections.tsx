@@ -14,6 +14,7 @@ import {
   DASH,
 } from "@/lib/metrics/compute";
 import { StatTile } from "@/components/StatTile";
+import { formatResultCount } from "@/lib/metrics/results";
 import { Funnel } from "@/components/Funnel";
 import { MonthForecast } from "@/components/MonthForecast";
 import { DuplicateLeads } from "@/components/DuplicateLeads";
@@ -91,6 +92,12 @@ export interface SectionContext {
   adState: DataStateProps | null;
   /** Same, for the CRM side. Takes whether the calling panel is itself empty. */
   crmState: (emptyPanel: boolean) => DataStateProps | null;
+  /**
+   * Whether a CRM is wired up (`crmConnected`). Without one, the headline row
+   * leaves out the CRM tiles rather than printing zeros, and the platform's own
+   * results lead it.
+   */
+  hasCrm: boolean;
   sparkSpend: number[];
   sparkLeads: number[];
   sparkAppts: number[];
@@ -108,7 +115,7 @@ export interface SectionContext {
    */
   printWidth?: number;
   /**
-   * Which headline tiles to show. Undefined shows all eight — the dashboard
+   * Which headline tiles to show. Undefined shows all ten — the dashboard
    * itself never restricts them; a shared or exported document may.
    */
   kpis?: ReadonlySet<string>;
@@ -268,6 +275,24 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
 
     case "kpis": {
       const showKpi = (key: string) => !ctx.kpis || ctx.kpis.has(key);
+      // Zeros for leads, sales and revenue would say the ads produced nothing,
+      // when the truth is there is no CRM to count them.
+      const crmKpi = (key: string) => ctx.hasCrm && showKpi(key);
+      /*
+       * A report link that picked only CRM tiles, for a client without a CRM,
+       * would otherwise print an empty row: it gets the platform's results.
+       */
+      const onlyCrmPicked =
+        !ctx.hasCrm && ctx.kpis !== undefined && !["spend", "results", "cpResult"].some((k) => ctx.kpis!.has(k));
+      const resultKpi = (key: "results" | "cpResult") => showKpi(key) || onlyCrmPicked;
+      const results = data.results;
+      const resultsFootnote = !results.type
+        ? results.notCollected
+          ? "Not collected for these dates yet"
+          : "No results in this range"
+        : platform === "google"
+          ? "Conversions, as Google Ads counts them"
+          : [results.type.label, results.othersNote].filter(Boolean).join(" · ");
       return (
         <>
       {/* Headline KPIs */}
@@ -298,7 +323,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
             spark={sparkSpend}
           />
         )}
-        {showKpi("new_lead") && (
+        {crmKpi("new_lead") && (
           <StatTile
             label="New leads"
             value={formatNumber(current.funnel.new_lead)}
@@ -311,7 +336,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
             emphasis
           />
         )}
-        {showKpi("cpLead") && (
+        {crmKpi("cpLead") && (
           <StatTile
             label="Cost per lead"
             value={formatCurrency(current.derived.cpLead, currency)}
@@ -343,7 +368,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
             }
           />
         )}
-        {showKpi("appointment_booked") && (
+        {crmKpi("appointment_booked") && (
           <StatTile
             label="Appointments"
             value={formatNumber(current.funnel.appointment_booked)}
@@ -367,7 +392,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
             }
           />
         )}
-        {showKpi("showed") && (
+        {crmKpi("showed") && (
           <StatTile
             label="Showed"
             value={formatNumber(current.funnel.showed)}
@@ -384,7 +409,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
             }
           />
         )}
-        {showKpi("closed_won") && (
+        {crmKpi("closed_won") && (
           <StatTile
             label="Closed / won"
             value={formatNumber(current.funnel.closed_won)}
@@ -407,7 +432,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
          * is that nobody filled the field. Same failure shape as the source
          * sheet's $0.00 cost-per-lead. Show a dash and name the reason.
          */}
-        {showKpi("revenue") && (
+        {crmKpi("revenue") && (
           <StatTile
             label="Revenue"
             value={
@@ -424,7 +449,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
             footnote={revenueFootnote}
           />
         )}
-        {showKpi("roas") && (
+        {crmKpi("roas") && (
           <StatTile
             label="ROAS"
             value={formatMultiple(current.derived.roas)}
@@ -442,7 +467,49 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
             }
           />
         )}
+        {/*
+         * The platform's own pair goes last: four across, the eight CRM tiles
+         * keep the two rows people know and the pair shares a row of its own.
+         * Without a CRM it follows spend directly.
+         */}
+        {resultKpi("results") && (
+          <StatTile
+            label="Results"
+            value={results.type ? formatResultCount(results.count, results.type) : DASH}
+            numeric={results.type ? results.count : null}
+            // A fractional count (Google) prints as text, not counted up: counting
+            // up would round it. A null `numeric` would hide its delta and trend.
+            format={results.type && !Number.isInteger(results.count) ? undefined : "number"}
+            metricKey="results"
+            basis={basis}
+            change={results.type ? deltas.results : null}
+            spark={results.type ? results.spark : undefined}
+            footnote={resultsFootnote}
+          />
+        )}
+        {resultKpi("cpResult") && (
+          <StatTile
+            label="Cost per result"
+            value={formatCurrency(results.costPer, currency)}
+            numeric={results.costPer}
+            format="currency"
+            currency={currency}
+            metricKey="cpResult"
+            basis={basis}
+            change={results.type ? deltas.cpResult : null}
+            footnote={
+              results.mixedSpend > 0
+                ? `${formatCurrency(results.mixedSpend, currency)} on mixed campaigns not included`
+                : (results.type?.label ?? undefined)
+            }
+          />
+        )}
       </section>
+      {!ctx.hasCrm && staff && (
+        <p className="mt-2.5 text-xs" style={{ color: "var(--text-muted)" }}>
+          Appointments, sales and revenue need GoHighLevel. Connect it on the Connections page.
+        </p>
+      )}
         </>
       );
     }
@@ -525,6 +592,7 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
           no_show: current.funnel.no_show,
           lost: current.funnel.lost,
         }}
+        noCrm={!ctx.hasCrm}
       />
         </>
       );

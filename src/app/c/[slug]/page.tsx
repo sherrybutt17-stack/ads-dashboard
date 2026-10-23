@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { after } from "next/server";
-import { getClientForSession } from "@/lib/clients";
+import { getClientForSession, crmConnected } from "@/lib/clients";
 import { getSessionUser, canAccessSlug, isAgencyOperator } from "@/lib/auth";
 import { loadDashboard } from "@/lib/metrics/dashboard";
 import { refreshIfStale } from "@/lib/meta/sync";
@@ -437,6 +437,7 @@ export default async function ClientDashboard({
     campaignNames,
     adState,
     crmState,
+    hasCrm: crmConnected(client),
     sparkSpend,
     sparkLeads,
     sparkAppts,
@@ -766,7 +767,9 @@ export default async function ClientDashboard({
           {staff && !data.client.firstWebhookAt && (
             <NoWebhookBanner slug={slug} />
           )}
-          {staff && data.attributionGap && (
+          {/* Without a CRM there are no leads to qualify, and the banner above
+              already names what is missing; this one would blame the ads. */}
+          {staff && data.attributionGap && sectionCtx.hasCrm && (
             <AttributionBanner slug={slug} platform={platform} />
           )}
           {/* Not staff-gated: a client looking at their own dormant account

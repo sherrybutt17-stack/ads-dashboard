@@ -30,9 +30,19 @@ import {
   getMetaCampaignExtras,
   getMetaCoverage,
   getPeriodReachRow,
+  getPlatformResults,
   type MetaAdLevelRow,
   type MetaExtrasRow,
+  type PlatformResultsRow,
+  type ResultsBy,
 } from "@/lib/metrics/board-queries";
+import {
+  othersFootnote,
+  resultTypeFromKey,
+  resultsHeadline,
+  type ResultType,
+  type ResultsHeadline,
+} from "@/lib/metrics/results";
 import { platformCurrency } from "@/lib/metrics/currency";
 import {
   DIMENSIONS,
@@ -119,6 +129,42 @@ interface Row {
   sub?: string;
   bag: Bag;
   tone?: CategoryRow["tone"];
+  /** The result type this row's results count, when it has any. */
+  rtype?: ResultType | null;
+}
+
+/**
+ * Which results a row counts: one type key for the whole widget (its main or
+ * pinned type), or `"own"` — each row its own main type, the way every Ads
+ * Manager row shows its own result.
+ */
+type ResultFocus = string | "own" | null;
+
+interface FocusInfo {
+  type: ResultType | null;
+  headline: ResultsHeadline;
+  total: PlatformResultsRow | null;
+  /** The widget chose the type; it is not necessarily where the spend went. */
+  pinned: boolean;
+}
+
+/** One row's results as bag parts, for the focus type. */
+function fromResults(
+  row: PlatformResultsRow | undefined,
+  focus: ResultFocus,
+): { parts: Partial<Bag>; type: ResultType | null } {
+  if (!row || focus === null) return { parts: {}, type: null };
+  const type = focus === "own" ? resultsHeadline(row.byType).type : null;
+  const key = focus === "own" ? type?.key : focus;
+  const e = key ? row.byType.find((t) => t.type.key === key) : undefined;
+  return {
+    parts: {
+      resultCount: e?.count ?? 0,
+      resultSpend: e?.spend ?? 0,
+      resultPricedCount: e?.pricedCount ?? 0,
+    },
+    type: focus === "own" ? type : (e?.type ?? null),
+  };
 }
 
 /** A small semaphore: at most `max` loaders in flight. */
@@ -208,7 +254,7 @@ function funnelFrom(stages: Partial<Record<CanonicalStage, number>> | undefined)
   return { ...EMPTY_FUNNEL, ...(stages ?? {}) };
 }
 
-function needs(metrics: readonly MetricId[], need: "extras" | "crm"): boolean {
+function needs(metrics: readonly MetricId[], need: "extras" | "crm" | "results"): boolean {
   return metrics.some((m) => METRICS[m].needs.includes(need));
 }
 
@@ -318,15 +364,42 @@ class BoardLoader {
     return this.once(`currency:${platform}`, () => platformCurrency(this.input.client, platform));
   }
 
+  results(platform: AdPlatform, by: ResultsBy, which: Which) {
+    return this.once(`results:${platform}:${by}:${which}`, () =>
+      getPlatformResults(platform, this.id, this.win(which), by),
+    );
+  }
+
+  /**
+   * The type a results widget counts — the one it pins, else the current
+   * range's main type — resolved ONCE, so the previous period, the days and
+   * the rows all count the same thing and a change compares like with like.
+   */
+  async resultFocus(platform: AdPlatform, pinned: string | undefined): Promise<FocusInfo> {
+    const [total] = await this.results(platform, "total", "cur");
+    const types = pinned ? new Map([[pinned, resultTypeFromKey(platform, pinned)]]) : undefined;
+    const headline = resultsHeadline(total?.byType ?? [], { pinned: pinned ?? null, types });
+    return { type: headline.type, headline, total: total ?? null, pinned: Boolean(pinned) };
+  }
+
   /* ---------------------------------------------------------------- */
 
   /** The whole range (or the previous one) as one bag, campaign rows. */
-  async totals(platform: AdPlatform, which: Which, metrics: readonly MetricId[]): Promise<Bag> {
+  async totals(
+    platform: AdPlatform,
+    which: Which,
+    metrics: readonly MetricId[],
+    focus: ResultFocus = null,
+  ): Promise<Bag> {
     const p = await this.period(platform, which);
     let b = bag({ ...fromAds(p.ads), funnel: p.funnel, revenue: p.revenue });
     if (platform === "meta" && needs(metrics, "extras")) {
       const [e] = await this.extras("total", which);
       if (e) b = { ...b, ...fromExtras(e) };
+    }
+    if (needs(metrics, "results")) {
+      const [r] = await this.results(platform, "total", which);
+      b = { ...b, ...fromResults(r, focus).parts };
     }
     return b;
   }
@@ -343,6 +416,7 @@ class BoardLoader {
     which: Which,
     metrics: readonly MetricId[],
     adRows: boolean,
+    focus: ResultFocus = null,
   ): Promise<Row[]> {
     const w = this.win(which);
     if (adRows) {
@@ -358,12 +432,20 @@ class BoardLoader {
       platform === "meta" && needs(metrics, "extras")
         ? new Map((await this.extras("day", which)).map((e) => [e.key, e]))
         : null;
+    const results = needs(metrics, "results")
+      ? new Map((await this.results(platform, "day", which)).map((r) => [r.key, r]))
+      : null;
     return points.map((p) => {
       const e = extras?.get(p.dateKey);
       return {
         key: p.dateKey,
         label: dayLabel(p.dateKey),
-        bag: bag({ ...fromAds(p.ads), funnel: p.funnel, ...(e ? fromExtras(e) : {}) }),
+        bag: bag({
+          ...fromAds(p.ads),
+          funnel: p.funnel,
+          ...(e ? fromExtras(e) : {}),
+          ...(results ? fromResults(results.get(p.dateKey), focus).parts : {}),
+        }),
       };
     });
   }
@@ -373,8 +455,22 @@ class BoardLoader {
     platform: AdPlatform,
     dimension: DimensionId,
     metrics: readonly MetricId[],
+    focus: ResultFocus = null,
   ): Promise<Row[]> {
     switch (dimension) {
+      case "result_type": {
+        // One row per kind of result. Each row is its own type, so nothing
+        // downstream may add them up (see categoryData / tableData).
+        const [total] = await this.results(platform, "total", "cur");
+        return (total?.byType ?? [])
+          .filter((t) => t.count > 0 || t.spend > 0)
+          .map((t) => ({
+            key: t.type.key,
+            label: t.type.label,
+            rtype: t.type,
+            bag: bag({ resultCount: t.count, resultSpend: t.spend, resultPricedCount: t.pricedCount }),
+          }));
+      }
       case "campaign": {
         const rows = await this.campaigns(platform);
         const crm = needs(metrics, "crm") ? await this.funnelByCampaign(platform) : null;
@@ -382,14 +478,20 @@ class BoardLoader {
           platform === "meta" && needs(metrics, "extras")
             ? new Map((await this.extras("campaign", "cur")).map((e) => [e.key, e]))
             : null;
+        const results = needs(metrics, "results")
+          ? new Map((await this.results(platform, "campaign", "cur")).map((r) => [r.key, r]))
+          : null;
         const out: Row[] = rows.map((c) => {
           const e = extras?.get(c.campaignId);
+          const r = results ? fromResults(results.get(c.campaignId), focus) : null;
           return {
             key: c.campaignId,
             label: c.campaignName ?? (c.campaignId === "" ? "Unattributed" : c.campaignId),
+            rtype: r?.type,
             bag: bag({
               ...fromAds(c.ads),
               ...(e ? fromExtras(e) : {}),
+              ...(r?.parts ?? {}),
               funnel: crm ? funnelFrom(crm.get(c.campaignId)) : null,
             }),
           };
@@ -412,12 +514,19 @@ class BoardLoader {
       case "adset":
       case "ad": {
         const rows = await this.adLevel(dimension, "cur");
-        return rows.map((r) => ({
-          key: r.key,
-          label: r.label ?? r.key,
-          sub: r.parent ?? undefined,
-          bag: fromAdLevel(r),
-        }));
+        const results = needs(metrics, "results")
+          ? new Map((await this.results(platform, dimension, "cur")).map((x) => [x.key, x]))
+          : null;
+        return rows.map((r) => {
+          const res = results ? fromResults(results.get(r.key), focus) : null;
+          return {
+            key: r.key,
+            label: r.label ?? r.key,
+            sub: r.parent ?? undefined,
+            rtype: res?.type,
+            bag: res ? { ...fromAdLevel(r), ...res.parts } : fromAdLevel(r),
+          };
+        });
       }
       case "creative": {
         const rows = await this.creatives();
@@ -472,7 +581,9 @@ function gate(q: WidgetQuery, c: BoardConnections): WidgetData | null {
 
   const metrics = widgetMetrics(q);
   const adData = metrics.some((m) =>
-    METRICS[m].needs.some((n) => n === "ads" || n === "extras" || n === "adlevel" || n === "reach"),
+    METRICS[m].needs.some(
+      (n) => n === "ads" || n === "extras" || n === "adlevel" || n === "reach" || n === "results",
+    ),
   );
   if (adData && !c[q.platform]) {
     return unavailable(
@@ -539,12 +650,90 @@ function kpiFootnote(metric: MetricId, b: Bag, currency: string): string | undef
   }
 }
 
+/**
+ * What a results widget owes its reader: which kind it is counting (on a
+ * chart, where no tile label says so), days synced before results existed,
+ * and spend no type's cost could include.
+ */
+function resultNotes(
+  f: FocusInfo | null,
+  metrics: readonly MetricId[],
+  currency: string,
+  opts: { counting?: boolean } = {},
+): string[] {
+  if (!f) return [];
+  const out: string[] = [];
+  if (opts.counting && f.type && f.type.key !== "google:conversions") {
+    out.push(
+      f.pinned
+        ? `Counting ${f.type.label.toLowerCase()}.`
+        : `Counting ${f.type.label.toLowerCase()} — the kind of result most spend went to.`,
+    );
+  }
+  if ((f.total?.rowsWithoutResults ?? 0) > 0) {
+    out.push(
+      "Some days in this range were synced before results were collected — re-pull history on the Connections page to include them.",
+    );
+  }
+  if (metrics.includes("cost_per_result") && (f.total?.mixedSpend ?? 0) > 0) {
+    out.push(
+      `${formatCurrency(f.total!.mixedSpend, currency)} went to campaigns optimising for more than one kind of result, so it is not in the cost per result.`,
+    );
+  }
+  return out;
+}
+
+function noResults(f: FocusInfo): WidgetData {
+  const notCollected = (f.total?.rowsWithoutResults ?? 0) > 0;
+  return unavailable(
+    "empty",
+    notCollected ? "Results not collected for these dates yet" : "No results in this range",
+    notCollected ? "Re-pull history on the Connections page to fill them in." : undefined,
+  );
+}
+
+/** A results tile: one type, the same type for the previous period and the days. */
+async function resultsKpi(
+  L: BoardLoader,
+  q: Extract<WidgetQuery, { kind: "kpi" }>,
+  currency: string,
+): Promise<WidgetData> {
+  const { platform, metric } = q;
+  const f = await L.resultFocus(platform, q.resultType);
+  if (!f.type) return noResults(f);
+  const key = f.type.key;
+  const [cur, prev, days] = await Promise.all([
+    L.totals(platform, "cur", [metric], key),
+    L.totals(platform, "prev", [metric], key),
+    L.days(platform, "cur", [metric], false, key),
+  ]);
+  const value = metricValue(metric, cur);
+  const previous = metricValue(metric, prev);
+  const values = days.map((d) => metricValue(metric, d.bag));
+  const notes = resultNotes(f, [metric], currency);
+  return {
+    kind: "value",
+    value,
+    previous,
+    change: pctChange(value, previous),
+    spark: METRICS[metric].additive
+      ? values.map((v) => v ?? 0)
+      : values.filter((v): v is number => v !== null),
+    currency,
+    // Google's results are one type, already in the title ("Conversions").
+    unit: platform === "google" ? undefined : f.type.label,
+    footnote: q.resultType ? undefined : (othersFootnote(f.headline.others) ?? undefined),
+    notes: notes.length ? notes : undefined,
+  };
+}
+
 async function kpiData(
   L: BoardLoader,
   q: Extract<WidgetQuery, { kind: "kpi" }>,
 ): Promise<WidgetData> {
   const { platform, metric } = q;
   const currency = await L.currency(platform);
+  if (needs([metric], "results")) return resultsKpi(L, q, currency);
 
   if (metric === "reach" || metric === "frequency") {
     let r = await L.reach();
@@ -620,12 +809,16 @@ async function seriesData(
 ): Promise<WidgetData> {
   const { platform, metric } = q;
   const adRows = fromAdRows(metric);
-  const [currency, cur, prev, notes] = await Promise.all([
+  const f = needs([metric], "results") ? await L.resultFocus(platform, q.resultType) : null;
+  if (f && !f.type) return noResults(f);
+  const focus: ResultFocus = f?.type?.key ?? null;
+  const [currency, cur, prev, coverage] = await Promise.all([
     L.currency(platform),
-    L.days(platform, "cur", [metric], adRows),
-    q.compare ? L.days(platform, "prev", [metric], adRows) : Promise.resolve(null),
+    L.days(platform, "cur", [metric], adRows, focus),
+    q.compare ? L.days(platform, "prev", [metric], adRows, focus) : Promise.resolve(null),
     L.coverageNotes({ adRows, audience: false }),
   ]);
+  const notes = [...resultNotes(f, [metric], currency, { counting: true }), ...coverage];
   return {
     kind: "series",
     points: cur.map((d, i) => ({
@@ -661,13 +854,23 @@ async function categoryData(
   const def = METRICS[metric];
   const rankBy = def.rankBy ?? metric;
   const audience = isAudience(dimension);
+  // By result type every bar is a different kind of thing: never a whole.
+  const byType = dimension === "result_type";
+  const additive = def.additive && !byType;
 
-  const [currency, rows, notes, opts] = await Promise.all([
+  const f = needs([metric, rankBy], "results")
+    ? await L.resultFocus(platform, byType ? undefined : q.resultType)
+    : null;
+  if (f && !f.type && !byType) return noResults(f);
+  const focus: ResultFocus = byType ? null : (f?.type?.key ?? null);
+
+  const [currency, rows, coverage, opts] = await Promise.all([
     L.currency(platform),
-    L.split(platform, dimension, [metric, rankBy]),
+    L.split(platform, dimension, [metric, rankBy], focus),
     L.coverageNotes({ adRows: usesAdRows(dimension), audience }),
     dimension === "campaign" ? campaignOptions(L, platform) : Promise.resolve({}),
   ]);
+  const notes = [...resultNotes(f, [metric], currency, { counting: !byType }), ...coverage];
 
   if (rows.length === 0) {
     return unavailable(
@@ -684,6 +887,7 @@ async function categoryData(
   }));
   // A segment with nothing in it is not a slice; a ratio with no denominator is not a bar.
   const present = valued.filter((r) => (def.additive ? (r.value ?? 0) > 0 : r.value !== null));
+
   const ordered = DIMENSIONS[dimension].natural
     ? present
     : [...present].sort((a, b) => b.rank - a.rank);
@@ -696,7 +900,7 @@ async function categoryData(
   const out: CategoryRow[] = shown.map((r) => ({ key: r.key, label: r.label, value: r.value }));
   const extraNotes = [...notes];
   if (rest.length > 0) {
-    if (def.additive) {
+    if (additive) {
       const other = metricValue(metric, sumBags(rest.map((r) => r.bag)));
       if (other !== null && other > 0) {
         out.push({ key: "__other__", label: `Other (${rest.length})`, value: other, tone: "other" });
@@ -720,7 +924,7 @@ async function categoryData(
   return {
     kind: "categories",
     rows: out,
-    total: def.additive ? metricValue(metric, whole) : null,
+    total: additive ? metricValue(metric, whole) : null,
     currency,
     notes: extraNotes.length ? extraNotes : undefined,
   };
@@ -739,12 +943,16 @@ async function dailyTableData(
   const { platform, metrics } = q;
   const wantAd = metrics.some(fromAdRows);
   const wantCampaign = metrics.some((m) => !fromAdRows(m));
-  const [currency, campaignDays, adDays, notes] = await Promise.all([
+  // One kind of result per day table, so its column adds up.
+  const f = needs(metrics, "results") ? await L.resultFocus(platform, q.resultType) : null;
+  const focus: ResultFocus = f?.type?.key ?? null;
+  const [currency, campaignDays, adDays, coverage] = await Promise.all([
     L.currency(platform),
-    wantCampaign ? L.days(platform, "cur", metrics, false) : Promise.resolve(null),
+    wantCampaign ? L.days(platform, "cur", metrics, false, focus) : Promise.resolve(null),
     wantAd ? L.days(platform, "cur", metrics, true) : Promise.resolve(null),
     L.coverageNotes({ adRows: wantAd, audience: false }),
   ]);
+  const notes = [...resultNotes(f, metrics, currency, { counting: true }), ...coverage];
   const base = (campaignDays ?? adDays) as Row[];
   const source = (m: MetricId): Row[] => ((fromAdRows(m) ? adDays : campaignDays) ?? base);
 
@@ -773,13 +981,32 @@ async function tableData(
   const { platform, metrics, sort } = q;
   const dimension: DimensionId = q.dimension;
   const audience = isAudience(dimension);
+  const wantsResults = needs(metrics, "results");
+  const byType = dimension === "result_type";
+  const f = wantsResults ? await L.resultFocus(platform, q.resultType) : null;
+  /*
+   * A table by campaign, ad set or ad shows each row's OWN results, the way
+   * every Ads Manager row does — unless the widget pins one type.
+   */
+  const focus: ResultFocus = !wantsResults || byType ? null : q.resultType ? (f?.type?.key ?? q.resultType) : "own";
 
-  const [currency, rows, notes, opts] = await Promise.all([
+  const [currency, splitRows, coverage, opts] = await Promise.all([
     L.currency(platform),
-    L.split(platform, dimension, metrics),
+    L.split(platform, dimension, metrics, focus),
     L.coverageNotes({ adRows: usesAdRows(dimension), audience }),
     dimension === "campaign" ? campaignOptions(L, platform) : Promise.resolve({}),
   ]);
+  const notes = [...resultNotes(f, metrics, currency), ...coverage];
+  // Name each row's kind of result under it (Google has only one kind).
+  const rows: Row[] =
+    focus === "own" && platform !== "google"
+      ? splitRows.map((r) => ({
+          ...r,
+          sub: [r.sub, r.rtype && (r.bag.resultCount > 0 || r.bag.resultSpend > 0) ? r.rtype.label : null]
+            .filter(Boolean)
+            .join(" · ") || undefined,
+        }))
+      : splitRows;
 
   const all: Row[] = [...rows];
   if (audience && metrics.some(canBeCircle)) {
@@ -815,11 +1042,23 @@ async function tableData(
   const shown = ordered.slice(0, q.topN);
   // Totals over every row, shown or not, re-derived from the summed components.
   const whole = sumBags(all.map((r) => r.bag));
+  /*
+   * Results of different kinds have no total — Ads Manager shows "—" for a
+   * mixed column, and so does this.
+   */
+  const kinds = new Set(
+    all
+      .filter((r) => r.bag.resultCount > 0 || r.bag.resultSpend > 0)
+      .map((r) => r.rtype?.key ?? focus ?? ""),
+  );
+  const mixedResults = byType || kinds.size > 1;
   return {
     kind: "table",
     columns: [...metrics],
     rows: shown.map(({ key, label, sub, values }) => ({ key, label, sub, values })),
-    totals: metrics.map((m) => metricValue(m, whole)),
+    totals: metrics.map((m) =>
+      mixedResults && METRICS[m].needs.includes("results") ? null : metricValue(m, whole),
+    ),
     more: Math.max(0, ordered.length - shown.length),
     currency,
     notes: notes.length ? notes : undefined,

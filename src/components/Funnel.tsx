@@ -36,6 +36,7 @@ export function Funnel({
   exits,
   title = "Pipeline funnel",
   className,
+  noCrm = false,
 }: {
   steps: FunnelStep[];
   exits?: { no_show: number; lost: number };
@@ -43,6 +44,11 @@ export function Funnel({
   title?: string;
   /** Extra classes on the card — a board cell passes `h-full` to fill its slot. */
   className?: string;
+  /**
+   * No CRM is connected, so there is no pipeline to count — a different answer
+   * from an empty one, and its zeros would claim otherwise.
+   */
+  noCrm?: boolean;
 }) {
   /*
    * 🔴 Scaled to the LARGEST stage, not the first one.
@@ -74,7 +80,7 @@ export function Funnel({
       </div>
 
       {scale === 0 ? (
-        <EmptyFunnel />
+        <EmptyFunnel noCrm={noCrm} />
       ) : (
         <div className="mt-4 flex flex-col">
           {steps.map((step, i) => {
@@ -180,7 +186,7 @@ export function Funnel({
         </div>
       )}
 
-      {exits && (
+      {exits && !noCrm && (
         <div
           className="mt-4 flex gap-6 border-t pt-3 text-xs"
           style={{ borderColor: "var(--border)" }}
@@ -212,9 +218,10 @@ function ExitStat({ label, value }: { label: string; value: number }) {
  *
  * "No leads entered the pipeline" is a real, meaningful answer — distinct from
  * "we cannot reach your CRM", which the health checklist reports separately.
- * Conflating the two is how the old sheet misled for months.
+ * Conflating the two is how the old sheet misled for months — and with no CRM
+ * at all, "not a connection problem" would be exactly that conflation.
  */
-function EmptyFunnel() {
+function EmptyFunnel({ noCrm }: { noCrm: boolean }) {
   return (
     <div
       className="mt-4 rounded-[var(--radius)] border border-dashed p-6 text-center"
@@ -224,14 +231,15 @@ function EmptyFunnel() {
         className="text-sm font-medium"
         style={{ color: "var(--text-secondary)" }}
       >
-        No leads entered the pipeline in this period
+        {noCrm ? "No CRM connected" : "No leads entered the pipeline in this period"}
       </p>
       <p
         className="mx-auto mt-1 max-w-md text-xs"
         style={{ color: "var(--text-muted)" }}
       >
-        This reflects real recorded activity, not a connection problem. Check
-        the setup page if you expected leads here.
+        {noCrm
+          ? "The funnel follows leads through GoHighLevel, which isn't connected to this dashboard yet."
+          : "This reflects real recorded activity, not a connection problem. Check the setup page if you expected leads here."}
       </p>
     </div>
   );

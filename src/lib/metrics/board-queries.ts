@@ -1,7 +1,15 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import type { DateWindow } from "@/lib/dates";
+import type { AdPlatform } from "@/lib/platforms";
 import { resultRows } from "./queries";
+import {
+  GOOGLE_RESULT_TYPE,
+  mergeByType,
+  metaResultType,
+  tiktokResultType,
+  type TypedResults,
+} from "./results";
 
 /**
  * The three things a board needs that no existing query provides.
@@ -354,4 +362,267 @@ export async function getPeriodReachRow(
     reach: r.reach === null ? null : Number(r.reach),
     frequency: r.frequency === null ? null : Number(r.frequency),
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Platform results — Ads Manager's own "Results"
+ * ------------------------------------------------------------------ */
+
+export type ResultsBy = "total" | "day" | "campaign" | "adset" | "ad";
+
+export interface PlatformResultsRow {
+  /** Day key, campaign / ad set / ad id, or "" for the total. */
+  key: string;
+  label: string | null;
+  /** The campaign an ad or ad set belongs to. */
+  parent: string | null;
+  /** Results per type — never summed across types. See `metrics/results.ts`. */
+  byType: TypedResults[];
+  /** All spend in the group. */
+  spend: number;
+  /** Spend on rows that optimised for more than one type: no type's cost. */
+  mixedSpend: number;
+  /** Rows stored before results were requested — named in a coverage note. */
+  rowsWithoutResults: number;
+}
+
+/** A plain decimal in a jsonb text field, else 0 — the same guard as `actionsLateral`. */
+function numericText(expr: SQL): SQL {
+  return sql`CASE WHEN (${expr}) ~ '^-?[0-9]+([.][0-9]+)?$' THEN (${expr})::numeric ELSE 0 END`;
+}
+
+/**
+ * Each platform's own results, per type, for the range — the ONE source behind
+ * every Results tile and widget, so the Overview and the Board cannot disagree.
+ *
+ * Meta: campaign rows (or ad rows for `ad` / `adset`) — `raw.results`, one
+ * entry per optimisation type. Google: the stored Conversions column. TikTok:
+ * `raw.results`, summed from the ad group report by the sync.
+ *
+ * Splits a platform cannot answer (ads or ad sets on Google or TikTok) return
+ * nothing rather than a different grouping under the same name.
+ */
+export async function getPlatformResults(
+  platform: AdPlatform,
+  clientId: string,
+  window: DateWindow,
+  by: ResultsBy,
+): Promise<PlatformResultsRow[]> {
+  if (platform === "meta") return metaResults(clientId, window, by);
+  if (by === "ad" || by === "adset") return [];
+  return platform === "google"
+    ? googleResults(clientId, window, by)
+    : tiktokResults(clientId, window, by);
+}
+
+const DAY_KEY = sql`to_char(m.date, 'YYYY-MM-DD')`;
+
+/** The most recent non-empty value of a column — names a client recognises. */
+function latest(col: SQL): SQL {
+  return sql`(ARRAY_AGG(${col} ORDER BY (${col} IS NULL), m.date DESC))[1]`;
+}
+
+interface TotalsRow {
+  key: string | null;
+  label: string | null;
+  parent: string | null;
+  spend: number;
+  mixed_spend: number;
+  rows_without_results: number;
+}
+
+function assemble(
+  totals: TotalsRow[],
+  typed: Array<{ key: string; entry: TypedResults }>,
+): PlatformResultsRow[] {
+  const byKey = new Map<string, TypedResults[]>();
+  for (const t of typed) {
+    const list = byKey.get(t.key) ?? [];
+    list.push(t.entry);
+    byKey.set(t.key, list);
+  }
+  return totals.map((r) => {
+    const key = r.key ?? "";
+    return {
+      key,
+      label: r.label,
+      parent: r.parent,
+      byType: mergeByType(byKey.get(key) ?? []),
+      spend: Number(r.spend) || 0,
+      mixedSpend: Number(r.mixed_spend) || 0,
+      rowsWithoutResults: Number(r.rows_without_results) || 0,
+    };
+  });
+}
+
+async function metaResults(
+  clientId: string,
+  window: DateWindow,
+  by: ResultsBy,
+): Promise<PlatformResultsRow[]> {
+  const adLevel = by === "ad" || by === "adset";
+  const key =
+    by === "day"
+      ? DAY_KEY
+      : by === "campaign"
+        ? sql`m.meta_campaign_id`
+        : by === "ad"
+          ? sql`m.meta_ad_id`
+          : by === "adset"
+            ? sql`m.meta_adset_id`
+            : sql`''`;
+  const label =
+    by === "campaign"
+      ? latest(sql`m.campaign_name`)
+      : by === "ad"
+        ? latest(sql`m.ad_name`)
+        : by === "adset"
+          ? latest(sql`m.adset_name`)
+          : sql`NULL::text`;
+  const parent = adLevel ? latest(sql`m.campaign_name`) : sql`NULL::text`;
+  const notBlank =
+    by === "ad" ? sql`AND m.meta_ad_id <> ''` : by === "adset" ? sql`AND m.meta_adset_id <> ''` : sql``;
+  const group = by === "total" ? sql`` : sql`GROUP BY 1`;
+  const where = sql`
+    WHERE m.client_id = ${clientId}
+      AND m.level = ${adLevel ? "ad" : "campaign"}
+      AND m.date >= ${window.startKey}
+      AND m.date <= ${window.endKey}
+      ${notBlank}`;
+  // An array, or nothing: a row stored before results were requested has none.
+  const results = sql`CASE WHEN jsonb_typeof(m.raw->'results') = 'array' THEN m.raw->'results' ELSE '[]'::jsonb END`;
+  const typeCount = sql`jsonb_array_length(${results})`;
+
+  /*
+   * Two statements, deliberately. Per-type counts need one row per result
+   * entry; spend needs one row per fact row. Doing both in one would multiply
+   * spend by the number of types on a mixed row.
+   */
+  const totalsRes = await db.execute(sql`
+    SELECT ${key} AS key,
+           ${label} AS label,
+           ${parent} AS parent,
+           COALESCE(SUM(m.spend), 0)::float AS spend,
+           COALESCE(SUM(m.spend) FILTER (WHERE ${typeCount} > 1), 0)::float AS mixed_spend,
+           COUNT(*) FILTER (WHERE ${typeCount} = 0)::int AS rows_without_results
+    FROM fb_daily_metrics m
+    ${where}
+    ${group}
+  `);
+  const typedRes = await db.execute(sql`
+    SELECT ${key} AS key,
+           e->>'indicator' AS indicator,
+           COALESCE(SUM(${numericText(sql`e->'values'->0->>'value'`)}), 0)::float AS count,
+           COALESCE(SUM(m.spend) FILTER (WHERE ${typeCount} = 1), 0)::float AS spend,
+           COALESCE(SUM(${numericText(sql`e->'values'->0->>'value'`)}) FILTER (WHERE ${typeCount} = 1), 0)::float AS priced
+    FROM fb_daily_metrics m
+    CROSS JOIN LATERAL jsonb_array_elements(${results}) e
+    ${where}
+      AND jsonb_typeof(e) = 'object'
+      AND COALESCE(e->>'indicator', '') <> ''
+    GROUP BY 1, 2
+  `);
+  const typed = resultRows<{
+    key: string | null;
+    indicator: string;
+    count: number;
+    spend: number;
+    priced: number;
+  }>(typedRes).map((r) => ({
+    key: r.key ?? "",
+    entry: {
+      type: metaResultType(r.indicator),
+      count: Number(r.count) || 0,
+      spend: Number(r.spend) || 0,
+      pricedCount: Number(r.priced) || 0,
+    },
+  }));
+  return assemble(resultRows<TotalsRow>(totalsRes), typed);
+}
+
+async function googleResults(
+  clientId: string,
+  window: DateWindow,
+  by: Exclude<ResultsBy, "ad" | "adset">,
+): Promise<PlatformResultsRow[]> {
+  const key = by === "day" ? DAY_KEY : by === "campaign" ? sql`m.google_campaign_id` : sql`''`;
+  const label = by === "campaign" ? latest(sql`m.campaign_name`) : sql`NULL::text`;
+  const group = by === "total" ? sql`` : sql`GROUP BY 1`;
+  const res = await db.execute(sql`
+    SELECT ${key} AS key,
+           ${label} AS label,
+           NULL::text AS parent,
+           COALESCE(SUM(m.spend), 0)::float AS spend,
+           0::float AS mixed_spend,
+           0::int AS rows_without_results,
+           COALESCE(SUM(m.conversions), 0)::float AS conversions
+    FROM google_daily_metrics m
+    WHERE m.client_id = ${clientId}
+      AND m.date >= ${window.startKey}
+      AND m.date <= ${window.endKey}
+    ${group}
+  `);
+  const rows = resultRows<TotalsRow & { conversions: number }>(res);
+  return assemble(
+    rows,
+    rows.map((r) => ({
+      key: r.key ?? "",
+      entry: {
+        type: GOOGLE_RESULT_TYPE,
+        count: Number(r.conversions) || 0,
+        spend: Number(r.spend) || 0,
+        pricedCount: Number(r.conversions) || 0,
+      },
+    })),
+  );
+}
+
+async function tiktokResults(
+  clientId: string,
+  window: DateWindow,
+  by: Exclude<ResultsBy, "ad" | "adset">,
+): Promise<PlatformResultsRow[]> {
+  const key = by === "day" ? DAY_KEY : by === "campaign" ? sql`m.tiktok_campaign_id` : sql`''`;
+  const label = by === "campaign" ? latest(sql`m.campaign_name`) : sql`NULL::text`;
+  const group = by === "total" ? sql`` : sql`GROUP BY 1`;
+  const where = sql`
+    WHERE m.client_id = ${clientId}
+      AND m.date >= ${window.startKey}
+      AND m.date <= ${window.endKey}`;
+  const has = sql`jsonb_typeof(m.raw->'results') = 'object'`;
+  const totalsRes = await db.execute(sql`
+    SELECT ${key} AS key,
+           ${label} AS label,
+           NULL::text AS parent,
+           COALESCE(SUM(m.spend), 0)::float AS spend,
+           0::float AS mixed_spend,
+           COUNT(*) FILTER (WHERE NOT COALESCE(${has}, false))::int AS rows_without_results
+    FROM tiktok_daily_metrics m
+    ${where}
+    ${group}
+  `);
+  // One objective per campaign, so a TikTok row is never mixed.
+  const typedRes = await db.execute(sql`
+    SELECT ${key} AS key,
+           COALESCE(m.raw->'results'->>'objective', m.raw->'metrics'->>'objective_type') AS objective,
+           COALESCE(SUM(${numericText(sql`m.raw->'results'->>'value'`)}), 0)::float AS count,
+           COALESCE(SUM(m.spend), 0)::float AS spend
+    FROM tiktok_daily_metrics m
+    ${where}
+      AND ${has}
+    GROUP BY 1, 2
+  `);
+  const typed = resultRows<{ key: string | null; objective: string | null; count: number; spend: number }>(
+    typedRes,
+  ).map((r) => ({
+    key: r.key ?? "",
+    entry: {
+      type: tiktokResultType(r.objective),
+      count: Number(r.count) || 0,
+      spend: Number(r.spend) || 0,
+      // One objective per campaign: every TikTok row is single-type.
+      pricedCount: Number(r.count) || 0,
+    },
+  }));
+  return assemble(resultRows<TotalsRow>(totalsRes), typed);
 }

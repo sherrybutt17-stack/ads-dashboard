@@ -1,11 +1,13 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   parseInsightRow,
   segmentLabel,
   insightFields,
+  isResultFieldRefusal,
   metaVersion,
   META_BREAKDOWNS,
   MetaApiError,
+  MetaClient,
 } from "./client";
 
 /**
@@ -423,5 +425,72 @@ describe("MetaApiError.isRateLimit", () => {
       expect(err(code).isRateLimit).toBe(false);
     }
     expect(new MetaApiError("x", 400).isRateLimit).toBe(false);
+  });
+});
+
+describe("results fields", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("asks for Ads Manager's results and the objective at every level, unless told not to", () => {
+    for (const level of ["campaign", "ad"] as const) {
+      const fields = insightFields(level).split(",");
+      expect(fields).toContain("results");
+      expect(fields).toContain("objective");
+      expect(insightFields(level, { results: false }).split(",")).not.toContain("results");
+    }
+  });
+
+  it("recognises only a refusal of those fields", () => {
+    const refusal = (code: number, message: string) => new MetaApiError(message, 400, code);
+    expect(isResultFieldRefusal(refusal(100, "(#100) Tried accessing nonexisting field (results) on node type (AdsInsights)"))).toBe(true);
+    expect(isResultFieldRefusal(refusal(100, "(#100) objective is not valid for fields param."))).toBe(true);
+    expect(isResultFieldRefusal(refusal(100, "(#100) Param time_range is invalid"))).toBe(false);
+    expect(isResultFieldRefusal(refusal(190, "Error validating access token: results"))).toBe(false);
+    expect(isResultFieldRefusal(new Error("results"))).toBe(false);
+  });
+
+  it("🔴 retries once without them, so spend never depends on the results feature", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const fields = new URL(String(url)).searchParams.get("fields") ?? "";
+        seen.push(fields);
+        return fields.includes("results")
+          ? ({
+              ok: false,
+              status: 400,
+              headers: new Headers(),
+              json: async () => ({ error: { code: 100, message: "(#100) Tried accessing nonexisting field (results)" } }),
+            } as unknown as Response)
+          : ({
+              ok: true,
+              status: 200,
+              headers: new Headers(),
+              json: async () => ({ data: [{ campaign_id: "1", spend: "5", date_start: "2026-09-01" }] }),
+            } as unknown as Response);
+      }),
+    );
+    const rows = await new MetaClient("tok").getDailyInsights("act_1", "2026-09-01", "2026-09-01");
+    expect(rows).toHaveLength(1);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toContain("results");
+  });
+
+  it("does not retry any other failure", async () => {
+    const spy = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 400,
+          headers: new Headers(),
+          json: async () => ({ error: { code: 190, message: "Error validating access token" } }),
+        }) as unknown as Response,
+    );
+    vi.stubGlobal("fetch", spy);
+    await expect(
+      new MetaClient("tok").getDailyInsights("act_1", "2026-09-01", "2026-09-01"),
+    ).rejects.toBeInstanceOf(MetaApiError);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

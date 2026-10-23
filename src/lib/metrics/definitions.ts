@@ -210,6 +210,29 @@ export const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     formula: "Ad spend ÷ Meta-reported leads.",
     caveat: "Uses Meta's attribution, so it can differ from the cost per lead calculated from the CRM.",
   },
+  results: {
+    what: "What the ad platform counts as the campaigns' results — whatever each campaign is set to get: website leads, calls, messages, landing page views. On Google, its Conversions column.",
+    formula: "Sum of the platform's daily results of the type shown, exactly as its Ads Manager reports them.",
+    caveat:
+      "Results of different types are never added together; the tile shows the type most spend went to and names the others. The platform's own attribution, so it can differ from the CRM's leads.",
+  },
+  cpResult: {
+    what: "What each result cost, as the platform's Ads Manager shows it.",
+    formula: "Spend on the campaigns getting this kind of result ÷ those results.",
+    caveat:
+      "Spend on campaigns optimising for a different kind of result is left out, so it matches Ads Manager's cost per result rather than spend ÷ every result.",
+  },
+  googleConversions: {
+    what: "Conversions as Google Ads counts them — the actions set as primary goals in the account.",
+    formula: "Sum of Google's daily Conversions column.",
+    caveat:
+      "Google can report fractions of a conversion when it shares credit between ads, so this may not be a whole number. Google's attribution, not the CRM.",
+  },
+  cpConversion: {
+    what: "What each conversion cost, as Google Ads shows it.",
+    formula: "Spend ÷ conversions.",
+    caveat: "Uses Google's own conversion count, so it can differ from the CRM's cost per lead.",
+  },
   frequency: {
     what: "How many times the average person saw an ad.",
     formula: "Impressions ÷ reach, both for the whole range, as Meta reports it.",
@@ -347,6 +370,9 @@ export const REPORT_GLOSSARY: readonly string[] = [
   "appointment_booked",
   "showed",
   "closed_won",
+  // The ad platform's own results, after them — the two can differ from the CRM's leads.
+  "results",
+  "cpResult",
   // The funnel's between-stage percentages — the single most misread figure on
   // the page, and the reason this module exists.
   "funnelStep",
@@ -366,6 +392,8 @@ export const REPORT_GLOSSARY_LABEL: Record<string, string> = {
   spend: "Ad spend",
   new_lead: "New leads",
   cpLead: "Cost per lead",
+  results: "Results",
+  cpResult: "Cost per result",
   appointment_booked: "Appointments",
   showed: "Showed",
   closed_won: "Closed / won",

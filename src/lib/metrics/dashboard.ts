@@ -12,6 +12,8 @@ import {
   type DateWindow,
 } from "@/lib/dates";
 import { detectAnomalies, BASELINE_DAYS, type AnomalyReport } from "./anomaly";
+import { getPlatformResults } from "./board-queries";
+import { EMPTY_RESULTS_SUMMARY, summarizeResults, type ResultsSummary } from "./results";
 import { assessCandidates, type Candidate, type KeepKillReport } from "./keepkill";
 import { buildCampaignStages, type CampaignStages } from "./campaign-stages";
 import { buildSpeedOutcome, type SpeedOutcome } from "./speed-outcome";
@@ -153,6 +155,12 @@ export interface DashboardData {
   /** Headline period + its immediately preceding period, for deltas. */
   current: PeriodMetrics;
   previous: PeriodMetrics;
+  /**
+   * The platform's own "Results" for the two headline tiles — one type, the
+   * same type for the previous period. From `getPlatformResults`, the source
+   * every Board results widget reads too.
+   */
+  results: ResultsSummary;
   deltas: Record<string, number | null>;
   funnel: FunnelStep[];
   daily: DailyPoint[];
@@ -644,6 +652,29 @@ export async function loadDashboard(
     fatigue,
   } = await loadCreatives(client.id, range, filter, platform, client.timezone);
 
+  /*
+   * The platform's own results, AFTER the core bundle for the same reason as
+   * the creatives above: the newest query on the page must never be able to
+   * take the numbers that were working yesterday down with it. A failure costs
+   * the two results tiles, which then read "not available".
+   */
+  let results: ResultsSummary = EMPTY_RESULTS_SUMMARY;
+  try {
+    const [curResults, prevResults, dayResults] = await Promise.all([
+      getPlatformResults(platform, client.id, range, "total"),
+      getPlatformResults(platform, client.id, prevRange, "total"),
+      getPlatformResults(platform, client.id, range, "day"),
+    ]);
+    results = summarizeResults({
+      current: curResults[0],
+      previous: prevResults[0],
+      days: dayResults,
+      dayKeys: eachDateKey(range, tz),
+    });
+  } catch (err) {
+    console.error("[dashboard] platform results unavailable:", err);
+  }
+
   // Reach is only valid when queried for this exact window — never summed.
   current.ads.reach = reach;
   // Re-derive with revenue passed back in. Omitting it here would silently reset
@@ -677,6 +708,8 @@ export async function loadDashboard(
       previous.revenue?.revenue ?? null,
     ),
     roas: pctChange(current.derived.roas, previous.derived.roas),
+    results: pctChange(results.count, results.previousCount),
+    cpResult: pctChange(results.costPer, results.previousCostPer),
   };
 
   // Same guard as the headline cost per lead (see `derive`): when the funnel's
@@ -974,6 +1007,7 @@ export async function loadDashboard(
     },
     current,
     previous,
+    results,
     deltas,
     funnel: buildFunnelSteps(current.funnel, FUNNEL_PATH),
     daily: dailyRaw,

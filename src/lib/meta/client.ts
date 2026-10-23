@@ -299,12 +299,42 @@ function prettySegment(v: string): string {
   return v;
 }
 
-export function insightFields(level: InsightLevel): string {
-  return (
+/**
+ * Ads Manager's own "Results" for the row, and the campaign objective.
+ *
+ * `results` is a list of `{ indicator, values: [{ value, attribution_windows }] }`.
+ * The indicator names what the ad set optimises for
+ * (`actions:offsite_conversion.fb_pixel_lead`), and it is present even on a day
+ * with no results — which is what lets a day of spend keep its type. Verified
+ * against v25.0 on live accounts, 24 Oct 2026; see `metrics/results.ts`.
+ *
+ * Optional by construction. If Meta ever refuses either field, the request is
+ * retried once without them (`getDailyInsights`): spend and leads must never
+ * depend on a field the results feature added.
+ */
+export const RESULT_INSIGHT_FIELDS = ["results", "objective"] as const;
+
+export function insightFields(
+  level: InsightLevel,
+  opts: { results?: boolean } = {},
+): string {
+  const fields: string[] =
     level === "ad" || level === "adset"
       ? [...BASE_INSIGHT_FIELDS, ...AD_INSIGHT_FIELDS]
-      : BASE_INSIGHT_FIELDS
-  ).join(",");
+      : [...BASE_INSIGHT_FIELDS];
+  if (opts.results !== false) fields.push(...RESULT_INSIGHT_FIELDS);
+  return fields.join(",");
+}
+
+/**
+ * A refusal of one of the optional results fields, as opposed to any other
+ * failure. Code 100 is Meta's "invalid parameter"; the message names the field
+ * ("Tried accessing nonexisting field (results)", "results is not valid for
+ * fields param"). Anything else — a bad token, a rate limit — is rethrown.
+ */
+export function isResultFieldRefusal(err: unknown): boolean {
+  if (!(err instanceof MetaApiError) || err.code !== 100) return false;
+  return RESULT_INSIGHT_FIELDS.some((f) => new RegExp(`\\b${f}\\b`, "i").test(err.message));
 }
 
 /**
@@ -632,6 +662,27 @@ export class MetaClient {
     until: string,
     level: InsightLevel = "campaign",
   ): Promise<MetaInsightRow[]> {
+    try {
+      return await this.dailyInsights(accountId, since, until, level, true);
+    } catch (err) {
+      if (!isResultFieldRefusal(err)) throw err;
+      // Loud in the log, quiet for the client: their spend still syncs, and the
+      // results widgets say "no results yet" for these days.
+      console.warn(
+        `[meta] insights refused the results fields at ${level} level; retrying without them:`,
+        (err as Error).message,
+      );
+      return this.dailyInsights(accountId, since, until, level, false);
+    }
+  }
+
+  private async dailyInsights(
+    accountId: string,
+    since: string,
+    until: string,
+    level: InsightLevel,
+    withResults: boolean,
+  ): Promise<MetaInsightRow[]> {
     const act = MetaClient.normalizeAccountId(accountId);
     const rows: MetaInsightRow[] = [];
 
@@ -644,7 +695,7 @@ export class MetaClient {
             level,
             time_increment: 1,
             time_range: JSON.stringify({ since, until }),
-            fields: insightFields(level),
+            fields: insightFields(level, { results: withResults }),
             use_unified_attribution_setting: true,
             limit: 500,
           });

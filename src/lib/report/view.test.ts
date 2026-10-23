@@ -92,7 +92,7 @@ describe("encode / decode", () => {
 describe("describeView", () => {
   it("names the size of the choice and warns about lead names", () => {
     expect(describeView(normalizeView({ sections: ["kpis", "funnel"], kpis: ["spend", "cpLead"] })!)).toBe(
-      "2 sections · 2 of 8 headline numbers",
+      "2 sections · 2 of 10 headline numbers",
     );
     expect(describeView(normalizeView({ sections: ["pipeline"] })!)).toBe(
       "1 section · includes lead names",

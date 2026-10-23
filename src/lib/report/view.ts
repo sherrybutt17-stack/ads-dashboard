@@ -22,6 +22,8 @@ export const KPI_OPTIONS = [
   { id: "closed_won", label: "Closed / won" },
   { id: "revenue", label: "Revenue" },
   { id: "roas", label: "ROAS" },
+  { id: "results", label: "Results" },
+  { id: "cpResult", label: "Cost per result" },
 ] as const;
 
 export type KpiId = (typeof KPI_OPTIONS)[number]["id"];
@@ -176,7 +178,7 @@ export function viewHasPersonal(view: ReportView): boolean {
   );
 }
 
-/** "6 sections · 5 of 8 headline numbers", for the share list. */
+/** "6 sections · 5 of 10 headline numbers", for the share list. */
 export function describeView(view: ReportView): string {
   const n = view.sections.filter((s) => s !== ALWAYS_INCLUDED).length;
   const parts = [`${n} section${n === 1 ? "" : "s"}`];

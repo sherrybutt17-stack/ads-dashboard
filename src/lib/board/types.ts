@@ -17,7 +17,7 @@ import type {
  * data.
  */
 export type WidgetQuery =
-  | { kind: "kpi"; platform: AdPlatform; metric: MetricId }
+  | { kind: "kpi"; platform: AdPlatform; metric: MetricId; resultType?: string }
   | {
       kind: "series";
       platform: AdPlatform;
@@ -25,6 +25,7 @@ export type WidgetQuery =
       form: SeriesForm;
       /** Draw the previous period as a dashed ghost. */
       compare: boolean;
+      resultType?: string;
     }
   | {
       kind: "category";
@@ -33,6 +34,7 @@ export type WidgetQuery =
       dimension: DimensionId;
       form: CategoryForm;
       topN: number;
+      resultType?: string;
     }
   | {
       kind: "table";
@@ -41,6 +43,12 @@ export type WidgetQuery =
       metrics: MetricId[];
       sort: MetricId;
       topN: number;
+      /**
+       * For results columns: the result type to count (a key from
+       * `metrics/results.ts`). Absent means the range's main type. Optional,
+       * so every board saved before results existed still validates.
+       */
+      resultType?: string;
     }
   | { kind: "funnel"; platform: AdPlatform }
   | { kind: "text"; text: string; size: "heading" | "body" }
@@ -98,6 +106,11 @@ export type WidgetData =
       /** Daily values for the sparkline, when the stat has a daily form. */
       spark: number[] | null;
       currency: string;
+      /**
+       * What the number counts, when the stat alone does not say: a results
+       * tile's type, "Website leads". Shown beside the title.
+       */
+      unit?: string;
       footnote?: string;
       notes?: string[];
     }

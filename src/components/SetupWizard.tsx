@@ -379,6 +379,7 @@ export function SetupWizard({
         slug={slug}
         step={usingOauth ? 6 : 7}
         hasTiktok={tiktokAccounts.some((a) => a.status !== "removed")}
+        hasGoogle={googleAccounts.some((a) => a.status !== "removed")}
       />
     </div>
   );
@@ -3056,12 +3057,15 @@ function BackfillStep({
   slug,
   step,
   hasTiktok,
+  hasGoogle,
 }: {
   clientId: string;
   slug: string;
   step: number;
   /** Only offer the TikTok import once an advertiser is actually attached. */
   hasTiktok: boolean;
+  /** Same for Google: an import with no account behind it can only fail. */
+  hasGoogle: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -3073,7 +3077,7 @@ function BackfillStep({
   const [days, setDays] = useState(90);
 
   async function run(
-    action: "meta_backfill" | "tiktok_backfill" | "ghl_backfill",
+    action: "meta_backfill" | "google_backfill" | "tiktok_backfill" | "ghl_backfill",
   ) {
     setBusy(action);
     setMsg(null);
@@ -3089,7 +3093,7 @@ function BackfillStep({
           ? {
               ok: true,
               msg:
-                action === "meta_backfill" || action === "tiktok_backfill"
+                action !== "ghl_backfill"
                   ? body.rowsWritten === 0
                     ? `No spend found in the last ${windowLabel(days)}. The connection works — this account simply has no activity in that window. Try a longer one.`
                     : `Imported ${body.rowsWritten} daily metric rows.`
@@ -3106,7 +3110,7 @@ function BackfillStep({
     <Card
       step={step}
       title="Import historical data"
-      description="Optional, run once. Meta history imports fully; GHL history does not."
+      description="Optional, run once. Ad platform history imports fully, results included; GHL history does not."
     >
       <div className="flex flex-wrap items-center gap-2">
         <label className="sr-only" htmlFor="backfill-window">
@@ -3141,6 +3145,21 @@ function BackfillStep({
             ? "Importing…"
             : `Import ${windowLabel(days)} of Meta data`}
         </button>
+        {hasGoogle && (
+          <button
+            onClick={() => run("google_backfill")}
+            disabled={busy !== null}
+            className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+            style={{
+              borderColor: "var(--border-strong)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {busy === "google_backfill"
+              ? "Importing…"
+              : `Import ${windowLabel(days)} of Google data`}
+          </button>
+        )}
         {hasTiktok && (
           <button
             onClick={() => run("tiktok_backfill")}

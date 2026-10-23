@@ -6,7 +6,7 @@ import { getClientBranding } from "@/lib/branding-store";
 import { loadCommentaryForReport } from "@/lib/commentary/report";
 import { monthKeyForDateKey } from "@/lib/commentary/model";
 import type { AdPlatform } from "@/lib/metrics/queries";
-import { parseAdPlatform } from "@/lib/platforms";
+import { parseAdPlatform, PLATFORM_LABEL } from "@/lib/platforms";
 import {
   trailingWindow,
   isValidDateKey,
@@ -96,7 +96,7 @@ export default async function PresentPage({
 
   const deck = buildDeck(data, {
     brandName: branding.displayName ?? client.name,
-    platformLabel: platform === "google" ? "Google" : "Meta",
+    platformLabel: PLATFORM_LABEL[platform],
     commentary,
   });
 

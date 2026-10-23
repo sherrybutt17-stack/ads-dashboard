@@ -1,4 +1,6 @@
 import { Fragment } from "react";
+import { PLATFORM_LABEL } from "@/lib/platforms";
+import { crmConnected } from "@/lib/clients";
 import type { Client } from "@/db/schema";
 import type { ClientBranding } from "@/lib/branding";
 import { accentFor } from "@/lib/branding";
@@ -150,7 +152,8 @@ export async function ReportDocument({
 
   const { current, daily } = data;
   const currency = data.client.currency;
-  const spendLabel = platform === "google" ? "Google" : "Meta";
+  // Every platform by its own name — TikTok spend was labelled "Meta" here.
+  const spendLabel = PLATFORM_LABEL[platform];
   const rangeDays = daily.length;
   const basis = rangeDays === 1 ? "previous day" : `previous ${rangeDays} days`;
 
@@ -202,6 +205,7 @@ export async function ReportDocument({
     campaignNames,
     adState,
     crmState,
+    hasCrm: crmConnected(client),
     sparkSpend: daily.map((d) => d.ads.spend),
     sparkLeads: daily.map((d) => d.funnel.new_lead),
     sparkAppts: daily.map((d) => d.funnel.appointment_booked),

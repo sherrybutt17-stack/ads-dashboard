@@ -43,6 +43,14 @@ export interface Bag {
   pageLikes: number;
   postEngagement: number;
   purchases: number;
+  /**
+   * The platform's results of ONE type — the widget's main or pinned type —
+   * and the single-type spend and results that price them. Never a sum across
+   * types; see `metrics/results.ts`.
+   */
+  resultCount: number;
+  resultSpend: number;
+  resultPricedCount: number;
   /** CRM counts, when loaded for this row. */
   funnel: FunnelCounts | null;
   /** Closed-won values, when loaded for this row. */
@@ -69,6 +77,9 @@ export const EMPTY_BAG: Bag = Object.freeze({
   pageLikes: 0,
   postEngagement: 0,
   purchases: 0,
+  resultCount: 0,
+  resultSpend: 0,
+  resultPricedCount: 0,
   funnel: null,
   revenue: null,
   reach: null,
@@ -92,6 +103,9 @@ const ADDITIVE_KEYS = [
   "pageLikes",
   "postEngagement",
   "purchases",
+  "resultCount",
+  "resultSpend",
+  "resultPricedCount",
 ] as const;
 
 export type AdditiveKey = (typeof ADDITIVE_KEYS)[number];
@@ -195,6 +209,11 @@ export function metricValue(id: MetricId, b: Bag, opts: MetricOptions = {}): num
       return costPer(b.spend, b.fbLeads);
     case "cp_purchase":
       return costPer(b.spend, b.purchases);
+    case "results":
+      return b.resultCount;
+    case "cost_per_result":
+      // Single-type spend over the results on those same days, as Ads Manager does.
+      return b.resultPricedCount > 0 && b.resultSpend > 0 ? b.resultSpend / b.resultPricedCount : null;
     case "hook_rate":
       // Same rule as `creative.ts` hookRate: no plays of any kind = not a video.
       if (b.video3sViews === 0 && b.videoPlays === 0) return null;

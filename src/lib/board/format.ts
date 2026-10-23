@@ -25,7 +25,11 @@ export function formatMetricValue(
     case "currency":
       return formatCurrency(v, currency, opts);
     case "count":
-      return formatNumber(v, opts);
+      // Counts are whole, except Google's conversions, which Google itself
+      // splits between ads — "3.75" must not be printed as "4".
+      return Number.isInteger(v)
+        ? formatNumber(v, opts)
+        : v.toLocaleString("en-US", { maximumFractionDigits: 2 });
     case "percent":
       // Two places below 10% (a 1.23% CTR), one above (a 34.5% book rate).
       return formatPercent(v, Math.abs(v) < 0.1 ? 2 : 1);

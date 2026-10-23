@@ -22,17 +22,25 @@ const SECTIONS = readFileSync(
 );
 
 /**
+ * Headline tiles the glossary leaves out. Revenue and ROAS have never been in
+ * it (it is capped, below); naming them keeps that a decision rather than an
+ * accident of where the parse stops.
+ */
+const NOT_IN_GLOSSARY = ["revenue", "roas"];
+
+/**
  * The KPI section's tiles, read from source as (label, metricKey) pairs.
  *
- * Slicing at `case "kpis"` and stopping at the next `case ` keeps this to the
- * headline row — other sections use `StatTile` too, and the glossary is
- * deliberately not a definition of every number in the app.
+ * Slicing from `case "kpis"` to the end of its grid keeps this to the headline
+ * row — other sections use `StatTile` too, and the glossary is deliberately not
+ * a definition of every number in the app.
  */
 function headlineTiles(): Array<{ label: string; metricKey: string }> {
   const start = SECTIONS.indexOf('case "kpis":');
   expect(start, 'sections.tsx no longer has a `case "kpis":`').toBeGreaterThan(-1);
-  const end = SECTIONS.indexOf("case ", start + 10);
-  const block = SECTIONS.slice(start, end === -1 ? undefined : end);
+  const end = SECTIONS.indexOf("</section>", start);
+  expect(end, "the headline grid no longer closes with </section>").toBeGreaterThan(start);
+  const block = SECTIONS.slice(start, end);
 
   return [...block.matchAll(/<StatTile\b[\s\S]*?\/>/g)].flatMap((m) => {
     const label = /label="([^"]+)"/.exec(m[0])?.[1];
@@ -46,6 +54,8 @@ describe("report glossary", () => {
     // Guards the regex itself: if this drops to zero the two tests below pass
     // vacuously and the glossary is unprotected.
     expect(headlineTiles().length).toBeGreaterThanOrEqual(6);
+    // And an exception for a tile that is gone would excuse nothing.
+    expect(headlineTiles().map((t) => t.metricKey)).toEqual(expect.arrayContaining(NOT_IN_GLOSSARY));
   });
 
   it("every listed key has a definition", () => {
@@ -73,7 +83,7 @@ describe("report glossary", () => {
      */
     const undefinedTiles = headlineTiles()
       .map((t) => t.metricKey)
-      .filter((k) => !REPORT_GLOSSARY.includes(k));
+      .filter((k) => !REPORT_GLOSSARY.includes(k) && !NOT_IN_GLOSSARY.includes(k));
 
     expect(
       undefinedTiles,

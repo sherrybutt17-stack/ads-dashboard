@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { DashboardData } from "@/lib/metrics/dashboard";
+import { metaResultType } from "@/lib/metrics/results";
 import { normalizeView } from "@/lib/report/view";
 import { buildDashboardSheets } from "./dashboard-tables";
 import { buildCsvSections } from "./csv";
@@ -28,7 +29,19 @@ const data = {
   range: { startKey: "2026-09-01", endKey: "2026-09-30", label: "Sep 1 – Sep 30" },
   current: period(100, 10, 1, null),
   previous: period(50, 5, 1, 400),
-  deltas: { spend: 1, new_lead: 1, cpLead: 0, revenue: -1, roas: null },
+  deltas: { spend: 1, new_lead: 1, cpLead: 0, revenue: -1, roas: null, results: 0.5, cpResult: -0.25 },
+  results: {
+    type: metaResultType("actions:offsite_conversion.fb_pixel_lead"),
+    count: 12,
+    costPer: 8.25,
+    previousCount: 8,
+    previousCostPer: 11,
+    spark: [],
+    othersNote: null,
+    notCollected: false,
+    mixedSpend: 0,
+  },
+  platform: "meta",
   funnel: [
     { stage: "new_lead", count: 10, conversionFromPrevious: null, droppedFromPrevious: null },
     { stage: "appointment_booked", count: 4, conversionFromPrevious: 0.4, droppedFromPrevious: 6 },
@@ -60,6 +73,15 @@ describe("buildDashboardSheets", () => {
     expect(kpis.table.rows[1][1]).toMatchObject({ value: null });
     expect(kpis.table.rows[1][3]).toMatchObject({ value: null });
     expect(kpis.table.rows[1][2]).toMatchObject({ value: 400 });
+  });
+
+  it("names the kind of result beside the platform's own count", () => {
+    const [, kpis] = sheetsFor({ sections: ["kpis"], kpis: ["results", "cpResult"] });
+    expect(kpis.table.rows.map((r) => r[0].value)).toEqual([
+      "Results (Website leads)",
+      "Cost per result (Website leads)",
+    ]);
+    expect(kpis.table.rows[0].slice(1, 4).map((c) => c.value)).toEqual([12, 8, 50]);
   });
 
   it("says which leads were counted, and which chosen sections are PDF-only", () => {

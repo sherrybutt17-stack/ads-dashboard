@@ -49,6 +49,9 @@ export const METRIC_IDS = [
   "post_engagement",
   "purchases",
   "cp_purchase",
+  // Each platform's own "Results" — what its Ads Manager counts.
+  "results",
+  "cost_per_result",
   // CRM, counted with the chosen platform's paid-lead rule.
   "leads",
   "contacted",
@@ -87,6 +90,8 @@ export const DIMENSION_IDS = [
   "region",
   "placement",
   "device",
+  // One row per kind of result — never added together.
+  "result_type",
 ] as const;
 
 export type DimensionId = (typeof DIMENSION_IDS)[number];
@@ -111,11 +116,13 @@ export type MetricFormat = "currency" | "count" | "percent" | "decimal" | "multi
  * - `crm`: funnel counts from the stage ledger.
  * - `revenue`: closed-won values.
  * - `reach`: one de-duplicated figure for the exact window.
+ * - `results`: each platform's own "Results", per type (`metrics/results.ts`).
  */
-export type MetricNeed = "ads" | "extras" | "adlevel" | "crm" | "revenue" | "reach";
+export type MetricNeed = "ads" | "extras" | "adlevel" | "crm" | "revenue" | "reach" | "results";
 
 export type MetricGroup =
   | "Spend and delivery"
+  | "Platform results"
   | "Clicks"
   | "Engagement"
   | "Video"
@@ -162,6 +169,16 @@ const CAMPAIGN_ONLY: readonly DimensionId[] = ["campaign"];
 const AD_ROWS: readonly DimensionId[] = ["campaign", "adset", "ad"];
 const DELIVERY_DIMS = { meta: META_EVERY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
 const CRM_DIMS = { meta: CAMPAIGN_ONLY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
+/**
+ * Meta reports results per campaign and per ad; Google's are one type, so a
+ * split by type would be a single bar. No creative or audience split: results
+ * are not stored that way.
+ */
+const RESULT_DIMS = {
+  meta: ["campaign", "adset", "ad", "result_type"],
+  google: CAMPAIGN_ONLY,
+  tiktok: ["campaign", "result_type"],
+} as const satisfies Partial<Record<AdPlatform, readonly DimensionId[]>>;
 
 function crmCount(id: MetricId, label: string, statKey: string): MetricDef {
   return {
@@ -341,6 +358,42 @@ export const METRICS: Record<MetricId, MetricDef> = {
     rankBy: "spend",
     needs: ["ads"],
   },
+  /*
+   * Ads Manager's own "Results". A result is whatever a campaign optimises for,
+   * so a widget counts ONE type — the range's main type, or the one it pins —
+   * and never adds two together (see `metrics/results.ts`). Additive within
+   * that type, so a pie of "Website leads by campaign" is honest; a pie by
+   * result type is refused in `checkWidget`.
+   */
+  results: {
+    id: "results",
+    label: "Results",
+    labels: { google: "Conversions" },
+    format: "count",
+    group: "Platform results",
+    statKey: "results",
+    statKeys: { google: "googleConversions" },
+    platforms: ALL,
+    additive: true,
+    series: ALL,
+    dims: RESULT_DIMS,
+    needs: ["results"],
+  },
+  cost_per_result: {
+    id: "cost_per_result",
+    label: "Cost per result",
+    labels: { google: "Cost per conversion" },
+    format: "currency",
+    group: "Platform results",
+    statKey: "cpResult",
+    statKeys: { google: "cpConversion" },
+    platforms: ALL,
+    additive: false,
+    series: ALL,
+    dims: RESULT_DIMS,
+    rankBy: "results",
+    needs: ["results"],
+  },
   reach: {
     id: "reach",
     label: "Reach",
@@ -501,6 +554,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
 
 export const METRIC_GROUPS: readonly MetricGroup[] = [
   "Spend and delivery",
+  "Platform results",
   "Clicks",
   "Engagement",
   "Video",
@@ -549,7 +603,7 @@ export interface DimensionDef {
   /** Plural noun for a table heading, "Performance by ad". */
   rowNoun: string;
   /** Where the split comes from — decides history and coverage notes. */
-  source: "campaign" | "ad_level" | "creative" | "breakdown";
+  source: "campaign" | "ad_level" | "creative" | "breakdown" | "results";
   /**
    * Segments read in a natural order (age bands, genders) rather than by size.
    * A pie of age bands sorted by value scrambles the one ordering a reader expects.
@@ -567,6 +621,7 @@ export const DIMENSIONS: Record<DimensionId, DimensionDef> = {
   region: { id: "region", label: "Region", rowNoun: "region", source: "breakdown", natural: false },
   placement: { id: "placement", label: "Placement", rowNoun: "placement", source: "breakdown", natural: false },
   device: { id: "device", label: "Device", rowNoun: "device", source: "breakdown", natural: false },
+  result_type: { id: "result_type", label: "Result type", rowNoun: "result type", source: "results", natural: false },
 };
 
 export function dimensionLabel(d: TableDimension): string {
@@ -674,6 +729,10 @@ const no = (reason: string): Check => ({ ok: false, reason });
  * the save path refuses them, and the aggregator never has to guess.
  */
 export function checkWidget(q: WidgetQuery): Check {
+  if ("resultType" in q && q.resultType !== undefined) {
+    const reads = widgetMetrics(q).some((m) => METRICS[m].needs.includes("results"));
+    if (!reads) return no("Only a results widget can be set to one result type.");
+  }
   switch (q.kind) {
     case "kpi": {
       if (!metricSupports(q.metric, q.platform)) {
@@ -707,6 +766,9 @@ export function checkWidget(q: WidgetQuery): Check {
         return no(
           `${METRICS[q.metric].label} is a rate or a cost, so its parts do not add up to a whole. Use a bar chart.`,
         );
+      }
+      if ((q.form === "pie" || q.form === "donut") && q.dimension === "result_type") {
+        return no("Different kinds of result do not add up to a whole. Use a bar chart.");
       }
       if (q.topN < TOP_N.min || q.topN > TOP_N.max) {
         return no(`Show between ${TOP_N.min} and ${TOP_N.max} items.`);
@@ -757,11 +819,15 @@ export function defaultTitle(q: WidgetQuery): string {
     case "series":
       return `${metricLabel(q.metric, q.platform)} over time`;
     case "category":
-      return `${metricLabel(q.metric, q.platform)} by ${DIMENSIONS[q.dimension].label.toLowerCase()}`;
+      return q.dimension === "result_type"
+        ? `${metricLabel(q.metric, q.platform)} by type`
+        : `${metricLabel(q.metric, q.platform)} by ${DIMENSIONS[q.dimension].label.toLowerCase()}`;
     case "table":
       return q.dimension === "date"
         ? "Day by day"
-        : `Performance by ${DIMENSIONS[q.dimension].rowNoun}`;
+        : q.metrics.includes("results")
+          ? `${metricLabel("results", q.platform)} by ${DIMENSIONS[q.dimension].rowNoun}`
+          : `Performance by ${DIMENSIONS[q.dimension].rowNoun}`;
     case "funnel":
       return "Pipeline funnel";
     case "text":
@@ -822,6 +888,8 @@ export const PRESETS: readonly Preset[] = [
   { id: "comments", label: "Post comments", description: "Comments on the ads", query: kpi("meta", "comments") },
   { id: "lpv", label: "Landing page views", description: "Clicks that loaded the page", query: kpi("meta", "landing_page_views") },
   { id: "purchases", label: "Website purchases", description: "Purchases tracked by the pixel", query: kpi("meta", "purchases") },
+  { id: "results", label: "Results", description: "What Ads Manager counts as results, with their type", query: kpi("meta", "results") },
+  { id: "cost_per_result", label: "Cost per result", description: "Spend divided by results of that type", query: kpi("meta", "cost_per_result") },
   { id: "leads", label: "Leads", description: "New paid leads in the CRM", query: kpi("meta", "leads") },
   { id: "cp_lead", label: "Cost per lead", description: "Spend divided by CRM leads", query: kpi("meta", "cp_lead") },
   { id: "appointments", label: "Appointments", description: "Leads that booked", query: kpi("meta", "appointments") },
@@ -839,6 +907,19 @@ export const PRESETS: readonly Preset[] = [
     label: "Leads over time",
     description: "Daily CRM leads",
     query: { kind: "series", platform: "meta", metric: "leads", form: "column", compare: false },
+  },
+  {
+    id: "results_trend",
+    label: "Results over time",
+    description: "Daily results of the main type",
+    query: { kind: "series", platform: "meta", metric: "results", form: "column", compare: false },
+  },
+  {
+    id: "results_by_type",
+    label: "Results by type",
+    description: "Every kind of result in the range, side by side",
+    query: { kind: "category", platform: "meta", metric: "results", dimension: "result_type", form: "hbar", topN: 8 },
+    size: { w: 6, h: 7 },
   },
   {
     id: "impressions_trend",
@@ -914,6 +995,19 @@ export const PRESETS: readonly Preset[] = [
     },
   },
   {
+    id: "results_table",
+    label: "Results by campaign",
+    description: "Spend, results and cost per result per campaign",
+    query: {
+      kind: "table",
+      platform: "meta",
+      dimension: "campaign",
+      metrics: ["spend", "results", "cost_per_result", "clicks", "ctr"],
+      sort: "spend",
+      topN: 10,
+    },
+  },
+  {
     id: "daily_table",
     label: "Day by day",
     description: "One row per day",
@@ -969,21 +1063,27 @@ export function starterBoard(ctx: StarterContext): BoardWidget[] {
     y += h;
   };
 
+  /*
+   * Spend and the platform's own results first: results are what the agency
+   * is judged on in Ads Manager, and for a client without a CRM they are the
+   * only outcome there is. Two strips, not three — a third pushes the audience
+   * charts off the first printed page.
+   */
   row(3, [
     // The logo widget falls back to the client's name in a card until a logo
     // is uploaded, so the corner is never an empty slot.
     { id: "s-logo", kind: "logo", x: 0, w: 3 },
     { id: "s-spend", kind: "kpi", platform: lead, metric: "spend", x: 3, w: 3 },
-    { id: "s-clicks", kind: "kpi", platform: lead, metric: "clicks", x: 6, w: 3 },
-    { id: "s-cpc", kind: "kpi", platform: lead, metric: "cpc", x: 9, w: 3 },
+    { id: "s-results", kind: "kpi", platform: lead, metric: "results", x: 6, w: 3 },
+    { id: "s-cpresult", kind: "kpi", platform: lead, metric: "cost_per_result", x: 9, w: 3 },
   ]);
 
   if (lead === "meta") {
     row(3, [
       { id: "s-impressions", kind: "kpi", platform: "meta", metric: "impressions", x: 0, w: 3 },
       { id: "s-reach", kind: "kpi", platform: "meta", metric: "reach", x: 3, w: 3 },
-      { id: "s-reactions", kind: "kpi", platform: "meta", metric: "post_reactions", x: 6, w: 3 },
-      { id: "s-comments", kind: "kpi", platform: "meta", metric: "comments", x: 9, w: 3 },
+      { id: "s-clicks", kind: "kpi", platform: "meta", metric: "clicks", x: 6, w: 3 },
+      { id: "s-cpc", kind: "kpi", platform: "meta", metric: "cpc", x: 9, w: 3 },
     ]);
     row(7, [
       { id: "s-gender", kind: "category", platform: "meta", metric: "clicks", dimension: "gender", form: "donut", topN: 6, x: 0, w: 6 },
@@ -1004,9 +1104,10 @@ export function starterBoard(ctx: StarterContext): BoardWidget[] {
     ]);
   } else {
     row(3, [
-      { id: "s-impressions", kind: "kpi", platform: lead, metric: "impressions", x: 0, w: 4 },
-      { id: "s-ctr", kind: "kpi", platform: lead, metric: "ctr", x: 4, w: 4 },
-      { id: "s-cpm", kind: "kpi", platform: lead, metric: "cpm", x: 8, w: 4 },
+      { id: "s-impressions", kind: "kpi", platform: lead, metric: "impressions", x: 0, w: 3 },
+      { id: "s-clicks", kind: "kpi", platform: lead, metric: "clicks", x: 3, w: 3 },
+      { id: "s-ctr", kind: "kpi", platform: lead, metric: "ctr", x: 6, w: 3 },
+      { id: "s-cpc", kind: "kpi", platform: lead, metric: "cpc", x: 9, w: 3 },
     ]);
     row(8, [
       {
@@ -1038,8 +1139,18 @@ export function starterBoard(ctx: StarterContext): BoardWidget[] {
     row(3, [
       { id: "s-g-spend", kind: "kpi", platform: "google", metric: "spend", x: 0, w: 3 },
       { id: "s-g-clicks", kind: "kpi", platform: "google", metric: "clicks", x: 3, w: 3 },
-      { id: "s-g-ctr", kind: "kpi", platform: "google", metric: "ctr", x: 6, w: 3 },
-      { id: "s-g-cpc", kind: "kpi", platform: "google", metric: "cpc", x: 9, w: 3 },
+      { id: "s-g-results", kind: "kpi", platform: "google", metric: "results", x: 6, w: 3 },
+      { id: "s-g-cpresult", kind: "kpi", platform: "google", metric: "cost_per_result", x: 9, w: 3 },
+    ]);
+  }
+
+  if (lead !== "tiktok" && ctx.hasTiktok) {
+    row(1, [{ id: "s-tiktok-heading", kind: "text", text: "TikTok Ads", size: "heading", x: 0, w: 12 }]);
+    row(3, [
+      { id: "s-t-spend", kind: "kpi", platform: "tiktok", metric: "spend", x: 0, w: 3 },
+      { id: "s-t-clicks", kind: "kpi", platform: "tiktok", metric: "clicks", x: 3, w: 3 },
+      { id: "s-t-results", kind: "kpi", platform: "tiktok", metric: "results", x: 6, w: 3 },
+      { id: "s-t-cpresult", kind: "kpi", platform: "tiktok", metric: "cost_per_result", x: 9, w: 3 },
     ]);
   }
 

@@ -247,6 +247,33 @@ async function syncAccount(
     throw err;
   }
 
+  /*
+   * Results, from the ad group report — TikTok reports `result: 0` at campaign
+   * level (see `getAdgroupResults`). Best-effort: a failure here leaves each
+   * row's stored results as they were (the upsert merges `raw`), and spend is
+   * written regardless.
+   */
+  let results: Map<string, { value: number; objective: string | null }> | null = null;
+  try {
+    results = new Map();
+    for (const r of await tiktok.getAdgroupResults(account.advertiserId, since, until)) {
+      const day = dayOf(r.statTimeDay);
+      if (!day) continue;
+      const k = `${r.campaignId}|${day}`;
+      const prev = results.get(k);
+      results.set(k, {
+        value: (prev?.value ?? 0) + r.result,
+        objective: prev?.objective ?? r.objective,
+      });
+    }
+  } catch (err) {
+    results = null;
+    console.warn(
+      `[tiktok] results report failed for ${account.advertiserId}; spend synced without them:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   let written = 0;
   for (const row of rows) {
     const date = dayOf(row.dimensions.stat_time_day);
@@ -256,6 +283,17 @@ async function syncAccount(
 
     const campaignId = row.dimensions.campaign_id ?? "";
     const name = row.metrics.campaign_name;
+    /*
+     * A campaign with spend but no ad group rows that day had no results — 0,
+     * not unknown — once the results report itself succeeded. The objective
+     * falls back to the campaign row's own, so the day keeps its type.
+     */
+    const objective =
+      typeof row.metrics.objective_type === "string" ? row.metrics.objective_type : null;
+    const found = results?.get(`${campaignId}|${date}`);
+    const raw = results
+      ? { ...row, results: { value: found?.value ?? 0, objective: found?.objective ?? objective } }
+      : row;
 
     await db
       .insert(tiktokDailyMetrics)
@@ -270,7 +308,7 @@ async function syncAccount(
         spend: String(num(row.metrics.spend)),
         conversions: String(num(row.metrics.conversion)),
         currency: account.currency,
-        raw: row,
+        raw,
         syncedAt: new Date(),
       })
       .onConflictDoUpdate({
@@ -288,7 +326,11 @@ async function syncAccount(
           clicks: num(row.metrics.clicks),
           spend: String(num(row.metrics.spend)),
           conversions: String(num(row.metrics.conversion)),
-          raw: row,
+          /*
+           * Merged, not replaced: a run whose results report failed must not
+           * erase the results an earlier run stored for the same day.
+           */
+          raw: sql`COALESCE(${tiktokDailyMetrics.raw}, '{}'::jsonb) || excluded.raw`,
           syncedAt: new Date(),
         },
       });

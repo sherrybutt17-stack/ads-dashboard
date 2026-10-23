@@ -89,13 +89,19 @@ function aboutTable(
 }
 
 function kpiTable(data: DashboardData, kpis: readonly KpiId[]): CsvTable {
-  const { current, previous, deltas } = data;
+  const { current, previous, deltas, results } = data;
   const missing = (p: typeof current) =>
     (p.revenue?.wonOpps ?? 0) > 0 && (p.revenue?.wonWithValue ?? 0) === 0;
-  const pick: Record<KpiId, (p: typeof current) => Cell> = {
+  // The platform's results are one type for both periods (see `summarizeResults`).
+  const counted = results.type !== null;
+  const decimals = results.type?.decimals ?? 0;
+  const pick: Record<KpiId, (p: typeof current, which: "cur" | "prev") => Cell> = {
     spend: (p) => money(p.ads.spend),
     new_lead: (p) => num(p.funnel.new_lead),
     cpLead: (p) => money(p.derived.cpLead),
+    results: (_p, which) =>
+      num(!counted ? null : which === "cur" ? results.count : results.previousCount, decimals),
+    cpResult: (_p, which) => money(which === "cur" ? results.costPer : results.previousCostPer),
     appointment_booked: (p) => num(p.funnel.appointment_booked),
     showed: (p) => num(p.funnel.showed),
     closed_won: (p) => num(p.funnel.closed_won),
@@ -103,12 +109,17 @@ function kpiTable(data: DashboardData, kpis: readonly KpiId[]): CsvTable {
     revenue: (p) => money(missing(p) ? null : (p.revenue?.revenue ?? null)),
     roas: (p) => num(p.derived.roas, 2),
   };
+  // "Results (Website leads)": a count needs its kind beside it in a sheet too.
+  const label = (k: (typeof KPI_OPTIONS)[number]) =>
+    (k.id === "results" || k.id === "cpResult") && results.type && data.platform !== "google"
+      ? `${k.label} (${results.type.label})`
+      : k.label;
   return {
     headers: ["Metric", "This period", "Previous period", "Change %"],
     rows: KPI_OPTIONS.filter((k) => kpis.includes(k.id)).map((k) => [
-      text(k.label),
-      pick[k.id](current),
-      pick[k.id](previous),
+      text(label(k)),
+      pick[k.id](current, "cur"),
+      pick[k.id](previous, "prev"),
       percent(k.id === "revenue" && missing(current) ? null : (deltas[k.id] ?? null)),
     ]),
   };

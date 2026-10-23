@@ -35,13 +35,21 @@ const Platform = z.enum(AD_PLATFORMS);
 const Metric = z.enum(METRIC_IDS);
 const Dimension = z.enum(DIMENSION_IDS);
 
-const kpiShape = { kind: z.literal("kpi"), platform: Platform, metric: Metric };
+/**
+ * A pinned result type — a key from `metrics/results.ts` (an action type such as
+ * "offsite_conversion.fb_pixel_lead", or "tiktok:LEAD_GENERATION"). Optional,
+ * so every board saved before results existed still validates.
+ */
+const ResultType = z.string().trim().min(1).max(120).regex(/^[A-Za-z0-9_.:-]+$/).optional();
+
+const kpiShape = { kind: z.literal("kpi"), platform: Platform, metric: Metric, resultType: ResultType };
 const seriesShape = {
   kind: z.literal("series"),
   platform: Platform,
   metric: Metric,
   form: z.enum(SERIES_FORMS),
   compare: z.boolean(),
+  resultType: ResultType,
 };
 const categoryShape = {
   kind: z.literal("category"),
@@ -50,6 +58,7 @@ const categoryShape = {
   dimension: Dimension,
   form: z.enum(CATEGORY_FORMS),
   topN: z.number().int().min(TOP_N.min).max(TOP_N.max),
+  resultType: ResultType,
 };
 const tableShape = {
   kind: z.literal("table"),
@@ -58,6 +67,7 @@ const tableShape = {
   metrics: z.array(Metric).min(TABLE_COLUMNS.min).max(TABLE_COLUMNS.max),
   sort: Metric,
   topN: z.number().int().min(TABLE_ROWS.min).max(TABLE_ROWS.max),
+  resultType: ResultType,
 };
 const funnelShape = { kind: z.literal("funnel"), platform: Platform };
 const textShape = {

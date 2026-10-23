@@ -61,6 +61,8 @@ describe("every stat explains itself", () => {
       "landing_page_views", "video_3s_views", "hook_rate", "thruplays",
       "post_reactions", "comments", "shares", "saves", "page_likes", "post_engagement",
       "purchases", "cp_purchase",
+      // Each platform's own results: counts and spend, no lead details.
+      "results", "cost_per_result",
       "leads", "contacted", "appointments", "showed", "no_show", "won", "lost",
       "cp_lead", "cp_appt", "cp_show", "cp_won",
       "book_pct", "show_pct", "close_pct", "optin_pct",
@@ -176,5 +178,64 @@ describe("presets and the starter board", () => {
   it("adds a Google row only when Google is connected alongside Meta", () => {
     expect(starterBoard(STARTERS[0]).some((w) => "platform" in w && w.platform === "google")).toBe(false);
     expect(starterBoard(STARTERS[1]).some((w) => "platform" in w && w.platform === "google")).toBe(true);
+  });
+});
+
+describe("platform results", () => {
+  it("are on every platform, in each platform's own words", () => {
+    for (const platform of AD_PLATFORMS) {
+      expect(checkWidget({ kind: "kpi", platform, metric: "results" }).ok).toBe(true);
+      expect(checkWidget({ kind: "kpi", platform, metric: "cost_per_result" }).ok).toBe(true);
+    }
+    expect(METRICS.results.labels?.google).toBe("Conversions");
+    expect(METRICS.cost_per_result.labels?.google).toBe("Cost per conversion");
+  });
+
+  it("🔴 never adds two kinds of result into one whole", () => {
+    const byType = (form: "pie" | "donut" | "hbar", platform: "meta" | "tiktok" = "meta") =>
+      checkWidget({ kind: "category", platform, metric: "results", dimension: "result_type", form, topN: 6 });
+    expect(byType("pie").ok).toBe(false);
+    expect(byType("donut", "tiktok").ok).toBe(false);
+    expect(byType("hbar").ok).toBe(true);
+    // Google's results are one type, so there is nothing to split.
+    expect(
+      checkWidget({ kind: "category", platform: "google", metric: "results", dimension: "result_type", form: "hbar", topN: 6 }).ok,
+    ).toBe(false);
+    // And no other stat can be split by result type.
+    expect(
+      checkWidget({ kind: "category", platform: "meta", metric: "spend", dimension: "result_type", form: "hbar", topN: 6 }).ok,
+    ).toBe(false);
+  });
+
+  it("ranks cost per result by results, never draws it as a pie", () => {
+    expect(METRICS.cost_per_result.additive).toBe(false);
+    expect(METRICS.cost_per_result.rankBy).toBe("results");
+  });
+
+  it("only lets a results widget pin a result type", () => {
+    expect(
+      checkWidget({ kind: "kpi", platform: "meta", metric: "results", resultType: "offsite_conversion.fb_pixel_lead" }).ok,
+    ).toBe(true);
+    expect(checkWidget({ kind: "kpi", platform: "meta", metric: "spend", resultType: "lead" }).ok).toBe(false);
+    expect(
+      WidgetQuerySchema.safeParse({ kind: "kpi", platform: "meta", metric: "results", resultType: "x y" }).success,
+    ).toBe(false);
+  });
+
+  it("title a results table apart from the campaign performance one", () => {
+    const table = (platform: "meta" | "google", metrics: Array<"spend" | "results" | "clicks">) =>
+      defaultTitle({ kind: "table", platform, dimension: "campaign", metrics, sort: "spend", topN: 10 });
+    expect(table("meta", ["spend", "results"])).toBe("Results by campaign");
+    expect(table("google", ["spend", "results"])).toBe("Conversions by campaign");
+    expect(table("meta", ["spend", "clicks"])).toBe("Performance by campaign");
+  });
+
+  it("are on the starter board for every connected platform, with or without a CRM", () => {
+    for (const hasCrm of [true, false]) {
+      const board = starterBoard({ hasMeta: true, hasGoogle: true, hasTiktok: true, hasCrm, hasLogo: false, clientName: "Acme" });
+      const results = board.filter((w) => w.kind === "kpi" && w.metric === "results").map((w) => (w as { platform: string }).platform);
+      expect(results.sort()).toEqual(["google", "meta", "tiktok"]);
+      for (const w of board) expect(BoardWidgetSchema.safeParse(w).success, w.id).toBe(true);
+    }
   });
 });

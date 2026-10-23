@@ -15,6 +15,17 @@ const tokenId = customAlphabet(
   32,
 );
 
+/**
+ * Whether this client has a CRM wired up — one test for every screen.
+ *
+ * A location id means GoHighLevel was installed; a first webhook means it has
+ * spoken. Either counts: a quiet install is still a CRM, and dropping its
+ * appointment and sales tiles would read as data loss.
+ */
+export function crmConnected(client: Pick<Client, "ghlLocationId" | "firstWebhookAt">): boolean {
+  return Boolean(client.ghlLocationId || client.firstWebhookAt);
+}
+
 export function generateWebhookToken(): string {
   return tokenId();
 }

@@ -157,7 +157,12 @@ async function syncAccountGoogleMetrics(
           googleDailyMetrics.date,
           googleDailyMetrics.googleCampaignId,
         ],
-        set: values,
+        // Merged, not replaced, so extra figures stored in `raw` by a separate,
+        // best-effort query survive a run where that query failed.
+        set: {
+          ...values,
+          raw: sql`COALESCE(${googleDailyMetrics.raw}, '{}'::jsonb) || excluded.raw`,
+        },
       });
     written++;
   }

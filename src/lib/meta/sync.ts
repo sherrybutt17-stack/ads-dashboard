@@ -326,7 +326,15 @@ async function syncAccountMetrics(
           fbDailyMetrics.metaAdsetId,
           fbDailyMetrics.metaAdId,
         ],
-        set: values,
+        /*
+         * `raw` is merged, not replaced. If Meta ever refuses the optional
+         * results fields, the retry stores a row without them — and that must
+         * not erase the results an earlier run stored for the same day.
+         */
+        set: {
+          ...values,
+          raw: sql`COALESCE(${fbDailyMetrics.raw}, '{}'::jsonb) || excluded.raw`,
+        },
       });
     written++;
   }

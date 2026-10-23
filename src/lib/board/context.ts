@@ -1,3 +1,4 @@
+import { crmConnected } from "@/lib/clients";
 import type { Client } from "@/db/schema";
 import type { ClientBranding } from "@/lib/branding";
 import { getClientBranding } from "@/lib/branding-store";
@@ -36,8 +37,7 @@ export async function loadBoardContext(client: Client): Promise<BoardContext> {
     meta: meta.length > 0,
     google: google.accounts.length > 0,
     tiktok: tiktok.accounts.length > 0,
-    // A location id means the CRM was wired up; a first webhook means it spoke.
-    crm: Boolean(client.ghlLocationId || client.firstWebhookAt),
+    crm: crmConnected(client),
   };
   const brandName = branding.displayName ?? client.name;
   return {

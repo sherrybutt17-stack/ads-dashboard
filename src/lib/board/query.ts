@@ -9,9 +9,16 @@ import type { BoardWidget, WidgetQuery } from "./types";
 export function widgetQueryOf(w: BoardWidget): WidgetQuery {
   switch (w.kind) {
     case "kpi":
-      return { kind: "kpi", platform: w.platform, metric: w.metric };
+      return { kind: "kpi", platform: w.platform, metric: w.metric, ...pinned(w) };
     case "series":
-      return { kind: "series", platform: w.platform, metric: w.metric, form: w.form, compare: w.compare };
+      return {
+        kind: "series",
+        platform: w.platform,
+        metric: w.metric,
+        form: w.form,
+        compare: w.compare,
+        ...pinned(w),
+      };
     case "category":
       return {
         kind: "category",
@@ -20,6 +27,7 @@ export function widgetQueryOf(w: BoardWidget): WidgetQuery {
         dimension: w.dimension,
         form: w.form,
         topN: w.topN,
+        ...pinned(w),
       };
     case "table":
       return {
@@ -29,6 +37,7 @@ export function widgetQueryOf(w: BoardWidget): WidgetQuery {
         metrics: [...w.metrics],
         sort: w.sort,
         topN: w.topN,
+        ...pinned(w),
       };
     case "funnel":
       return { kind: "funnel", platform: w.platform };
@@ -37,6 +46,14 @@ export function widgetQueryOf(w: BoardWidget): WidgetQuery {
     case "logo":
       return { kind: "logo" };
   }
+}
+
+/**
+ * A pinned result type, copied only when set — so a widget without one keeps
+ * exactly the query (and cache key, and data URL) it had before results existed.
+ */
+function pinned(w: { resultType?: string }): { resultType?: string } {
+  return w.resultType ? { resultType: w.resultType } : {};
 }
 
 /**

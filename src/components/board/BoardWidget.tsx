@@ -145,15 +145,18 @@ export function BoardWidget({
       );
     }
     const tileFormat = statTileFormat(m.format);
+    // A fractional count (Google's conversions) prints as text; the count-up
+    // animation would round it on the way.
+    const animate = Boolean(tileFormat) && !printed && (m.format !== "count" || Number.isInteger(live.value ?? 0));
     return (
       <StatTile
         className="h-full"
         compact
         // Reach is asked of Meta for this exact range only; it has no previous.
         comparable={query.metric !== "reach" && query.metric !== "frequency"}
-        label={tagged}
+        label={live.unit ? `${tagged} · ${live.unit}` : tagged}
         value={formatMetricValue(m.format, live.value, live.currency)}
-        numeric={tileFormat && !printed ? live.value : undefined}
+        numeric={animate ? live.value : undefined}
         format={tileFormat}
         currency={live.currency}
         metricKey={statKey}

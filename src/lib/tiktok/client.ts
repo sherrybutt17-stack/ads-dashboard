@@ -105,8 +105,34 @@ interface TiktokAdvertiserInfoRow {
 }
 
 export interface TiktokInsightRow {
-  dimensions: { stat_time_day?: string; campaign_id?: string };
+  dimensions: { stat_time_day?: string; campaign_id?: string; adgroup_id?: string };
   metrics: Record<string, string | number | null>;
+}
+
+/**
+ * The campaign objective, asked for alongside spend because it names what a
+ * TikTok "result" is ("LEAD_GENERATION" → leads). A report attribute, like
+ * `campaign_name`. Optional: refused, the request is retried without it.
+ */
+const OBJECTIVE_METRIC = "objective_type";
+
+/**
+ * TikTok's 40002 lists the fields it would not accept ("Invalid metric fields:
+ * ['objective_type']"). Only a refusal naming one of OUR optional fields is
+ * retried; anything else is a real failure.
+ */
+export function isOptionalMetricRefusal(err: unknown, fields: readonly string[]): boolean {
+  if (!(err instanceof TiktokApiError) || err.code !== 40002) return false;
+  return fields.some((f) => err.message.includes(f));
+}
+
+/** One ad group's results on one day, for summing up to its campaign. */
+export interface TiktokAdgroupResult {
+  campaignId: string;
+  /** "YYYY-MM-DD 00:00:00", as the report sends it. */
+  statTimeDay: string;
+  result: number;
+  objective: string | null;
 }
 
 interface Envelope<T> {
@@ -282,6 +308,21 @@ export class TiktokClient {
     startKey: string,
     endKey: string,
   ): Promise<TiktokInsightRow[]> {
+    try {
+      return await this.dailyInsights(advertiserId, startKey, endKey, true);
+    } catch (err) {
+      if (!isOptionalMetricRefusal(err, [OBJECTIVE_METRIC])) throw err;
+      console.warn("[tiktok] report refused objective_type; retrying without it:", (err as Error).message);
+      return this.dailyInsights(advertiserId, startKey, endKey, false);
+    }
+  }
+
+  private async dailyInsights(
+    advertiserId: string,
+    startKey: string,
+    endKey: string,
+    withObjective: boolean,
+  ): Promise<TiktokInsightRow[]> {
     const advertiser = normalizeAdvertiserId(advertiserId);
     const rows: TiktokInsightRow[] = [];
     let page = 1;
@@ -303,6 +344,7 @@ export class TiktokClient {
           "impressions",
           "clicks",
           "conversion",
+          ...(withObjective ? [OBJECTIVE_METRIC] : []),
         ]),
         start_date: startKey,
         end_date: endKey,
@@ -329,6 +371,75 @@ export class TiktokClient {
       );
     }
     return rows;
+  }
+
+  /**
+   * Each ad group's "Results" per day, with its campaign.
+   *
+   * ── 🔴 Why ad groups, not campaigns ──────────────────────────────────
+   *
+   * TikTok computes a result against the ad group's optimisation goal, and its
+   * report returns `result: 0` at campaign level — verified 24 Oct 2026 on a
+   * lead campaign with 91 form leads: 0 at campaign level, 91 at ad group
+   * level. Summed per campaign-day by the sync, this is the number TikTok Ads
+   * Manager shows as Results.
+   *
+   * Best-effort by design: the sync catches any failure here, and spend — which
+   * comes from `getDailyInsights` — never depends on it. Paginated with the same
+   * refuse-to-truncate rule, because a partial set would understate results.
+   */
+  async getAdgroupResults(
+    advertiserId: string,
+    startKey: string,
+    endKey: string,
+  ): Promise<TiktokAdgroupResult[]> {
+    const advertiser = normalizeAdvertiserId(advertiserId);
+    const out: TiktokAdgroupResult[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const data = await this.request<{
+        list?: TiktokInsightRow[];
+        page_info?: { total_page?: number };
+      }>("/report/integrated/get/", {
+        advertiser_id: advertiser,
+        report_type: "BASIC",
+        service_type: "AUCTION",
+        data_level: "AUCTION_ADGROUP",
+        dimensions: JSON.stringify(["adgroup_id", "stat_time_day"]),
+        metrics: JSON.stringify(["campaign_id", "result", OBJECTIVE_METRIC]),
+        start_date: startKey,
+        end_date: endKey,
+        page,
+        page_size: PAGE_SIZE,
+      });
+
+      for (const row of data.list ?? []) {
+        const campaignId = row.metrics.campaign_id;
+        const day = row.dimensions.stat_time_day;
+        if (campaignId === null || campaignId === undefined || !day) continue;
+        const result = Number(row.metrics.result);
+        const objective = row.metrics[OBJECTIVE_METRIC];
+        out.push({
+          campaignId: String(campaignId),
+          statTimeDay: day,
+          result: Number.isFinite(result) ? result : 0,
+          objective: typeof objective === "string" && objective ? objective : null,
+        });
+      }
+      totalPages = Number(data.page_info?.total_page) || 1;
+      page++;
+    } while (page <= totalPages && page <= MAX_PAGES);
+
+    if (totalPages > MAX_PAGES) {
+      throw new TiktokApiError(
+        `TikTok ad group report for ${advertiser} spans ${totalPages} pages (cap ${MAX_PAGES}); ` +
+          `refusing to report partial results`,
+        -1,
+      );
+    }
+    return out;
   }
 }
 

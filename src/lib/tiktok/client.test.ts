@@ -300,3 +300,57 @@ describe("🔴 paginated reports", () => {
     ).rejects.toThrow(/refusing to report partial spend/);
   });
 });
+
+describe("results fields", () => {
+  const ok = (list: unknown[] = []) =>
+    envelope({ code: 0, data: { list, page_info: { total_page: 1 } } });
+
+  it("asks for the campaign objective alongside spend", async () => {
+    const spy = stubFetch(async () => ok());
+    await client().getDailyInsights("7012345678901234567", "2026-07-01", "2026-07-02");
+    const metrics = JSON.parse(new URL(String(spy.mock.calls[0][0])).searchParams.get("metrics")!);
+    expect(metrics).toContain("objective_type");
+    expect(metrics).toContain("spend");
+  });
+
+  it("🔴 retries without the objective when TikTok refuses it — spend never depends on it", async () => {
+    const spy = stubFetch(async (url) => {
+      const metrics = new URL(String(url)).searchParams.get("metrics") ?? "";
+      return metrics.includes("objective_type")
+        ? envelope({ code: 40002, message: "Invalid metric fields: ['objective_type']." })
+        : ok([{ dimensions: { campaign_id: "c", stat_time_day: "2026-07-01 00:00:00" }, metrics: { spend: "5" } }]);
+    });
+    const rows = await client().getDailyInsights("7012345678901234567", "2026-07-01", "2026-07-02");
+    expect(rows).toHaveLength(1);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry any other refusal", async () => {
+    const spy = stubFetch(async () => envelope({ code: 40002, message: "Invalid metric fields: ['spend']." }));
+    await expect(
+      client().getDailyInsights("7012345678901234567", "2026-07-01", "2026-07-02"),
+    ).rejects.toBeInstanceOf(TiktokApiError);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads results at ad group level, with each ad group's campaign", async () => {
+    const spy = stubFetch(async () =>
+      ok([
+        {
+          dimensions: { adgroup_id: "ag1", stat_time_day: "2026-07-01 00:00:00" },
+          metrics: { campaign_id: "c1", result: "48", objective_type: "LEAD_GENERATION" },
+        },
+        { dimensions: { adgroup_id: "ag2", stat_time_day: "2026-07-01 00:00:00" }, metrics: { result: "3" } },
+      ]),
+    );
+    const rows = await client().getAdgroupResults("7012345678901234567", "2026-07-01", "2026-07-02");
+    const params = new URL(String(spy.mock.calls[0][0])).searchParams;
+    expect(params.get("data_level")).toBe("AUCTION_ADGROUP");
+    expect(JSON.parse(params.get("dimensions")!)).toEqual(["adgroup_id", "stat_time_day"]);
+    expect(JSON.parse(params.get("metrics")!)).toEqual(["campaign_id", "result", "objective_type"]);
+    // A row with no campaign cannot be placed, so it is dropped rather than guessed.
+    expect(rows).toEqual([
+      { campaignId: "c1", statTimeDay: "2026-07-01 00:00:00", result: 48, objective: "LEAD_GENERATION" },
+    ]);
+  });
+});
