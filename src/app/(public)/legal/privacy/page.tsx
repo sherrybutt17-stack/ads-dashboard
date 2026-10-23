@@ -41,7 +41,8 @@ export default function PrivacyPage() {
         Aggregate figures only — never a list of the people who saw an ad.
       </p>
       <p>
-        <strong>CRM data.</strong> From the client&rsquo;s own GoHighLevel
+        <strong>CRM data.</strong>{" "}
+        From the client&rsquo;s own GoHighLevel
         account: enquiries and their progress through the sales pipeline. This
         includes contact details — name, email address and telephone number —
         because the client&rsquo;s own staff use the same records to follow up.
@@ -128,14 +129,16 @@ export default function PrivacyPage() {
         — and protect it as follows.
       </p>
       <p>
-        <strong>Encryption in transit.</strong> The dashboard is served only
+        <strong>Encryption in transit.</strong>{" "}
+        The dashboard is served only
         over HTTPS (TLS): plain-HTTP requests are redirected, and browsers are
         told to use HTTPS only (HSTS). The application&rsquo;s connections to
         its database and to Google, Facebook, TikTok and GoHighLevel are
         encrypted with TLS as well.
       </p>
       <p>
-        <strong>Encryption at rest.</strong> The database is encrypted at rest
+        <strong>Encryption at rest.</strong>{" "}
+        The database is encrypted at rest
         with AES-256 by our database provider. In addition, every access and
         refresh token we hold for an advertising or CRM account — Google refresh
         tokens included — is encrypted by the application with AES-256-GCM
@@ -144,7 +147,8 @@ export default function PrivacyPage() {
         only as scrypt hashes and cannot be recovered, even by us.
       </p>
       <p>
-        <strong>Access control.</strong> The dashboard and its data require a
+        <strong>Access control.</strong>{" "}
+        The dashboard and its data require a
         signed-in account, and every request is checked on the server against
         that account&rsquo;s role: a client sees only their own dashboards, and
         an agency only its own clients. Sign-in sessions use secure, HTTP-only

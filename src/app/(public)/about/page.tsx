@@ -46,7 +46,8 @@ export default function AboutPage() {
       <H2>What we ask Google for, and why</H2>
       <p>
         When a client connects their Google Ads account, we request a single
-        scope — <code>https://www.googleapis.com/auth/adwords</code> — and use it
+        scope — <code>https://www.googleapis.com/auth/adwords</code>{" "}
+        — and use it
         for exactly one thing: reading daily campaign performance (impressions,
         clicks, cost and conversions) so it can be reported alongside the
         client&rsquo;s pipeline.

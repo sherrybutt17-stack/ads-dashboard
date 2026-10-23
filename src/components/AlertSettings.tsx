@@ -216,7 +216,8 @@ export function AlertSettings({ clientId, initial }: Props) {
         budget warning appears in the same channel.
       */}
       <p className="mt-3 text-[11.5px] leading-relaxed" style={{ color: "var(--text-muted)" }}>
-        This destination also receives <strong>budget pacing</strong> warnings —
+        This destination also receives <strong>budget pacing</strong>{" "}
+        warnings —
         a client projected to finish the month materially under or over the
         budget on their setup page, or one whose budget is spent with days still
         to run. Those are capped at one a week per direction and only go out

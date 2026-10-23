@@ -205,7 +205,8 @@ export function ChannelMixPanel({
                 The ad platform reports{" "}
                 <span className="tnum">{formatNumber(trust.platformLeads)}</span> leads
                 over this period; only{" "}
-                <span className="tnum">{formatNumber(trust.matchedLeads)}</span> could
+                <span className="tnum">{formatNumber(trust.matchedLeads)}</span>{" "}
+                could
                 be matched to a campaign in the CRM. The rest are sitting on the
                 &ldquo;everything else&rdquo; side of this panel, which makes the
                 advertising look weaker and the rest of the pipeline look stronger

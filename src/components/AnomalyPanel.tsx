@@ -116,7 +116,8 @@ export function AnomalyPanel({
       ) : judgedDays === 0 ? (
         <p className="mt-4 text-sm" style={{ color: "var(--text-secondary)" }}>
           Not enough history yet to tell an unusual day from an ordinary one. This
-          needs about {BASELINE_DAYS} days of an account&rsquo;s own record before it
+          needs about {BASELINE_DAYS}{" "}
+          days of an account&rsquo;s own record before it
           can say anything — until then, silence here means{" "}
           <em>we cannot tell</em>, not <em>all clear</em>.
         </p>
