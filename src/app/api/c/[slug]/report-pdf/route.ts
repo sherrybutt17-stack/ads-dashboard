@@ -4,7 +4,7 @@ import { getSessionUser, agencyGuard } from "@/lib/auth";
 import { getClientForSession } from "@/lib/clients";
 import { record, requestContext } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
-import { isValidDateKey, rangeLabel } from "@/lib/dates";
+import { isValidDateKey } from "@/lib/dates";
 import { mintRenderToken } from "@/lib/report/render-token";
 import { decodeView, encodeView, isDefaultView } from "@/lib/report/view";
 import { AD_PLATFORMS } from "@/lib/platforms";
@@ -189,7 +189,12 @@ export async function GET(
       // Contains a client's spend. Never a shared cache.
       "Cache-Control": "no-store, must-revalidate",
       // Named for the log line, not for the browser.
-      "X-Report-Range": rangeLabel(start, end),
+      /*
+       * Date keys, not `rangeLabel`. A header value must be Latin-1, and the
+       * label's en dash ("1–31 Jul") made `new Response` throw AFTER the
+       * render had succeeded — a bare 500 with the PDF already paid for.
+       */
+      "X-Report-Range": `${start}..${end}`,
     },
   });
 }

@@ -3,7 +3,7 @@ import { getSessionUser, clientAccessGuard } from "@/lib/auth";
 import { getClientForSession } from "@/lib/clients";
 import { record, requestContext } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
-import { MAX_RANGE_DAYS, eachDateKey, isValidDateKey, rangeLabel, windowFromKeys } from "@/lib/dates";
+import { MAX_RANGE_DAYS, eachDateKey, isValidDateKey, windowFromKeys } from "@/lib/dates";
 import { mintRenderToken } from "@/lib/report/render-token";
 import { PdfRenderError, isPdfConfigured, renderPdf } from "@/lib/report/pdf";
 import { exportFilename } from "@/lib/export/csv";
@@ -141,7 +141,12 @@ export async function GET(
       "Content-Disposition": `attachment; filename="${filename}"`,
       // A client's spend. Never a shared cache.
       "Cache-Control": "no-store, must-revalidate",
-      "X-Report-Range": rangeLabel(start, end),
+      /*
+       * Date keys, not `rangeLabel`. A header value must be Latin-1, and the
+       * label's en dash ("1–31 Jul") made `new Response` throw AFTER the
+       * render had succeeded — a bare 500 with the PDF already paid for.
+       */
+      "X-Report-Range": `${start}..${end}`,
     },
   });
 }
