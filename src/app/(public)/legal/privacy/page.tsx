@@ -15,10 +15,16 @@ export const metadata: Metadata = {
  *
  * Also states the Limited Use commitment verbatim in substance, which is the
  * clause reviewers look for by name.
+ *
+ * 🔴 "How we protect your data" is the section Google's review failed us on
+ * (1 Oct 2026: "does not specify any data protection mechanisms for sensitive
+ * data") — the encryption facts were here, but scattered under storage. Every
+ * line in it is true of this codebase or its providers; keep it that way, since
+ * a reviewer or a client's lawyer may hold us to each one.
  */
 export default function PrivacyPage() {
   return (
-    <PublicPage title="Privacy policy" updated="29 September 2026">
+    <PublicPage title="Privacy policy" updated="23 October 2026">
       <p>
         This policy covers the Growth Guild reporting dashboard — the application
         that joins advertising spend to CRM outcomes for our clients. An agency
@@ -92,9 +98,8 @@ export default function PrivacyPage() {
       <H2>Where it is held, and for how long</H2>
       <p>
         Data is stored in a Postgres database hosted by Neon and served from
-        Vercel&rsquo;s infrastructure. Credentials — advertising platform tokens
-        and CRM tokens — are encrypted at rest with AES-256-GCM. Passwords are
-        stored as scrypt hashes and are not recoverable.
+        Vercel&rsquo;s infrastructure. How it is protected there is set out in
+        the next section.
       </p>
       <p>
         <strong>Service providers.</strong> A small number of providers process
@@ -114,6 +119,61 @@ export default function PrivacyPage() {
         immediately. It does not remove this application from your Google
         account&rsquo;s list of connected apps — to do that, use Google Account
         permissions, below.
+      </p>
+
+      <H2>How we protect your data</H2>
+      <p>
+        We treat everything we hold as sensitive data — Google user data and the
+        other advertising figures, CRM contact details, and login details alike
+        — and protect it as follows.
+      </p>
+      <p>
+        <strong>Encryption in transit.</strong> The dashboard is served only
+        over HTTPS (TLS): plain-HTTP requests are redirected, and browsers are
+        told to use HTTPS only (HSTS). The application&rsquo;s connections to
+        its database and to Google, Facebook, TikTok and GoHighLevel are
+        encrypted with TLS as well.
+      </p>
+      <p>
+        <strong>Encryption at rest.</strong> The database is encrypted at rest
+        with AES-256 by our database provider. In addition, every access and
+        refresh token we hold for an advertising or CRM account — Google refresh
+        tokens included — is encrypted by the application with AES-256-GCM
+        before it is stored, under a key kept outside the database in our
+        hosting provider&rsquo;s encrypted configuration. Passwords are stored
+        only as scrypt hashes and cannot be recovered, even by us.
+      </p>
+      <p>
+        <strong>Access control.</strong> The dashboard and its data require a
+        signed-in account, and every request is checked on the server against
+        that account&rsquo;s role: a client sees only their own dashboards, and
+        an agency only its own clients. Sign-in sessions use secure, HTTP-only
+        cookies that expire, and repeated sign-in attempts are rate-limited.
+        Access to the production database and hosting accounts is limited to the
+        Growth Guild staff who run the service, and is used only to operate and
+        support it.
+      </p>
+      <p>
+        <strong>Shared report links.</strong> A report link that an agency
+        chooses to share opens that one report without a sign-in. Each link
+        expires, can be revoked at any time, can require a password, and is
+        stored only as a one-way hash, so the link itself cannot be recovered
+        from our database.
+      </p>
+      <p>
+        <strong>Audit trail.</strong> Sign-ins, connections, exports and other
+        significant actions are recorded, so access to data can be traced to the
+        person who made it. Tokens and passwords are never written into it.
+      </p>
+      <p>
+        <strong>Minimum access.</strong> We request only the access described
+        above and store only the data this policy lists. We only ever read from
+        connected advertising and CRM accounts; we never change them.
+      </p>
+      <p>
+        <strong>If something goes wrong.</strong> If we learn of a security
+        incident affecting your data, we will tell the affected agencies and
+        clients promptly, along with what we are doing about it.
       </p>
 
       <H2>Your choices</H2>

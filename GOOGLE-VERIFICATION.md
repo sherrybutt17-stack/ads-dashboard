@@ -210,3 +210,13 @@ which restarts the queue.
 
 Nothing about the app needs to change while you wait. The flow works today
 through the *Advanced* link.
+
+### Review history
+
+- **1 Oct 2026 — four of five checks passed** (homepage, app functionality,
+  branding, minimum scopes). **Privacy policy failed:** "does not specify any
+  data protection mechanisms for sensitive data." Fixed 23 Oct 2026 by the
+  *How we protect your data* section on `/legal/privacy` (encryption in transit
+  and at rest, access control, shared links, audit trail, incident notice).
+  After it is live, reply to Google's Trust and Safety email thread saying so;
+  the review does not resume until that reply arrives.
