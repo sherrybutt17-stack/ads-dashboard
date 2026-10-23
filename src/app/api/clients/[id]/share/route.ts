@@ -3,6 +3,7 @@ import { getSessionUser, requireClient, agencyGuard } from "@/lib/auth";
 import { isValidDateKey, windowFromKeys } from "@/lib/dates";
 import { record as recordAudit, requestContext } from "@/lib/audit";
 import { emailConfig, senderProblem } from "@/lib/reports/email";
+import { senderFor } from "@/lib/email-domains/deliver";
 import {
   mintShareLink,
   listShareLinks,
@@ -89,6 +90,8 @@ export async function GET(
     email: {
       configured: cfg !== null,
       senderProblem: cfg ? senderProblem(cfg.from) : null,
+      // Whose address an emailed link would leave from. Never throws.
+      sender: await senderFor(got.client.agencyId),
     },
     links: links.map((l) => ({
       id: l.id,

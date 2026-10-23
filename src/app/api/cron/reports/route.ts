@@ -5,6 +5,7 @@ import { clients } from "@/db/schema";
 import { safeEqual } from "@/lib/crypto";
 import { emailConfigured } from "@/lib/reports/email";
 import { dueSchedules, sendScheduledReport } from "@/lib/reports/send";
+import { refreshDomains, type RefreshSummary } from "@/lib/email-domains/refresh";
 
 /**
  * Scheduled report delivery.
@@ -33,6 +34,8 @@ export const maxDuration = 300;
 
 /** Leave headroom to answer. Unsent schedules stay due and go next run. */
 const BUDGET_MS = 240_000;
+/** The share of it the sending-domain pass may use. */
+const DOMAIN_BUDGET_MS = 15_000;
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") ?? "";
@@ -41,6 +44,22 @@ export async function GET(req: NextRequest) {
   if (!secret || !safeEqual(bearer, secret)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
+
+  // Counted from here, so the domain pass below spends from the same budget.
+  const startedAt = Date.now();
+
+  /*
+   * Agencies' sending domains first, before either early return below — an
+   * hour with nothing due is exactly when a domain whose DNS just caught up
+   * should start sending under the agency's own name. Bounded, and it never
+   * throws: one agency's DNS must not cost anyone their report.
+   */
+  const domains: RefreshSummary = await refreshDomains({ budgetMs: DOMAIN_BUDGET_MS }).catch(
+    (err) => {
+      console.error("[cron/reports] domain refresh failed:", err);
+      return { checked: 0, verified: 0, expired: 0, errors: 1 };
+    },
+  );
 
   if (!emailConfigured()) {
     /*
@@ -52,15 +71,15 @@ export async function GET(req: NextRequest) {
       ok: true,
       skipped: "email not configured",
       hint: "Set RESEND_API_KEY and REPORT_FROM (or RESEND_FROM) to enable scheduled reports.",
+      domains,
     });
   }
 
-  const startedAt = Date.now();
   const now = new Date();
 
   const schedules = await dueSchedules();
   if (schedules.length === 0) {
-    return NextResponse.json({ ok: true, schedules: 0, sent: 0 });
+    return NextResponse.json({ ok: true, schedules: 0, sent: 0, domains });
   }
 
   const clientRows = await db
@@ -141,5 +160,6 @@ export async function GET(req: NextRequest) {
     deferred,
     ms: Date.now() - startedAt,
     results,
+    domains,
   });
 }

@@ -79,6 +79,54 @@ describe("agency settings — the tenant is the session's", () => {
   });
 });
 
+describe("agency email domain — the same contract", () => {
+  /*
+   * A domain row decides whose address an agency's invites, resets and reports
+   * go out from. Letting one agency point another's mail at a domain it chose
+   * is the worst version of the letterhead problem above, so the routes are
+   * held to the same structural rule: the tenant appears nowhere but the
+   * session.
+   */
+  const ROUTES = [
+    ["domain route", source("src", "app", "api", "agency", "email-domain", "route.ts")],
+    ["check route", source("src", "app", "api", "agency", "email-domain", "verify", "route.ts")],
+    ["test-email route", source("src", "app", "api", "agency", "email-domain", "test", "route.ts")],
+  ] as const;
+
+  for (const [label, src] of ROUTES) {
+    it(`${label} takes the agency from the session, and refuses a session without one`, () => {
+      expect(src).toContain("isAgencyOperator");
+      expect(src).toContain("const agencyId = session!.agencyId;");
+      expect(src).toMatch(/if \(!agencyId\) \{\s*return NextResponse\.json\([^)]*\{ status: 409 \}/);
+    });
+
+    it(`${label} never reads an agency id from the request`, () => {
+      expect(src).not.toMatch(/params[^\n]*agencyId/);
+      expect(src).not.toMatch(/body[^\n]*agencyId/);
+      expect(src).not.toMatch(/agencyId:\s*z\./);
+      expect(src).not.toMatch(/searchParams/);
+    });
+
+    it(`${label} rate-limits by agency`, () => {
+      expect(src).toMatch(/rateLimit\(`agency-email-domain[a-z-]*:\$\{agencyId\}`/);
+    });
+
+    it(`${label} stamps any audit entry with the agency`, () => {
+      const entries = src.match(/audit\.record\(\{/g) ?? [];
+      expect(src.match(/agencyId,/g)?.length ?? 0).toBeGreaterThanOrEqual(entries.length);
+    });
+  }
+
+  it("sends the test email only to the operator's own login address", () => {
+    // Never an address from the form: the button must not be a way to send
+    // our mail to a stranger.
+    const test = ROUTES[2][1];
+    expect(test).toContain("getUserById(session!.userId)");
+    expect(test).toContain("to: [me.email]");
+    expect(test).not.toMatch(/req\.json\(/);
+  });
+});
+
 describe("agency settings — the form", () => {
   it("🔴 seeds the name field from the override, not the resolved name", () => {
     /*

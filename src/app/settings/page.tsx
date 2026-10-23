@@ -7,6 +7,7 @@ import { getAgencySettings } from "@/lib/branding-store";
 import { AgencySettingsForm } from "@/components/AgencySettingsForm";
 import { AgencyShell } from "@/components/AgencyShell";
 import { PageTitle } from "@/components/PageTitle";
+import { SettingsTabs } from "@/components/SettingsTabs";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ export default async function AgencySettingsPage() {
     <AgencyShell session={session} brandName={agency.name}>
       <main className="mx-auto w-full max-w-[720px] flex-col gap-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <PageTitle title="Settings" subtitle={agency.name} />
+        <SettingsTabs active="branding" />
 
         <AgencySettingsForm tenantName={agency.name} initial={settings} />
 

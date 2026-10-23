@@ -3,7 +3,8 @@ import { db } from "@/db";
 import { reportSchedules, reportSends, type Client } from "@/db/schema";
 import { mintShareLink } from "@/lib/share";
 import { getClientBranding } from "@/lib/branding-store";
-import { sendEmail, emailConfigured, EmailError } from "./email";
+import { emailConfigured, EmailError } from "./email";
+import { sendForAgency } from "@/lib/email-domains/deliver";
 import { isDue, type Cadence, type Period } from "./schedule";
 import { renderReportEmail } from "./template";
 import { appBaseUrl } from "@/lib/app-url";
@@ -152,7 +153,8 @@ export async function sendScheduledReport(
       skipped,
     });
 
-    const { id } = await sendEmail({ to: recipients, ...mail });
+    // From the agency's own domain when it has a verified one, ours otherwise.
+    const { id } = await sendForAgency(client.agencyId, { to: recipients, ...mail });
 
     await db
       .update(reportSends)

@@ -9,6 +9,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { emailConfigured, emailConfig, senderProblem } from "@/lib/reports/email";
 import { isDue, lastCompletePeriod, type Cadence } from "@/lib/reports/schedule";
 import { sendScheduledReport } from "@/lib/reports/send";
+import { senderFor } from "@/lib/email-domains/deliver";
 import { parseAdPlatform } from "@/lib/platforms";
 
 /**
@@ -76,6 +77,8 @@ export async function GET(
      */
     configured: emailConfigured(),
     senderProblem: cfg ? senderProblem(cfg.from) : null,
+    /** Whose address the report would leave from. Never throws. */
+    sender: await senderFor(client.agencyId),
     /** What the next send would cover, so the operator can sanity-check it. */
     nextPeriod: next,
     alreadySent: row?.lastSentPeriod === next?.key,

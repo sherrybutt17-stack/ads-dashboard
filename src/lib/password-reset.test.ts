@@ -180,9 +180,9 @@ describe("🔴 the forgot endpoint must not leak who has an account", () => {
     expect(CODE).toMatch(/after\(async \(\) => \{/);
     const afterAt = CODE.indexOf("after(async");
     // The CALL, not the import at the top of the file.
-    const sendAt = CODE.indexOf("await sendEmail(");
+    const sendAt = CODE.indexOf("await sendForAgency(");
     const lookupAt = CODE.indexOf(".from(users)");
-    expect(sendAt, "sendEmail is called outside after()").toBeGreaterThan(afterAt);
+    expect(sendAt, "the reset email is sent outside after()").toBeGreaterThan(afterAt);
     expect(lookupAt, "the user lookup happens outside after()").toBeGreaterThan(afterAt);
   });
 

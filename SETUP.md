@@ -117,6 +117,14 @@ sequence:
   never work on Vercel: the OAuth callback and the account picker are different
   serverless functions, so the Map written by one was never the Map read by the
   other, and both flows reported "that sign-in has expired" on every attempt.
+- **`0031_agency_email_domains.sql`** — the `agency_email_domains` table behind
+  **Settings → Email domain**, where an agency verifies its own domain so its
+  invites, password resets and reports go out from it. Apply before deploying
+  the code that adds domains: sending degrades on its own (a missing table reads
+  as "no domain", so mail keeps going from `REPORT_FROM` under the agency's
+  name), but adding a domain fails until the table exists. Needs
+  `RESEND_AGENCY_API_KEY` — a **Full access** Resend key — in the environment;
+  without it the tab says custom domains aren't available.
 
 The ordered three are guarded and safe to re-run, deliberately with no wrapping
 transaction: a half-applied migration you can simply run again is worth more

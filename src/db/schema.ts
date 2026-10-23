@@ -1737,6 +1737,56 @@ export const agencySettings = pgTable("agency_settings", {
 
 export type AgencySettingsRow = typeof agencySettings.$inferSelect;
 
+/**
+ * The domain an agency sends its email from, verified through Resend.
+ *
+ * One per agency (the key is the tenant, like `agency_settings`), and one
+ * agency per domain. Only `status = 'verified'` sends — everything else, and
+ * no row at all, means our own address under the agency's name. See
+ * `src/lib/email-domains/`.
+ *
+ * `status` is Resend's own string, kept as text rather than an enum because
+ * Resend can add states and a CHECK added later would never be applied (no
+ * migration runner). One value is ours: `recheck`, set when a send from a
+ * domain we thought was verified was refused.
+ *
+ * No secret lives here. Verification is proved by DNS, and the only credential
+ * is the agency-domains key in the environment.
+ */
+export const agencyEmailDomains = pgTable(
+  "agency_email_domains",
+  {
+    agencyId: uuid("agency_id")
+      .primaryKey()
+      .references(() => agencies.id, { onDelete: "cascade" }),
+    /** Normalised: lower-case, no scheme, no `www.`, no trailing dot. */
+    domain: text("domain").notNull(),
+    resendDomainId: text("resend_domain_id").notNull(),
+    status: text("status").notNull().default("not_started"),
+    /** The DNS records Resend last returned, for the tab to show. */
+    records: jsonb("records").notNull().default([]),
+    fromLocal: text("from_local").notNull().default("reports"),
+    /** Null follows the agency's name, so a rename reaches the From line. */
+    fromName: text("from_name"),
+    /** Null falls back to the agency's support email. */
+    replyTo: text("reply_to"),
+    lastError: text("last_error"),
+    /** First set when Resend says verified; never cleared. Expiry keys off it. */
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex("agency_email_domains_domain_key").on(t.domain)],
+);
+
+export type AgencyEmailDomainRow = typeof agencyEmailDomains.$inferSelect;
+
 export const auditLog = pgTable(
   "audit_log",
   {

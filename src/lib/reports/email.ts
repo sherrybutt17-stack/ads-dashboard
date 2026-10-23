@@ -1,3 +1,5 @@
+import { FREE_MAIL_DOMAINS } from "@/lib/email-domains/identity";
+
 /**
  * Sending an email.
  *
@@ -5,6 +7,11 @@
  * because its REST surface is a single POST and its free tier covers a book
  * this size; the API base is overridable for anything that speaks the same
  * shape.
+ *
+ * A third, optional: `RESEND_AGENCY_API_KEY`, for agencies that send from
+ * their own verified domain (`account: "agency"`). Every agency email goes
+ * through `sendForAgency` in `src/lib/email-domains/deliver.ts`, which decides
+ * which account and which From to use — this module only sends.
  *
  * ── 🔴 Unconfigured is a supported state, and it is the DEFAULT ────────
  *
@@ -63,6 +70,25 @@ export function emailConfigured(): boolean {
 }
 
 /**
+ * Which Resend team a message goes through.
+ *
+ * `platform` is our own sender above. `agency` is the separate team that holds
+ * the domains agencies verify for themselves (`src/lib/email-domains/`), reached
+ * with its own Full-access key so that key can never touch the platform team's
+ * domains — or the other products that share it.
+ */
+export type EmailAccount = "platform" | "agency";
+
+/** The agency-domains team's key, or null on a deployment without the feature. */
+export function agencyEmailKey(): string | null {
+  return process.env.RESEND_AGENCY_API_KEY || null;
+}
+
+export function agencyEmailConfigured(): boolean {
+  return agencyEmailKey() !== null;
+}
+
+/**
  * Why this sender will not work, if it will not.
  *
  * Deliberately narrow — it catches the shapes that are certainly wrong rather
@@ -78,17 +104,7 @@ export function senderProblem(from: string): string | null {
     return "REPORT_FROM is not a valid email address.";
   }
   const domain = address.split("@")[1].toLowerCase();
-  const free = [
-    "gmail.com",
-    "googlemail.com",
-    "yahoo.com",
-    "hotmail.com",
-    "outlook.com",
-    "live.com",
-    "icloud.com",
-    "aol.com",
-  ];
-  if (free.includes(domain)) {
+  if (FREE_MAIL_DOMAINS.includes(domain)) {
     return `${domain} publishes DMARC p=reject, so mail claiming to be from it will be rejected rather than delivered. Use an address on your own domain.`;
   }
   return null;
@@ -100,6 +116,17 @@ export class EmailError extends Error {
     readonly status: number,
     /** True when the operator can fix this by changing configuration. */
     readonly configurable: boolean,
+    /**
+     * The provider's HTTP status, when the provider actually answered. Null
+     * when the message was refused before any request left this process.
+     *
+     * 🔴 The difference decides whether a send may be retried another way.
+     * Null or a 4xx means nothing was sent; anything else — a 5xx, or no
+     * EmailError at all because the network failed — means the provider may
+     * have delivered it, and a second attempt could reach the inbox twice. See
+     * `sendForAgency`.
+     */
+    readonly providerStatus: number | null = null,
   ) {
     super(message);
     this.name = "EmailError";
@@ -112,32 +139,67 @@ export interface Outgoing {
   html: string;
   /** Plain-text alternative. Never optional — see below. */
   text: string;
+  /**
+   * Overrides the configured sender. Required for the agency account, where
+   * the address is the agency's own; on the platform account it is used to put
+   * the agency's name on our address.
+   */
+  from?: string;
+  /** Overrides the configured Reply-To. */
+  replyTo?: string;
 }
 
 export async function sendEmail(
   msg: Outgoing,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; account?: EmailAccount } = {},
 ): Promise<{ id: string | null }> {
-  const cfg = emailConfig();
-  if (!cfg) {
-    throw new EmailError("Email is not configured.", 503, true);
+  let key: string;
+  let url: string;
+  let from: string;
+  let replyTo: string | undefined;
+
+  if (opts.account === "agency") {
+    const agencyKey = agencyEmailKey();
+    if (!agencyKey) {
+      throw new EmailError("Custom sending domains are not configured.", 503, true);
+    }
+    if (!msg.from) throw new EmailError("An agency send needs a from address.", 400, false);
+    /*
+     * Always Resend itself, never `RESEND_API_URL`. That override exists for
+     * the platform sender (a relay, or a dead address on a local copy); the
+     * agency team is a Resend team by definition — its domains were verified
+     * through Resend's API.
+     */
+    key = agencyKey;
+    url = DEFAULT_URL;
+    from = msg.from;
+    replyTo = msg.replyTo;
+  } else {
+    const cfg = emailConfig();
+    if (!cfg) {
+      throw new EmailError("Email is not configured.", 503, true);
+    }
+    key = cfg.key;
+    url = cfg.url;
+    from = msg.from ?? cfg.from;
+    replyTo = msg.replyTo ?? cfg.replyTo;
+    const problem = senderProblem(from);
+    if (problem) throw new EmailError(problem, 503, true);
   }
-  const problem = senderProblem(cfg.from);
-  if (problem) throw new EmailError(problem, 503, true);
 
   if (msg.to.length === 0) {
     throw new EmailError("No recipients.", 400, true);
   }
 
-  const res = await fetch(cfg.url, {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${cfg.key}`,
+      Authorization: `Bearer ${key}`,
     },
     signal: opts.signal,
     body: JSON.stringify({
-      from: cfg.from,
+      from,
       to: [...msg.to],
       subject: msg.subject,
       html: msg.html,
@@ -150,7 +212,7 @@ export async function sendEmail(
        * for whom the HTML is nothing at all.
        */
       text: msg.text,
-      ...(cfg.replyTo ? { reply_to: cfg.replyTo } : {}),
+      ...(replyTo ? { reply_to: replyTo } : {}),
     }),
   });
 
@@ -164,6 +226,7 @@ export async function sendEmail(
       res.status,
       // 401/403 is a bad key; 422 is usually an unverified sending domain.
       res.status === 401 || res.status === 403 || res.status === 422,
+      res.status,
     );
   }
 

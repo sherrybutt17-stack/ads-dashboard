@@ -17,9 +17,9 @@ import {
   emailConfig,
   emailConfigured,
   senderProblem,
-  sendEmail,
   EmailError,
 } from "@/lib/reports/email";
+import { sendForAgency } from "@/lib/email-domains/deliver";
 import { renderReportEmail } from "@/lib/reports/template";
 import { adHocPeriod } from "@/lib/reports/schedule";
 import { getClientBranding } from "@/lib/branding-store";
@@ -249,8 +249,10 @@ export async function POST(
   });
 
   let providerId: string | null = null;
+  let via: string | null = null;
   try {
-    ({ id: providerId } = await sendEmail({ to, ...mail }));
+    // From the agency's own domain when it has a verified one, ours otherwise.
+    ({ id: providerId, via } = await sendForAgency(client.agencyId, { to, ...mail }));
   } catch (err) {
     /*
      * The link already exists at this point and is left in place rather than
@@ -326,6 +328,8 @@ export async function POST(
        */
       recipients: to,
       providerId,
+      // Whose address it left from: the agency's domain, or ours.
+      via,
       hasMessage: Boolean(message?.trim()),
       sections: view?.sections ?? null,
       includesLeadNames: view ? viewHasPersonal(view) : false,

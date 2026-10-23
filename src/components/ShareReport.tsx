@@ -16,6 +16,8 @@ import {
   normalizeView,
   type ReportView,
 } from "@/lib/report/view";
+import { SenderLine } from "@/components/SenderLine";
+import type { SenderSummary } from "@/lib/email-domains/identity";
 
 /**
  * Create and manage share links for one client.
@@ -58,6 +60,8 @@ interface EmailConfigView {
   configured: boolean;
   /** A sentence written for an operator, or null when the sender is fine. */
   senderProblem: string | null;
+  /** Whose address the email would leave from. */
+  sender?: SenderSummary | null;
 }
 
 const TTL_OPTIONS = [7, 30, 90] as const;
@@ -438,6 +442,10 @@ export function ShareReport({
                 >
                   {emailCfg.senderProblem}
                 </p>
+              )}
+
+              {mode === "email" && emailCfg?.configured && !emailCfg.senderProblem && (
+                <SenderLine sender={emailCfg.sender} />
               )}
 
               {mode === "email" && (

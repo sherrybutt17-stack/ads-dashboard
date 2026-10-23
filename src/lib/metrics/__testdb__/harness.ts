@@ -588,6 +588,24 @@ CREATE TABLE agencies (
   CONSTRAINT agencies_slug_key UNIQUE (slug)
 );
 
+CREATE TABLE agency_email_domains (
+  agency_id uuid PRIMARY KEY,
+  domain text NOT NULL,
+  resend_domain_id text NOT NULL,
+  status text NOT NULL DEFAULT 'not_started',
+  records jsonb NOT NULL DEFAULT '[]'::jsonb,
+  from_local text NOT NULL DEFAULT 'reports',
+  from_name text,
+  reply_to text,
+  last_error text,
+  verified_at timestamptz,
+  checked_at timestamptz,
+  created_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT agency_email_domains_domain_key UNIQUE (domain)
+);
+
 CREATE TABLE agency_settings (
   agency_id uuid PRIMARY KEY,
   agency_name text,

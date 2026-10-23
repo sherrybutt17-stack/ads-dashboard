@@ -44,7 +44,7 @@ function escapeHtml(s: string): string {
 }
 
 /** Control characters out, whitespace collapsed — for anything in a header. */
-function headerSafe(s: string): string {
+export function headerSafe(s: string): string {
   return s
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
     .replace(/\s+/g, " ")

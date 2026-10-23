@@ -6,7 +6,8 @@ import {
   PASSWORD_LINK_TTL_MS,
 } from "@/lib/invites";
 import { renderAccessEmail, lifetime, type AccessLinkKind } from "@/lib/invite-email";
-import { emailConfig, senderProblem, sendEmail } from "@/lib/reports/email";
+import { emailConfig, senderProblem } from "@/lib/reports/email";
+import { sendForAgency } from "@/lib/email-domains/deliver";
 import { getAgencySettings } from "@/lib/branding-store";
 
 /**
@@ -92,7 +93,9 @@ export async function issueAccessLink(opts: {
       url,
       ttlMs,
     });
-    await sendEmail(
+    // From the agency's own domain when it has a verified one, ours otherwise.
+    await sendForAgency(
+      opts.user.agencyId,
       { to: [opts.user.email], ...mail },
       { signal: AbortSignal.timeout(SEND_TIMEOUT_MS) },
     );

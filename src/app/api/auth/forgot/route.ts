@@ -2,7 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { users } from "@/db/schema";
-import { sendEmail } from "@/lib/reports/email";
+import { sendForAgency } from "@/lib/email-domains/deliver";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import * as audit from "@/lib/audit";
 import { createResetToken, resetUrl, RESET_TTL_MS } from "@/lib/password-reset";
@@ -83,7 +83,12 @@ export async function POST(req: NextRequest) {
 
       const url = resetUrl(token);
       const hours = Math.round(RESET_TTL_MS / 3_600_000);
-      await sendEmail({
+      /*
+       * From the agency's own domain when it has a verified one. If that domain
+       * refuses, the reset goes from our address instead — see `sendForAgency`
+       * — because a reset that does not arrive locks the person out.
+       */
+      await sendForAgency(user.agencyId, {
         to: [user.email],
         subject: "Reset your dashboard password",
         text: [

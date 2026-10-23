@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Icon } from "@/components/Icon";
+import { SenderLine } from "@/components/SenderLine";
+import type { SenderSummary } from "@/lib/email-domains/identity";
 
 /**
  * Emailing this client their report on a schedule.
@@ -38,6 +40,8 @@ interface Loaded {
   senderProblem: string | null;
   nextPeriod: { label: string; startKey: string; endKey: string } | null;
   alreadySent: boolean;
+  /** Whose address the report would leave from. */
+  sender?: SenderSummary | null;
 }
 
 const EMPTY: Schedule = {
@@ -220,6 +224,11 @@ export function ReportSchedule({
             </>
           )}
         </p>
+      )}
+      {!blocked && (
+        <div className="mt-2">
+          <SenderLine sender={loaded.sender} />
+        </div>
       )}
 
       <div className="mt-4 grid gap-3">

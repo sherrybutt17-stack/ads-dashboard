@@ -180,6 +180,71 @@ describe("sendEmail", () => {
   });
 });
 
+describe("sendEmail — the from/reply overrides and the agency account", () => {
+  const body = (spy: ReturnType<typeof stubFetch>, i = 0) =>
+    JSON.parse(String((spy.mock.calls[i] as [string, RequestInit])[1].body));
+
+  it("puts an agency's name on our address without changing the address", async () => {
+    const spy = stubFetch(async () => ok());
+    await sendEmail({ ...MSG, from: "Salman Marketing via Growth Guild <reports@growthguild.us>" });
+    expect(body(spy).from).toBe("Salman Marketing via Growth Guild <reports@growthguild.us>");
+  });
+
+  it("uses the reply address it is given, over the configured one", async () => {
+    process.env.REPORT_REPLY_TO = "team@growthguild.us";
+    const spy = stubFetch(async () => ok());
+    await sendEmail(MSG);
+    await sendEmail({ ...MSG, replyTo: "hello@salman.com" });
+    expect(body(spy, 0).reply_to).toBe("team@growthguild.us");
+    expect(body(spy, 1).reply_to).toBe("hello@salman.com");
+  });
+
+  it("still refuses a free-mail sender on our account, even as an override", async () => {
+    const spy = stubFetch(async () => ok());
+    await expect(sendEmail({ ...MSG, from: "Me <me@gmail.com>" })).rejects.toBeInstanceOf(EmailError);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("🔴 sends an agency message with the agency key, to Resend itself", async () => {
+    // The relay override is for our sender only. The agency team's domains
+    // were verified through Resend, so its mail must go to Resend.
+    process.env.RESEND_AGENCY_API_KEY = "agency-key";
+    process.env.RESEND_API_URL = "http://127.0.0.1:9/emails";
+    const spy = stubFetch(async () => ok({ id: "msg_agency" }));
+    const res = await sendEmail(
+      { ...MSG, from: "Salman Marketing <reports@salman.com>", replyTo: "hello@salman.com" },
+      { account: "agency" },
+    );
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.resend.com/emails");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer agency-key");
+    expect(body(spy)).toMatchObject({ from: "Salman Marketing <reports@salman.com>", reply_to: "hello@salman.com" });
+    expect(res).toEqual({ id: "msg_agency" });
+  });
+
+  it("refuses an agency send before any request when the agency key is missing", async () => {
+    delete process.env.RESEND_AGENCY_API_KEY;
+    const spy = stubFetch(async () => ok());
+    const err = await sendEmail({ ...MSG, from: "a@b.com" }, { account: "agency" }).catch((e) => e);
+    expect(err).toBeInstanceOf(EmailError);
+    // Null: nothing left this process, so a fallback cannot double-send.
+    expect(err.providerStatus).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("🔴 records the provider's status only when the provider answered", async () => {
+    stubFetch(async () =>
+      ({ ok: false, status: 403, json: async () => ({ message: "The salman.com domain is not verified." }) }) as unknown as Response,
+    );
+    const answered = await sendEmail(MSG).catch((e) => e);
+    expect(answered.providerStatus).toBe(403);
+
+    delete process.env.RESEND_API_KEY;
+    const before = await sendEmail(MSG).catch((e) => e);
+    expect(before.providerStatus).toBeNull();
+  });
+});
+
 describe("renderReportEmail", () => {
   const period: Period = {
     startKey: "2026-07-01",
