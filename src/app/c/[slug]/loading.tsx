@@ -41,7 +41,7 @@ export default function Loading() {
           />
         </div>
         <div className="flex flex-row gap-1 lg:flex-col">
-          {Array.from({ length: 5 }).map((_, i) => (
+          {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
               className="h-10 w-[104px] shrink-0 rounded-[var(--radius-sm)] lg:w-full"

@@ -217,6 +217,27 @@ describe("proxy carve-out for client-role users", () => {
     }
   });
 
+  it("lets a client read, save and reset their own board — and nobody else's", () => {
+    for (const m of ["GET", "PUT", "DELETE"]) {
+      expect(clientApiCarveOut("/api/c/acme/board", m, MINE), m).toBe(true);
+      expect(clientApiCarveOut("/api/c/rival/board", m, MINE), `rival ${m}`).toBe(false);
+    }
+    // The lock is enforced by the handler on the stored row; this rule only
+    // makes the path reachable. POST and PATCH are not verbs a board takes.
+    for (const m of ["POST", "PATCH"]) {
+      expect(clientApiCarveOut("/api/c/acme/board", m, MINE), m).toBe(false);
+    }
+  });
+
+  it("lets a client read a widget's data and the board PDF, but write nothing below board", () => {
+    expect(clientApiCarveOut("/api/c/acme/board/data", "GET", MINE)).toBe(true);
+    expect(clientApiCarveOut("/api/c/acme/board/pdf", "GET", MINE)).toBe(true);
+    expect(clientApiCarveOut("/api/c/rival/board/data", "GET", MINE)).toBe(false);
+    for (const m of ["PUT", "POST", "DELETE", "PATCH"]) {
+      expect(clientApiCarveOut("/api/c/acme/board/data", m, MINE), m).toBe(false);
+    }
+  });
+
   it("proxy.ts uses this rule rather than its own copy", async () => {
     // Guards the guard from the other direction: the decision table above is
     // only meaningful if the proxy actually calls into it.

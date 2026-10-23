@@ -20,6 +20,7 @@ import {
   MAX_RANGE_DAYS,
 } from "@/lib/dates";
 import { formatNumber } from "@/lib/metrics/compute";
+import { carriedRange, withRange } from "@/lib/dashboard/range";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { ShareReport } from "@/components/ShareReport";
@@ -327,6 +328,9 @@ export default async function ClientDashboard({
    * a link someone kept still covers the days it covered when it was generated.
    * A trailing-window parameter would quietly slide.
    */
+  // The board covers every platform at once, so it carries the range only —
+  // as the picker wrote it, so a preset is still lit when the board opens.
+  const boardHref = withRange(`/c/${slug}/board`, carriedRange(sp));
   const reportHref = `/c/${slug}/report?start=${range.startKey}&end=${range.endKey}${
     platform !== "meta" ? `&platform=${platform}` : ""
   }`;
@@ -495,6 +499,7 @@ export default async function ClientDashboard({
           adPipe.state === "unreachable" ||
           adPipe.state === "stale"
         }
+        boardHref={boardHref}
         reportHref={reportHref}
         presentHref={presentHref}
       />

@@ -166,6 +166,17 @@ const CLIENT_TIER_ROUTES: string[] = [
    * classification true if the lead-list gate is ever refactored away.
    */
   "c/[slug]/export/route.ts",
+  /*
+   * Their own widget board, which the agency and the client build together.
+   * The handler reads the STORED board and refuses a client's save or reset
+   * while the agency has locked it — the role check lives there, after this
+   * tenant gate. `board/data` is one widget's numbers for the editor and for
+   * tiles still loading, and `board/pdf` is the same board as a document:
+   * both reads of the client's own figures.
+   */
+  "c/[slug]/board/route.ts",
+  "c/[slug]/board/data/route.ts",
+  "c/[slug]/board/pdf/route.ts",
 ];
 
 function requiredTier(rel: string): Tier {

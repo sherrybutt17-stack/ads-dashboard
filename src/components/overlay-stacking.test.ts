@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 
 /**
  * A dismissal catcher must never be able to paint over the thing it dismisses.
@@ -33,10 +33,13 @@ import { join } from "node:path";
 
 const DIR = join(process.cwd(), "src/components");
 
-function sources(): Array<{ name: string; text: string }> {
-  return readdirSync(DIR)
-    .filter((f) => f.endsWith(".tsx"))
-    .map((name) => ({ name, text: readFileSync(join(DIR, name), "utf8") }));
+/** Every component, subfolders included — the board's menus live in `board/`. */
+function sources(dir = DIR): Array<{ name: string; text: string }> {
+  return readdirSync(dir).flatMap((f) => {
+    const p = join(dir, f);
+    if (statSync(p).isDirectory()) return sources(p);
+    return f.endsWith(".tsx") ? [{ name: relative(DIR, p), text: readFileSync(p, "utf8") }] : [];
+  });
 }
 
 /** The text between <Portal> and </Portal>, concatenated. */

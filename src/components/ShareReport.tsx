@@ -80,6 +80,7 @@ export function ShareReport({
   platform,
   platforms,
   today,
+  kind = "report",
 }: {
   clientId: string;
   /** For the Preview link to the report page. */
@@ -91,7 +92,14 @@ export function ShareReport({
   platforms: readonly AdPlatform[];
   /** Today's date key in the client's timezone. */
   today: string;
+  /**
+   * What the link opens. "board" freezes the client's board as it is now —
+   * every platform on it, so there is no platform or section choice — and is
+   * copy-only: the emailed version carries the report.
+   */
+  kind?: "report" | "board";
 }) {
+  const isBoard = kind === "board";
   const screen: PeriodSelection = { start: rangeStart, end: rangeEnd, platform };
   const [period, setPeriod] = useState<PeriodSelection>(screen);
   const periodError = periodProblem(period, today);
@@ -164,8 +172,9 @@ export function ShareReport({
         body: JSON.stringify({
           rangeStart: period.start,
           rangeEnd: period.end,
-          platform: period.platform,
-          view: chosen,
+          // The board is frozen on the server from what is stored; nothing
+          // about its contents travels in this request.
+          ...(isBoard ? { document: "board" } : { platform: period.platform, view: chosen }),
           label: label.trim() || null,
           ttlDays,
           password: password.trim() || null,
@@ -310,8 +319,12 @@ export function ShareReport({
           setMode("copy");
         }}
         busy={busy}
-        title="Share this report"
-        description="A read-only link to the figures below. No lead names, emails or phone numbers are included."
+        title={isBoard ? "Share this board" : "Share this report"}
+        description={
+          isBoard
+            ? "A read-only copy of this board as it is now, for the period below. Later changes to the board do not reach the link. No lead names, emails or phone numbers are included."
+            : "A read-only link to the figures below. No lead names, emails or phone numbers are included."
+        }
       >
         <div className="flex flex-col gap-4">
           {/*
@@ -360,6 +373,7 @@ export function ShareReport({
                 button at the bottom changes what it does, and a control that
                 changes an action's meaning should not be a detail.
               */}
+              {!isBoard && (
               <div
                 className="flex gap-1 rounded-[var(--radius-sm)] border p-1"
                 style={{ borderColor: "var(--border)" }}
@@ -395,6 +409,7 @@ export function ShareReport({
                   </button>
                 ))}
               </div>
+              )}
 
               {mode === "email" && emailCfg && !emailCfg.configured && (
                 <p
@@ -498,7 +513,7 @@ export function ShareReport({
                   onChange={setPeriod}
                   screen={screen}
                   today={today}
-                  platforms={platforms.length > 0 ? platforms : [platform]}
+                  platforms={!isBoard && platforms.length > 0 ? platforms : [platform]}
                   headings="field"
                 />
                 <span
@@ -510,6 +525,19 @@ export function ShareReport({
                 </span>
               </div>
 
+              {isBoard ? (
+                !periodError && (
+                  <a
+                    href={`/c/${encodeURIComponent(slug)}/board/print?start=${period.start}&end=${period.end}`}
+                    target="_blank"
+                    rel="noopener"
+                    className="inline-block text-[12px] font-medium hover:underline"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    Preview what they will see
+                  </a>
+                )
+              ) : (
               <div>
                 <ViewPicker
                   value={view}
@@ -532,6 +560,7 @@ export function ShareReport({
                   </a>
                 )}
               </div>
+              )}
 
               <Field label="Label" hint="Your own note. The recipient never sees it.">
                 <input
@@ -602,7 +631,7 @@ export function ShareReport({
                   disabled={
                     busy ||
                     periodError !== null ||
-                    !chosen ||
+                    (!isBoard && !chosen) ||
                     (mode === "email" &&
                       (recipients.length === 0 ||
                         recipients.length > 5 ||

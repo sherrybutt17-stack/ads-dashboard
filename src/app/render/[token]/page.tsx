@@ -4,9 +4,11 @@ import { getClientUnscoped } from "@/lib/clients";
 import { loadDashboard, loadDeferredTables } from "@/lib/metrics/dashboard";
 import { getClientBranding, getAgencySettings } from "@/lib/branding-store";
 import type { AdPlatform } from "@/lib/metrics/queries";
-import { isValidDateKey } from "@/lib/dates";
+import { isValidDateKey, windowFromKeys } from "@/lib/dates";
 import { ReportDocument } from "@/components/report/ReportDocument";
 import { DatasetDocument } from "@/components/report/DatasetDocument";
+import { BoardDocument } from "@/components/board/BoardDocument";
+import { loadBoardDocument } from "@/lib/board/document";
 import {
   DATASETS,
   DATASET_BUILDERS,
@@ -89,6 +91,30 @@ export default async function RenderReportPage({
   if (!client) notFound();
 
   const platform: AdPlatform = parseAdPlatform(rawPlatform);
+
+  /*
+   * The board, as stored when the renderer arrives. Checked before the dataset
+   * branch: "board" is not a dataset, and `isDatasetId` would 404 it.
+   *
+   * "document" mode reads reach from the cache only — this page is reached by
+   * a token, not a session, and must never make a Meta call. The PDF route
+   * fetched reach for the range just before minting the token.
+   */
+  if (dataset === "board") {
+    const doc = await loadBoardDocument(client, windowFromKeys(start, end, client.timezone), "document", "stored");
+    return (
+      <BoardDocument
+        client={client}
+        branding={doc.branding}
+        agency={doc.agency}
+        logo={doc.logo}
+        widgets={doc.widgets}
+        data={doc.data}
+        rangeStart={start}
+        rangeEnd={end}
+      />
+    );
+  }
 
   /*
    * Two documents behind one route.

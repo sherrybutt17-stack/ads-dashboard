@@ -63,6 +63,19 @@ export interface StatTileProps {
    * in a client meeting and then cannot be reproduced.
    */
   basis?: string;
+  /** Extra classes on the card — a board cell passes `h-full` to fill its slot. */
+  className?: string;
+  /**
+   * Tighter spacing and one value size at every width, for a board cell: the
+   * cell's height is fixed by its grid rows, not by the tile's content.
+   */
+  compact?: boolean;
+  /**
+   * False for a figure with no previous period to compare against — reach for
+   * an exact range is one question to Meta, asked once. The delta line would
+   * otherwise print "–" against a basis it was never measured on.
+   */
+  comparable?: boolean;
 }
 
 /**
@@ -127,6 +140,9 @@ export function StatTile({
   format,
   currency = "USD",
   basis = "previous period",
+  className,
+  compact = false,
+  comparable = true,
 }: StatTileProps) {
   const canAnimate =
     typeof numeric === "number" && Number.isFinite(numeric) && Boolean(format);
@@ -178,9 +194,9 @@ export function StatTile({
        * widens its own track, four wide tracks outgrow the row, and the last
        * tile is cut off by the edge of the page rather than wrapping.
        */
-      className={`card card-interactive flex min-w-0 flex-col gap-2.5 p-4 sm:p-5${
+      className={`card card-interactive flex min-w-0 flex-col ${compact ? "gap-1.5 p-4" : "gap-2.5 p-4 sm:p-5"}${
         emphasis ? " card-accent" : ""
-      }`}
+      }${className ? ` ${className}` : ""}`}
     >
       <span
         className={`flex items-center gap-1 text-[10.5px] font-semibold tracking-[0.08em] uppercase${
@@ -196,7 +212,9 @@ export function StatTile({
 
       {/* Value owns its own line — never truncated by the sparkline. */}
       <div
-        className="num-display text-[27px] leading-none font-semibold whitespace-nowrap sm:text-[33px]"
+        className={`num-display leading-none font-semibold whitespace-nowrap ${
+          compact ? "text-[27px]" : "text-[27px] sm:text-[33px]"
+        }`}
         style={{ color: "var(--text-primary)" }}
       >
         {display}
@@ -209,7 +227,7 @@ export function StatTile({
       )}
 
       <div className="mt-auto flex items-end justify-between gap-3 pt-1">
-        {!unavailable && (
+        {!unavailable && comparable && (
           <div className="min-w-0" title={deltaTitle}>
             <span
               className="tnum flex items-center gap-0.5 text-xs font-semibold"

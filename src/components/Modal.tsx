@@ -108,6 +108,7 @@ export function Modal({
   /** Blocks Escape and backdrop dismissal while a submit is in flight. */
   busy = false,
   labelledBy,
+  size = "sm",
 }: {
   open: boolean;
   onClose: () => void;
@@ -116,6 +117,8 @@ export function Modal({
   children: React.ReactNode;
   busy?: boolean;
   labelledBy?: string;
+  /** "lg" for a dialog that holds a workspace — the board's widget picker. */
+  size?: "sm" | "lg";
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -254,7 +257,9 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={labelledBy ?? titleId}
         aria-describedby={description ? descId : undefined}
-        className="m-auto flex w-full max-w-sm flex-col rounded-[var(--radius-lg)]"
+        className={`m-auto flex w-full flex-col rounded-[var(--radius-lg)] ${
+          size === "lg" ? "max-w-4xl" : "max-w-sm"
+        }`}
         style={{
           background: "var(--surface-raised)",
           border: "1px solid var(--border-strong)",

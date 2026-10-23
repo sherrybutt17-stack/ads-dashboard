@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { getSessionUser, requireClient, agencyGuard } from "@/lib/auth";
-import { isValidDateKey } from "@/lib/dates";
+import { isValidDateKey, windowFromKeys } from "@/lib/dates";
 import { record as recordAudit, requestContext } from "@/lib/audit";
 import { emailConfig, senderProblem } from "@/lib/reports/email";
 import {
@@ -11,8 +11,26 @@ import {
   DEFAULT_SHARE_TTL_DAYS,
   MIN_SHARE_PASSWORD,
   viewForLink,
+  boardForLink,
 } from "@/lib/share";
 import { describeView, isDefaultView, normalizeView, viewHasPersonal } from "@/lib/report/view";
+import { loadBoardContext } from "@/lib/board/context";
+import { getBoard } from "@/lib/board/store";
+import { needsReach } from "@/lib/board/document";
+import { ensurePeriodReach } from "@/lib/board/reach";
+import type { BoardWidget } from "@/lib/board/types";
+import type { ShareLink } from "@/db/schema";
+
+/** What the list says a link contains; null for the standard report. */
+function contentsOf(link: ShareLink): string | null {
+  // A board first: `viewForLink` would read its snapshot as the standard report.
+  const board = boardForLink(link);
+  if (board) {
+    return `Board · ${board.widgets.length} widget${board.widgets.length === 1 ? "" : "s"}`;
+  }
+  const view = viewForLink(link);
+  return isDefaultView(view) ? null : describeView(view);
+}
 
 /**
  * Share links for one client — list and create.
@@ -87,7 +105,7 @@ export async function GET(
       viewCount: l.viewCount,
       lastViewedAt: l.lastViewedAt?.toISOString() ?? null,
       // Null for the standard report, so the list only calls out a choice.
-      contents: isDefaultView(viewForLink(l)) ? null : describeView(viewForLink(l)),
+      contents: contentsOf(l),
     })),
   });
 }
@@ -109,8 +127,17 @@ export async function POST(
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  const { rangeStart, rangeEnd, platform, label, ttlDays, password, view: rawView } =
-    body as Record<string, unknown>;
+  const {
+    rangeStart,
+    rangeEnd,
+    platform,
+    label,
+    ttlDays,
+    password,
+    view: rawView,
+    document: rawDocument,
+  } = body as Record<string, unknown>;
+  const isBoard = rawDocument === "board";
 
   /*
    * Validate the range here rather than trusting the caller: it is frozen into
@@ -143,12 +170,27 @@ export async function POST(
 
   // Absent means the standard report. Present but empty or unreadable is a
   // mistake to report, not a reason to quietly send something else.
-  const view = rawView === undefined || rawView === null ? null : normalizeView(rawView);
-  if (rawView !== undefined && rawView !== null && !view) {
+  const view = isBoard || rawView === undefined || rawView === null ? null : normalizeView(rawView);
+  if (!isBoard && rawView !== undefined && rawView !== null && !view) {
     return NextResponse.json(
       { error: "Pick at least one section to include." },
       { status: 400 },
     );
+  }
+
+  /*
+   * 🔴 A board link freezes the board AS STORED, read here — never widgets
+   * from the request body. A body is whatever the caller sends; publishing
+   * it would let a request mint a link to a board nobody built, under this
+   * client's name and figures.
+   */
+  let board: BoardWidget[] | null = null;
+  if (isBoard) {
+    const context = await loadBoardContext(client);
+    board = (await getBoard(client.id, context.starter)).widgets;
+    if (board.length === 0) {
+      return NextResponse.json({ error: "This board is empty. Add a widget before sharing it." }, { status: 400 });
+    }
   }
 
   const session = await getSessionUser();
@@ -159,12 +201,13 @@ export async function POST(
       clientId: client.id,
       rangeStart: rangeStart as string,
       rangeEnd: rangeEnd as string,
-      platform: typeof platform === "string" ? platform : "meta",
+      platform: !isBoard && typeof platform === "string" ? platform : "meta",
       label: typeof label === "string" ? label : null,
       ttlDays: ttlDays === undefined ? DEFAULT_SHARE_TTL_DAYS : ttl,
       password: pass || null,
       createdBy: session?.userId ?? null,
       view,
+      board,
     }));
   } catch (err) {
     /*
@@ -198,10 +241,23 @@ export async function POST(
       rangeEnd: row.rangeEnd,
       expiresAt: row.expiresAt.toISOString(),
       hasPassword: Boolean(row.passwordHash),
-      sections: view?.sections ?? null,
-      includesLeadNames: view ? viewHasPersonal(view) : false,
+      ...(board
+        ? { document: "board", widgets: board.length }
+        : { sections: view?.sections ?? null, includesLeadNames: view ? viewHasPersonal(view) : false }),
     },
   });
+
+  /*
+   * The shared page reads reach from the cache only, so ask Meta now, after
+   * the response: the link is ready the moment it is shown, and by the time
+   * someone opens it the figure is usually there.
+   */
+  if (board && needsReach(board)) {
+    const window = windowFromKeys(row.rangeStart, row.rangeEnd, client.timezone);
+    after(async () => {
+      await ensurePeriodReach(client, window);
+    });
+  }
 
   return NextResponse.json({
     id: row.id,

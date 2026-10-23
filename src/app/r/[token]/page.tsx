@@ -5,7 +5,7 @@ import { after } from "next/server";
 import { getClientUnscoped } from "@/lib/clients";
 import { loadDashboard } from "@/lib/metrics/dashboard";
 import { getClientBranding, getAgencySettings } from "@/lib/branding-store";
-import { rangeLabel } from "@/lib/dates";
+import { rangeLabel, windowFromKeys } from "@/lib/dates";
 import type { AdPlatform } from "@/lib/metrics/queries";
 import { parseAdPlatform } from "@/lib/platforms";
 import {
@@ -17,7 +17,10 @@ import {
   passCookieName,
   type ShareFailure,
   viewForLink,
+  boardForLink,
 } from "@/lib/share";
+import { loadBoardDocument } from "@/lib/board/document";
+import { BoardDocument, PAGE_W } from "@/components/board/BoardDocument";
 import { rateLimit } from "@/lib/rate-limit";
 import { ReportDocument, REPORT_WIDTH } from "@/components/report/ReportDocument";
 import { PrintButton } from "@/components/report/PrintButton";
@@ -86,6 +89,54 @@ export default async function SharedReportPage({
   // the whole point of the link is that the recipient does not have one.
   const client = await getClientUnscoped(link.clientId, "share_token");
   if (!client) return <ShareProblem reason="not_found" />;
+
+  /*
+   * A board link shows the board frozen into it — what the sender saw, not
+   * whatever the client has arranged since. Checked BEFORE `viewForLink`,
+   * which would read a board snapshot as "the standard report" and publish a
+   * different document from the one that was shared.
+   *
+   * "document" mode: reach comes from the cache only. A public page answering
+   * a bearer URL must never spend the agency's Meta quota on a reader's visit;
+   * the share route fetched reach for this range when the link was made.
+   */
+  const board = boardForLink(link);
+  if (board) {
+    const doc = await loadBoardDocument(
+      client,
+      windowFromKeys(link.rangeStart, link.rangeEnd, client.timezone),
+      "document",
+      { snapshot: board.widgets },
+    );
+    after(async () => {
+      await recordShareView(link.id);
+    });
+    return (
+      <BoardDocument
+        client={client}
+        branding={doc.branding}
+        agency={doc.agency}
+        logo={doc.logo}
+        widgets={doc.widgets}
+        data={doc.data}
+        rangeStart={link.rangeStart}
+        rangeEnd={link.rangeEnd}
+        toolbar={
+          <div
+            className="no-print mx-auto flex flex-wrap items-center justify-between gap-3 px-4 pt-6"
+            style={{ maxWidth: PAGE_W + 32 }}
+          >
+            <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+              Shared board · <span className="tnum">{rangeLabel(link.rangeStart, link.rangeEnd)}</span>
+              {" · "}
+              access expires <span className="tnum">{link.expiresAt.toISOString().slice(0, 10)}</span>
+            </span>
+            <PrintButton />
+          </div>
+        }
+      />
+    );
+  }
 
   const platform: AdPlatform = parseAdPlatform(link.platform);
   // What the sender chose to include; the standard report for older links.

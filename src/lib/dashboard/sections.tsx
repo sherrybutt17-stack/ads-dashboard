@@ -52,6 +52,7 @@ import type { AdPlatform, PeriodMetrics } from "@/lib/metrics/queries";
 import type { OutOfRangeNotice } from "@/lib/metrics/data-extent";
 import { PLATFORM_NAME } from "@/components/DataState";
 import { rangeLabel } from "@/lib/dates";
+import { leadFilterDescription } from "@/lib/metrics/lead-filter-copy";
 import type { Client } from "@/db/schema";
 import {
   CADENCE_HINT,
@@ -989,19 +990,8 @@ function LeadFilterNote({
 }) {
   const excluded = filter.total - filter.paid;
 
-  // Google leads are matched by their own attribution (a Google click id or
-  // campaign id) and ignore the Meta mode/tag entirely, so describe that rather
-  // than the Facebook filter the numbers were NOT computed from.
-  const description =
-    platform === "google"
-      ? "Counting leads with a Google click ID (gclid) or Google campaign ID"
-      : filter.mode === "all"
-        ? "Counting every lead in the pipeline — cost metrics include organic and referral leads"
-        : filter.mode === "attributed"
-          ? "Counting only leads with a Facebook campaign ID"
-          : filter.mode === "tagged"
-            ? `Counting only leads tagged "${filter.tag}"`
-            : `Counting leads with a Facebook campaign ID or tagged "${filter.tag}"`;
+  // Shared with the board, so both name the same rule for the same figure.
+  const description = leadFilterDescription(platform, filter);
 
   return (
     <div

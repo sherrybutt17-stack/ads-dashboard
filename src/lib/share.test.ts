@@ -287,3 +287,46 @@ describe("ttl bounds", () => {
     }
   });
 });
+
+describe("board links", () => {
+  const WIDGETS = [
+    { id: "w-spend", kind: "kpi", platform: "meta", metric: "spend", x: 0, y: 0, w: 3, h: 3 },
+    { id: "w-note", kind: "text", text: "Q3 in one page", size: "body", x: 3, y: 0, w: 6, h: 2 },
+  ] as const;
+
+  it("freezes the board into the link and reads the same widgets back", async () => {
+    const { row } = await mint({ board: WIDGETS as never });
+    const board = share.boardForLink(row);
+    expect(board?.dropped).toBe(0);
+    expect(board?.widgets.map((w) => w.id)).toEqual(["w-spend", "w-note"]);
+    expect(row.view).toMatchObject({ kind: "board", schemaVersion: 1 });
+  });
+
+  it("🔴 leaves report links exactly as they were", async () => {
+    const plain = await mint();
+    expect(plain.row.view).toBeNull();
+    expect(share.boardForLink(plain.row)).toBeNull();
+
+    const chosen = await mint({ view: { sections: ["kpis", "campaigns"], kpis: ["spend"] } as never });
+    expect(share.boardForLink(chosen.row)).toBeNull();
+    expect(share.viewForLink(chosen.row).kpis).toEqual(["spend"]);
+  });
+
+  it("drops a widget a later build no longer understands, and keeps the rest", () => {
+    const board = share.boardForLink({
+      view: {
+        kind: "board",
+        schemaVersion: 1,
+        widgets: [WIDGETS[0], { id: "w-gone", kind: "sparkle", x: 0, y: 3, w: 3, h: 3 }],
+      },
+    });
+    expect(board?.widgets.map((w) => w.id)).toEqual(["w-spend"]);
+    expect(board?.dropped).toBe(1);
+  });
+
+  it("refuses a snapshot written by a newer build rather than guessing at it", () => {
+    expect(
+      share.boardForLink({ view: { kind: "board", schemaVersion: 99, widgets: [WIDGETS[0]] } }),
+    ).toBeNull();
+  });
+});

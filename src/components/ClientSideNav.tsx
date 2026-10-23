@@ -3,8 +3,8 @@ import { roleLabel } from "@/lib/roles";
 import type { SessionPayload } from "@/lib/session";
 
 /**
- * The sidebar for one client's pages — Overview, Report, Present, Connections,
- * Branding, and the way back out.
+ * The sidebar for one client's pages — Overview, Board, Report, Present,
+ * Connections, Branding, and the way back out.
  *
  * ── Why this is not built at each call site ───────────────────────────
  *
@@ -16,13 +16,14 @@ import type { SessionPayload } from "@/lib/session";
  * each inventing a header, but three pages where one had a sidebar and two
  * quietly did not.
  *
- * ── The two hrefs that are not fixed ──────────────────────────────────
+ * ── The three hrefs that are not fixed ────────────────────────────────
  *
- * Report and Present carry the open date range as a query string, so that
- * moving between them keeps the window the reader chose. Only the Overview
- * page HAS an open range, so the other pages leave these to their defaults and
- * link bare — both pages fall back to a trailing 30 days when the parameters
- * are absent, which is the same window the dashboard opens on.
+ * Board, Report and Present carry the open date range as a query string, so
+ * that moving between them keeps the window the reader chose. Only the
+ * Overview and Board pages HAVE an open range, so the other pages leave these
+ * to their defaults and link bare — every one of them falls back to a
+ * trailing 30 days when the parameters are absent, which is the same window
+ * the dashboard opens on.
  *
  * Either way the highlight is computed from `match`, never from `href`:
  * `usePathname()` returns the path without the query, so an href carrying one
@@ -35,6 +36,7 @@ export function ClientSideNav({
   staff,
   brandingEditable,
   warnConnections = false,
+  boardHref = `/c/${slug}/board`,
   reportHref = `/c/${slug}/report`,
   presentHref = `/c/${slug}/present`,
 }: {
@@ -47,11 +49,14 @@ export function ClientSideNav({
   brandingEditable: boolean;
   /** A dot on Connections when a pipe is broken rather than merely quiet. */
   warnConnections?: boolean;
+  boardHref?: string;
   reportHref?: string;
   presentHref?: string;
 }) {
   const items: NavItem[] = [
     { href: `/c/${slug}`, exact: true, label: "Overview", icon: "chart" },
+    // Prefix-matched, so the editor at /board/edit keeps it lit.
+    { href: boardHref, match: `/c/${slug}/board`, label: "Board", icon: "board" },
     {
       href: reportHref,
       match: `/c/${slug}/report`,

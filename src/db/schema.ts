@@ -1931,12 +1931,21 @@ export const shareLinks = pgTable(
     platform: text("platform").notNull().default("meta"),
 
     /**
-     * Which sections and headline numbers the link shows, as chosen when it
-     * was made: `{ sections: string[], kpis: string[] }`, validated through
-     * `normalizeView` on every read. Null means the standard report, which is
-     * what every link made before the choice existed keeps showing.
+     * What the link shows, as chosen when it was made. One of:
+     *
+     *   · a report selection — `{ sections: string[], kpis: string[] }`,
+     *     validated through `normalizeView` on every read;
+     *   · a frozen board — `{ kind: "board", schemaVersion, widgets }`, read
+     *     through `parseSnapshot` (`lib/board/snapshot.ts`).
+     *
+     * Null means the standard report, which is what every link made before
+     * the choice existed keeps showing. Typed in TypeScript only; the column
+     * is plain jsonb, so a board link needed no migration.
      */
-    view: jsonb("view").$type<{ sections: string[]; kpis: string[] }>(),
+    view: jsonb("view").$type<
+      | { sections: string[]; kpis: string[] }
+      | { kind: "board"; schemaVersion: number; widgets: unknown[] }
+    >(),
 
     /** scrypt hash, same scheme as user passwords. Null = no gate. */
     passwordHash: text("password_hash"),
@@ -2037,6 +2046,38 @@ export const dashboardLayouts = pgTable(
 );
 
 export type DashboardLayoutRow = typeof dashboardLayouts.$inferSelect;
+
+/* ------------------------------------------------------------------ *
+ * dashboard_boards — the Board tab's widgets
+ * ------------------------------------------------------------------ *
+ *
+ * One row per client, shared by the agency and the client (the lock is how the
+ * agency keeps a client from changing it). No row until the first save: the
+ * starter layout is computed, never stored. Widgets are validated by
+ * `src/lib/board/schema.ts` on every read and write; `schema_version` lets a
+ * future shape be recognised rather than misread. Migration: 0030.
+ */
+export const dashboardBoards = pgTable(
+  "dashboard_boards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    /** Unused until a client can have several boards; then the key widens. */
+    name: text("name").notNull().default("Board"),
+    widgets: jsonb("widgets").notNull(),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    locked: boolean("locked").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedBy: text("updated_by"),
+  },
+  (t) => [uniqueIndex("dashboard_boards_client_key").on(t.clientId)],
+);
+
+export type DashboardBoardRow = typeof dashboardBoards.$inferSelect;
 
 /* ------------------------------------------------------------------ *
  * report_summaries — the written weekly update

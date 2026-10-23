@@ -29,6 +29,11 @@ const SRC = join(__dirname, "..");
 
 /** Modules that draw data, and so may name a series colour. */
 const DRAWS_DATA = new Set([
+  /*
+   * The board's own charts. Same ownership rule as CategoryChart: widgets hand
+   * it rows and a fixed slot order (`chart-rules.ts`), never a colour.
+   */
+  "components/board/BoardChart.tsx",
   "components/CampaignStageTable.tsx",
   /*
    * The shared bar/line/circle chart. It OWNS the categorical ramp — consumers

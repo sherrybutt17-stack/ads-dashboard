@@ -270,3 +270,22 @@ describe("v3: the report's selection", () => {
     expect(verifyRenderToken(token, NOW)).toEqual({ ok: false, reason: "bad_signature" });
   });
 });
+
+describe("board documents", () => {
+  it("round-trips a board token with its seven parts", () => {
+    const token = mintRenderToken({ ...CLAIMS, dataset: "board", view: "" }, NOW);
+    const got = verifyRenderToken(token, NOW + 1000);
+    expect(got.ok).toBe(true);
+    if (got.ok) expect(got.claims.dataset).toBe("board");
+    expect(Buffer.from(token.split(".")[0], "base64url").toString("utf8").split("\n")).toHaveLength(7);
+  });
+
+  it("🔴 cannot be turned into a report token, or a report token into a board one", () => {
+    const board = mintRenderToken({ ...CLAIMS, dataset: "board", view: "" }, NOW);
+    const [body, sig] = board.split(".");
+    const asReport = Buffer.from(
+      Buffer.from(body, "base64url").toString("utf8").replace("\nboard\n", "\nreport\n"),
+    ).toString("base64url");
+    expect(verifyRenderToken(`${asReport}.${sig}`, NOW + 1000)).toEqual({ ok: false, reason: "bad_signature" });
+  });
+});

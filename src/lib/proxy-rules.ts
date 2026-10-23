@@ -53,6 +53,17 @@ const CLIENT_RESOURCES: Record<string, readonly string[]> = {
    * carries, and accepted on the same terms.
    */
   export: ["GET"],
+  /*
+   * Their own widget board. Clients build it with the agency, so they may save
+   * (PUT) and reset (DELETE) it — and the handler refuses both while the agency
+   * has locked the board, reading the lock from the STORED row.
+   *
+   * GET reaches deeper by the rule below, deliberately: `board/data` (one
+   * widget's numbers, for the editor and for tiles still loading) and
+   * `board/pdf` are both reads of the client's own figures. Writes stop at
+   * `board` itself.
+   */
+  board: ["GET", "PUT", "DELETE"],
 };
 
 /**

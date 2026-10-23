@@ -526,7 +526,7 @@ async function syncAccountCreatives(
  * it is stored per account and the dashboard treats a multi-account total as
  * unavailable rather than adding them.
  */
-async function syncAccountPeriodReach(
+export async function syncAccountPeriodReach(
   client: Client,
   account: MetaAdAccount,
   since: string,

@@ -478,7 +478,7 @@ async function countQualifiedLeads(
 }
 
 /** Both drivers return `.rows`; this keeps the cast in one place. */
-function resultRows<T>(result: unknown): T[] {
+export function resultRows<T>(result: unknown): T[] {
   return ((result as { rows?: T[] })?.rows ?? []) as T[];
 }
 

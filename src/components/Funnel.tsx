@@ -34,9 +34,15 @@ const RAMP = [
 export function Funnel({
   steps,
   exits,
+  title = "Pipeline funnel",
+  className,
 }: {
   steps: FunnelStep[];
   exits?: { no_show: number; lost: number };
+  /** The card's heading — a board widget may carry its own title. */
+  title?: string;
+  /** Extra classes on the card — a board cell passes `h-full` to fill its slot. */
+  className?: string;
 }) {
   /*
    * 🔴 Scaled to the LARGEST stage, not the first one.
@@ -54,13 +60,13 @@ export function Funnel({
   const scale = steps.reduce((m, s) => Math.max(m, s.count), 0);
 
   return (
-    <div className="card p-5">
+    <div className={`card p-5${className ? ` ${className}` : ""}`}>
       <div className="mb-1 flex items-baseline justify-between gap-3">
         <h2
           className="text-sm font-semibold"
           style={{ color: "var(--section-ink, var(--text-primary))" }}
         >
-          Pipeline funnel
+          {title}
         </h2>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
           Entered each stage in this period

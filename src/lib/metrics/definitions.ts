@@ -184,6 +184,97 @@ export const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     caveat:
       "Deals closed with no value entered are excluded from both sides, so this is the average of what was actually recorded.",
   },
+
+  /*
+   * Board stats (src/lib/board/catalog.ts). Each has a widget someone can put on
+   * a client's board, so each needs the same "what does this mean" as the
+   * Overview's own tiles.
+   */
+  clicks: {
+    what: "Clicks the ad platform recorded on the ads.",
+    formula: "Sum of daily clicks reported by Google or TikTok.",
+  },
+  clicksAll: {
+    what: "Every click on an ad — links, likes, comments, profile taps and expanding the ad.",
+    formula: "Sum of daily 'clicks (all)' reported by Meta.",
+    caveat: "Higher than link clicks. Use link clicks for anything about traffic to the website.",
+  },
+  fbLeads: {
+    what: "Leads as Meta counts them — form submissions and pixel lead events it attributes to the ads.",
+    formula: "Sum of Meta's daily lead count (all lead types, counted once).",
+    caveat:
+      "Meta's own attribution, not the CRM. It can be higher or lower than CRM leads; the CRM figure is the one the funnel and cost per lead use.",
+  },
+  cpFbLead: {
+    what: "What each lead cost, by Meta's own lead count.",
+    formula: "Ad spend ÷ Meta-reported leads.",
+    caveat: "Uses Meta's attribution, so it can differ from the cost per lead calculated from the CRM.",
+  },
+  frequency: {
+    what: "How many times the average person saw an ad.",
+    formula: "Impressions ÷ reach, both for the whole range, as Meta reports it.",
+    caveat:
+      "Like reach, it is NOT additive — it is fetched once for the whole range, never averaged across days.",
+  },
+  landingPageViews: {
+    what: "Link clicks where the landing page actually finished loading.",
+    formula: "Sum of Meta's daily landing page views.",
+    caveat: "Lower than link clicks: people who click and leave before the page loads are not counted.",
+  },
+  video3sViews: {
+    what: "Times a video ad was watched for at least three seconds.",
+    formula: "Sum of Meta's daily 3-second video plays.",
+  },
+  hookRate: {
+    what: "How often a video stopped the scroll.",
+    formula: "3-second video plays ÷ impressions, from ad-level figures.",
+    caveat: "Only meaningful for video ads; image ads have no hook rate and show a dash.",
+  },
+  thruPlays: {
+    what: "Times a video was watched to the end, or for at least 15 seconds.",
+    formula: "Sum of Meta's daily ThruPlays, from ad-level figures.",
+    caveat: "Meta only reports ThruPlays per ad, so this starts when ad-level syncing began.",
+  },
+  postReactions: {
+    what: "Likes and other reactions on the ads' posts.",
+    formula: "Sum of Meta's daily 'post reaction' actions.",
+  },
+  postComments: {
+    what: "Comments on the ads' posts.",
+    formula: "Sum of Meta's daily 'comment' actions.",
+  },
+  postShares: {
+    what: "Times the ads' posts were shared.",
+    formula: "Sum of Meta's daily 'post share' actions.",
+  },
+  postSaves: {
+    what: "Times the ads' posts were saved.",
+    formula: "Sum of Meta's daily 'post save' actions.",
+  },
+  pageLikes: {
+    what: "Page likes Meta attributes to the ads.",
+    formula: "Sum of Meta's daily 'page like' actions.",
+  },
+  postEngagement: {
+    what: "All engagement on the ads' posts — reactions, comments, shares, clicks and plays.",
+    formula: "Sum of Meta's daily 'post engagement' actions.",
+    caveat: "Includes the reactions, comments and shares shown separately, so never add them together.",
+  },
+  purchases: {
+    what: "Website purchases Meta tracked from the ads.",
+    formula: "Sum of Meta's daily purchase events, one purchase type per day.",
+    caveat:
+      "Only appears if the client's website sends purchases to Meta. Meta reports one purchase under several overlapping types; they are never added together.",
+  },
+  cpPurchase: {
+    what: "What each tracked purchase cost.",
+    formula: "Ad spend ÷ website purchases.",
+  },
+  new_lead_qualified: {
+    what: "New leads, leaving out the ones marked disqualified.",
+    formula: "New leads in the range that have never been moved to Disqualified.",
+    caveat: "Only differs from leads when junk leads are being marked as disqualified in the CRM.",
+  },
 };
 
 export function definitionFor(key: string): MetricDefinition | null {

@@ -25,15 +25,18 @@ export function DownloadPdfButton({
   slug,
   start,
   end,
-  platform,
+  platform = "meta",
   view,
+  kind = "report",
 }: {
   slug: string;
   start: string;
   end: string;
-  platform: AdPlatform;
+  platform?: AdPlatform;
   /** The selection the report is showing, as `encodeView` writes it. */
   view?: string;
+  /** Which document: the report, or the client's board (every platform at once). */
+  kind?: "report" | "board";
 }) {
   const [state, setState] = useState<"idle" | "working" | "failed">("idle");
   const [problem, setProblem] = useState<string | null>(null);
@@ -43,7 +46,9 @@ export function DownloadPdfButton({
     setProblem(null);
     try {
       const res = await fetch(
-        `/api/c/${encodeURIComponent(slug)}/report-pdf?platform=${platform}&start=${start}&end=${end}${view ? `&v=${encodeURIComponent(view)}` : ""}`,
+        kind === "board"
+          ? `/api/c/${encodeURIComponent(slug)}/board/pdf?start=${start}&end=${end}`
+          : `/api/c/${encodeURIComponent(slug)}/report-pdf?platform=${platform}&start=${start}&end=${end}${view ? `&v=${encodeURIComponent(view)}` : ""}`,
       );
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;

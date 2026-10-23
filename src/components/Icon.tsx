@@ -42,7 +42,12 @@ export type IconName =
   | "search"
   | "plus"
   | "chevronLeft"
-  | "chevronRight";
+  | "chevronRight"
+  /* The board: its tab, the drag handle, edit, and the agency's lock. */
+  | "board"
+  | "grip"
+  | "pencil"
+  | "lock";
 
 export function Icon({
   name,
@@ -244,4 +249,29 @@ const PATHS: Record<IconName, React.ReactNode> = {
   ),
   chevronLeft: <path d="m15 18-6-6 6-6" />,
   chevronRight: <path d="m9 18 6-6-6-6" />,
+  board: (
+    <>
+      <rect x="3" y="3" width="8" height="10" rx="1.5" />
+      <rect x="13" y="3" width="8" height="6" rx="1.5" />
+      <rect x="13" y="11" width="8" height="10" rx="1.5" />
+      <rect x="3" y="15" width="8" height="6" rx="1.5" />
+    </>
+  ),
+  grip: (
+    <>
+      <circle cx="9" cy="6" r="1" />
+      <circle cx="15" cy="6" r="1" />
+      <circle cx="9" cy="12" r="1" />
+      <circle cx="15" cy="12" r="1" />
+      <circle cx="9" cy="18" r="1" />
+      <circle cx="15" cy="18" r="1" />
+    </>
+  ),
+  pencil: <path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />,
+  lock: (
+    <>
+      <rect x="4.5" y="11" width="15" height="10" rx="2" />
+      <path d="M8 11V7.5a4 4 0 0 1 8 0V11" />
+    </>
+  ),
 };

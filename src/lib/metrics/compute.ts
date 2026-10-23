@@ -427,6 +427,26 @@ export const METRIC_POLARITY: Record<string, Polarity> = {
   revenue: "higher-better",
   roas: "higher-better",
   avgDeal: "higher-better",
+  // Board stats (src/lib/board/catalog.ts). `catalog.test.ts` holds every
+  // catalogue statKey to an entry here and in METRIC_DEFINITIONS.
+  clicks: "higher-better",
+  clicksAll: "higher-better",
+  fbLeads: "higher-better",
+  cpFbLead: "lower-better",
+  frequency: "neutral",
+  landingPageViews: "higher-better",
+  video3sViews: "higher-better",
+  hookRate: "higher-better",
+  thruPlays: "higher-better",
+  postReactions: "higher-better",
+  postComments: "higher-better",
+  postShares: "higher-better",
+  postSaves: "higher-better",
+  pageLikes: "higher-better",
+  postEngagement: "higher-better",
+  purchases: "higher-better",
+  cpPurchase: "lower-better",
+  new_lead_qualified: "higher-better",
 };
 
 /**

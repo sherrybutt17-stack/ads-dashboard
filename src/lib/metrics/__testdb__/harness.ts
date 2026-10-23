@@ -304,6 +304,18 @@ CREATE TABLE dashboard_layouts (
   CONSTRAINT dashboard_layouts_client_audience_key UNIQUE (client_id, audience)
 );
 
+CREATE TABLE dashboard_boards (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL,
+  name text NOT NULL DEFAULT 'Board',
+  widgets jsonb NOT NULL,
+  schema_version integer NOT NULL DEFAULT 1,
+  locked boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by text,
+  CONSTRAINT dashboard_boards_client_key UNIQUE (client_id)
+);
+
 CREATE TABLE share_links (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id uuid NOT NULL,
