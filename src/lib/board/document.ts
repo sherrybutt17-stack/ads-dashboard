@@ -2,6 +2,7 @@ import type { Client } from "@/db/schema";
 import type { ClientBranding } from "@/lib/branding";
 import { getAgencySettings, getClientLogoDataUri, type AgencySettings } from "@/lib/branding-store";
 import type { DateWindow } from "@/lib/dates";
+import { inlineThumbs } from "@/lib/meta/thumbs";
 import { loadBoardData, type BoardMode } from "./aggregate";
 import { loadBoardContext } from "./context";
 import { getBoard } from "./store";
@@ -53,7 +54,56 @@ export async function loadBoardDocument(
     },
     widgets,
   );
+  await inlineCreativeThumbs(client, widgets, data);
   return { widgets, data, branding: context.branding, agency, logo };
+}
+
+/** Enough for every card a full-page widget holds, few enough to keep a PDF light. */
+const THUMBS_PER_WIDGET = 12;
+const THUMBS_PER_DOCUMENT = 36;
+
+/**
+ * Creative cards' thumbnails, as data URIs. The thumb route needs a session,
+ * which a share link's reader and the PDF renderer do not have — the same
+ * reason the logo is inlined. Never asks Meta for fresh URLs: a public view
+ * must not spend the account's Graph quota (`inlineThumbs`).
+ */
+export async function inlineCreativeThumbs(
+  client: Pick<Client, "id" | "agencyId">,
+  widgets: readonly BoardWidget[],
+  data: BoardData,
+): Promise<void> {
+  const refs: string[] = [];
+  for (const w of widgets) {
+    const d = data[w.id];
+    if (d?.kind !== "creatives") continue;
+    let n = 0;
+    for (const card of d.cards) {
+      if (!card.thumb || !("ref" in card.thumb)) continue;
+      if (n >= THUMBS_PER_WIDGET || refs.length >= THUMBS_PER_DOCUMENT) break;
+      refs.push(card.thumb.ref);
+      n++;
+    }
+  }
+  if (refs.length === 0) return;
+
+  const included = new Set(refs);
+  const srcs = await inlineThumbs(client, refs, { max: THUMBS_PER_DOCUMENT });
+  for (const w of widgets) {
+    const d = data[w.id];
+    if (d?.kind !== "creatives") continue;
+    let capped = false;
+    const cards = d.cards.map((card) => {
+      if (!card.thumb || !("ref" in card.thumb)) return card;
+      if (!included.has(card.thumb.ref)) capped = true;
+      const src = srcs.get(card.thumb.ref);
+      return { ...card, thumb: src ? { src } : null };
+    });
+    const notes = capped
+      ? [...(d.notes ?? []), "Some previews were left out to keep this document small."]
+      : d.notes;
+    data[w.id] = { ...d, cards, notes };
+  }
 }
 
 /** Whether a board asks Meta for reach — one question per range, worth asking before a render. */

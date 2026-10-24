@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { AD_PLATFORMS } from "@/lib/platforms";
 import {
+  CARDS,
+  CARD_GROUPINGS,
   CATEGORY_FORMS,
   DIMENSION_IDS,
   MAX_WIDGETS,
@@ -69,6 +71,19 @@ const tableShape = {
   topN: z.number().int().min(TABLE_ROWS.min).max(TABLE_ROWS.max),
   resultType: ResultType,
 };
+/** A Meta campaign id: digits only, so it can never smuggle anything into a query. */
+const CampaignId = z.string().regex(/^\d{1,30}$/);
+const creativesShape = {
+  kind: z.literal("creatives"),
+  platform: Platform,
+  by: z.enum(CARD_GROUPINGS),
+  stats: z.array(Metric).min(1).max(CARDS.statsMax),
+  sort: Metric,
+  topN: z.number().int().min(CARDS.min).max(CARDS.max),
+  rankings: z.boolean().optional(),
+  resultType: ResultType,
+  campaigns: z.array(CampaignId).min(1).max(CARDS.campaignsMax).optional(),
+};
 const funnelShape = { kind: z.literal("funnel"), platform: Platform };
 const textShape = {
   kind: z.literal("text"),
@@ -93,6 +108,7 @@ export const WidgetQuerySchema = z
     z.object(seriesShape).strict(),
     z.object(categoryShape).strict(),
     z.object(tableShape).strict(),
+    z.object(creativesShape).strict(),
     z.object(funnelShape).strict(),
     z.object(textShape).strict(),
     z.object(logoShape).strict(),
@@ -109,6 +125,7 @@ export const BoardWidgetSchema = z
     z.object({ ...seriesShape, ...boxShape }).strict(),
     z.object({ ...categoryShape, ...boxShape }).strict(),
     z.object({ ...tableShape, ...boxShape }).strict(),
+    z.object({ ...creativesShape, ...boxShape }).strict(),
     z.object({ ...funnelShape, ...boxShape }).strict(),
     z.object({ ...textShape, ...boxShape }).strict(),
     z.object({ ...logoShape, ...boxShape }).strict(),

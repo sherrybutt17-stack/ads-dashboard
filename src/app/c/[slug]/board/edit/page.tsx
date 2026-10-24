@@ -14,6 +14,7 @@ import { accentFor } from "@/lib/branding";
 import { loadBoardContext } from "@/lib/board/context";
 import { getBoard } from "@/lib/board/store";
 import { loadBoardData } from "@/lib/board/aggregate";
+import { getMetaCampaignOptions } from "@/lib/metrics/board-queries";
 import { AD_PLATFORMS } from "@/lib/platforms";
 import { ClientSideNav } from "@/components/ClientSideNav";
 import { BoardEditor } from "@/components/board/BoardEditor";
@@ -69,6 +70,11 @@ export default async function EditBoardPage({
     },
     board.widgets,
   );
+  // For the creative cards' campaign filter. After the board's own queries, and
+  // best-effort: a list that fails to load costs the filter, never the editor.
+  const metaCampaigns = context.connections.meta
+    ? await getMetaCampaignOptions(client.id).catch(() => [])
+    : [];
 
   const { branding, brandName, connections } = context;
   const accent = accentFor(client.id, branding);
@@ -103,6 +109,7 @@ export default async function EditBoardPage({
           initialLocked={board.locked}
           updatedAt={board.updatedAt?.toISOString() ?? null}
           platforms={AD_PLATFORMS.filter((p) => connections[p])}
+          metaCampaigns={metaCampaigns}
           range={{ start: window.startKey, end: window.endKey }}
           rangeText={rangeLabel(window.startKey, window.endKey)}
           basis={comparisonBasis(window, client.timezone)}

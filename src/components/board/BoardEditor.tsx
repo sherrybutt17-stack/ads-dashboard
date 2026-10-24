@@ -84,6 +84,7 @@ export function BoardEditor({
   initialLocked,
   updatedAt,
   platforms,
+  metaCampaigns,
   range,
   rangeText,
   basis,
@@ -98,6 +99,8 @@ export function BoardEditor({
   updatedAt: string | null;
   /** Connected ad platforms, offered as widget sources. */
   platforms: AdPlatform[];
+  /** Meta campaigns a creative-cards widget can be narrowed to. */
+  metaCampaigns: Array<{ id: string; name: string | null }>;
   range: { start: string; end: string };
   rangeText: string;
   basis: string;
@@ -550,6 +553,7 @@ export function BoardEditor({
           open
           editing={picker.editing}
           platforms={platforms}
+          campaigns={metaCampaigns}
           slug={slug}
           range={range}
           basis={basis}

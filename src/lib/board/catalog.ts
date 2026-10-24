@@ -32,13 +32,21 @@ export const METRIC_IDS = [
   "cpm",
   // Meta only, from campaign and ad rows.
   "clicks_all",
+  "ctr_all",
+  "cpc_all",
   "fb_leads",
   "cp_fb_lead",
+  "fb_onsite_leads",
+  "cp_onsite_lead",
+  "fb_pixel_leads",
+  "cp_pixel_lead",
   "reach",
   "frequency",
   "landing_page_views",
+  "land_rate",
   "video_3s_views",
   "hook_rate",
+  "hold_rate",
   "thruplays",
   // Meta only, parsed from the stored `actions` array.
   "post_reactions",
@@ -158,6 +166,13 @@ export interface MetricDef {
    */
   rankBy?: MetricId;
   needs: readonly MetricNeed[];
+  /**
+   * On Meta, only ad rows carry it (ThruPlays, plays), so even its totals and
+   * days are read from ad rows — never from campaign rows, which have none.
+   */
+  adRows?: true;
+  /** A shorter label where space is tight, such as a creative card. */
+  short?: string;
 }
 
 const ALL: readonly AdPlatform[] = ["meta", "google", "tiktok"];
@@ -166,16 +181,17 @@ const META: readonly AdPlatform[] = ["meta"];
 const AUDIENCE: readonly DimensionId[] = ["age", "gender", "region", "placement", "device"];
 const META_EVERY: readonly DimensionId[] = ["campaign", "adset", "ad", "creative", ...AUDIENCE];
 const CAMPAIGN_ONLY: readonly DimensionId[] = ["campaign"];
-const AD_ROWS: readonly DimensionId[] = ["campaign", "adset", "ad"];
+/** Campaign rows and ad rows both carry it, so every Meta split but the audience ones. */
+const AD_ROWS: readonly DimensionId[] = ["campaign", "adset", "ad", "creative"];
 const DELIVERY_DIMS = { meta: META_EVERY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
 const CRM_DIMS = { meta: CAMPAIGN_ONLY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
 /**
- * Meta reports results per campaign and per ad; Google's are one type, so a
- * split by type would be a single bar. No creative or audience split: results
- * are not stored that way.
+ * Meta reports results per campaign and per ad (and so per creative, from the
+ * ad rows); Google's are one type, so a split by type would be a single bar. No
+ * audience split: results are not stored that way.
  */
 const RESULT_DIMS = {
-  meta: ["campaign", "adset", "ad", "result_type"],
+  meta: ["campaign", "adset", "ad", "creative", "result_type"],
   google: CAMPAIGN_ONLY,
   tiktok: ["campaign", "result_type"],
 } as const satisfies Partial<Record<AdPlatform, readonly DimensionId[]>>;
@@ -333,6 +349,33 @@ export const METRICS: Record<MetricId, MetricDef> = {
     dims: { meta: AD_ROWS },
     needs: ["ads", "adlevel"],
   },
+  ctr_all: {
+    id: "ctr_all",
+    label: "CTR (all)",
+    format: "percent",
+    group: "Clicks",
+    statKey: "ctrAll",
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: AD_ROWS },
+    rankBy: "impressions",
+    needs: ["ads", "adlevel"],
+  },
+  cpc_all: {
+    id: "cpc_all",
+    label: "Cost per click (all)",
+    short: "CPC (all)",
+    format: "currency",
+    group: "Clicks",
+    statKey: "cpcAll",
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: AD_ROWS },
+    rankBy: "spend",
+    needs: ["ads", "adlevel"],
+  },
   fb_leads: {
     id: "fb_leads",
     label: "Leads (Meta-reported)",
@@ -357,6 +400,62 @@ export const METRICS: Record<MetricId, MetricDef> = {
     dims: { meta: META_EVERY },
     rankBy: "spend",
     needs: ["ads"],
+  },
+  /*
+   * Meta's two lead counts, kept apart: Instant Form leads submitted on
+   * Facebook or Instagram, and pixel leads on the website. Both are part of
+   * "Leads (Meta-reported)", never added to it.
+   */
+  fb_onsite_leads: {
+    id: "fb_onsite_leads",
+    label: "On-Facebook leads",
+    format: "count",
+    group: "Meta conversions",
+    statKey: "fbLeadsOnsite",
+    platforms: META,
+    additive: true,
+    series: META,
+    dims: { meta: AD_ROWS },
+    needs: ["extras", "adlevel"],
+  },
+  cp_onsite_lead: {
+    id: "cp_onsite_lead",
+    label: "Cost per On-Facebook lead",
+    short: "Cost per On-FB lead",
+    format: "currency",
+    group: "Meta conversions",
+    statKey: "cpFbLeadOnsite",
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: AD_ROWS },
+    rankBy: "spend",
+    needs: ["ads", "extras", "adlevel"],
+  },
+  fb_pixel_leads: {
+    id: "fb_pixel_leads",
+    label: "Website leads",
+    format: "count",
+    group: "Meta conversions",
+    statKey: "fbLeadsPixel",
+    platforms: META,
+    additive: true,
+    series: META,
+    dims: { meta: AD_ROWS },
+    needs: ["extras", "adlevel"],
+  },
+  cp_pixel_lead: {
+    id: "cp_pixel_lead",
+    label: "Cost per website lead",
+    format: "currency",
+    group: "Meta conversions",
+    statKey: "cpFbLeadPixel",
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: AD_ROWS },
+    rankBy: "spend",
+    needs: ["ads", "extras", "adlevel"],
   },
   /*
    * Ads Manager's own "Results". A result is whatever a campaign optimises for,
@@ -430,6 +529,20 @@ export const METRICS: Record<MetricId, MetricDef> = {
     dims: { meta: ["campaign", "adset", "ad", "creative"] },
     needs: ["extras", "adlevel"],
   },
+  land_rate: {
+    id: "land_rate",
+    label: "Land rate",
+    short: "Land",
+    format: "percent",
+    group: "Clicks",
+    statKey: "landRate",
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: AD_ROWS },
+    rankBy: "clicks",
+    needs: ["ads", "extras", "adlevel"],
+  },
   video_3s_views: {
     id: "video_3s_views",
     label: "3-second video plays",
@@ -445,6 +558,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
   hook_rate: {
     id: "hook_rate",
     label: "Hook rate",
+    short: "Hook",
     format: "percent",
     group: "Video",
     statKey: "hookRate",
@@ -454,6 +568,22 @@ export const METRICS: Record<MetricId, MetricDef> = {
     dims: { meta: ["adset", "ad", "creative"] },
     rankBy: "impressions",
     needs: ["adlevel"],
+    adRows: true,
+  },
+  hold_rate: {
+    id: "hold_rate",
+    label: "Hold rate",
+    short: "Hold",
+    format: "percent",
+    group: "Video",
+    statKey: "holdRate",
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: ["adset", "ad", "creative"] },
+    rankBy: "video_3s_views",
+    needs: ["adlevel"],
+    adRows: true,
   },
   thruplays: {
     id: "thruplays",
@@ -466,6 +596,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     series: META,
     dims: { meta: ["adset", "ad", "creative"] },
     needs: ["adlevel"],
+    adRows: true,
   },
   post_reactions: metaAction("post_reactions", "Post reactions", "postReactions"),
   comments: metaAction("comments", "Post comments", "postComments"),
@@ -570,6 +701,11 @@ export function metricLabel(id: MetricId, platform: AdPlatform): string {
   return m.labels?.[platform] ?? m.label;
 }
 
+/** The label where space is tight — a stat on a creative card. */
+export function metricShortLabel(id: MetricId, platform: AdPlatform): string {
+  return METRICS[id].short ?? metricLabel(id, platform);
+}
+
 export function metricStatKey(id: MetricId, platform: AdPlatform): string {
   const m = METRICS[id];
   return m.statKeys?.[platform] ?? m.statKey;
@@ -637,12 +773,17 @@ export const WIDGET_KIND_IDS = [
   "series",
   "category",
   "table",
+  "creatives",
   "funnel",
   "text",
   "logo",
 ] as const;
 
 export type WidgetKind = (typeof WIDGET_KIND_IDS)[number];
+
+/** Creative cards: one per ad, or one per creative (ads sharing an image or video). */
+export const CARD_GROUPINGS = ["ad", "creative"] as const;
+export type CardGrouping = (typeof CARD_GROUPINGS)[number];
 
 export const SERIES_FORMS = ["line", "area", "column"] as const;
 export type SeriesForm = (typeof SERIES_FORMS)[number];
@@ -675,6 +816,13 @@ export const WIDGET_KINDS: Record<WidgetKind, WidgetKindDef> = {
   series: { kind: "series", label: "Over time", size: { w: 6, h: 7 }, min: { w: 3, h: 5 }, max: { w: 12, h: 12 } },
   category: { kind: "category", label: "Split", size: { w: 4, h: 7 }, min: { w: 3, h: 5 }, max: { w: 12, h: 12 } },
   table: { kind: "table", label: "Table", size: { w: 12, h: 8 }, min: { w: 4, h: 4 }, max: { w: 12, h: 12 } },
+  creatives: {
+    kind: "creatives",
+    label: "Creative cards",
+    size: { w: 12, h: 10 },
+    min: { w: 4, h: 7 },
+    max: { w: 12, h: 12 },
+  },
   // Nine rows hold five stages, their drop-offs and the exits line unscrolled.
   funnel: { kind: "funnel", label: "Funnel", size: { w: 12, h: 9 }, min: { w: 6, h: 6 }, max: { w: 12, h: 12 } },
   text: { kind: "text", label: "Text", size: { w: 6, h: 2 }, min: { w: 2, h: 1 }, max: { w: 12, h: 12 } },
@@ -687,6 +835,8 @@ export const MAX_WIDGETS = 60;
 export const TOP_N = { min: 3, max: 25, circleMax: 6 } as const;
 export const TABLE_ROWS = { min: 5, max: 50 } as const;
 export const TABLE_COLUMNS = { min: 1, max: 8 } as const;
+/** Creative cards: how many, how many stats on each, how many campaigns to filter by. */
+export const CARDS = { min: 1, max: 12, statsMax: 6, campaignsMax: 20 } as const;
 export const TEXT_MAX = 2000;
 export const TITLE_MAX = 80;
 
@@ -708,6 +858,7 @@ export const VISUALS: readonly VisualDef[] = [
   { id: "pie", label: "Pie chart", kind: "category", form: "pie" },
   { id: "donut", label: "Donut chart", kind: "category", form: "donut" },
   { id: "table", label: "Table", kind: "table" },
+  { id: "creatives", label: "Creative cards", kind: "creatives" },
   { id: "funnel", label: "Funnel", kind: "funnel" },
   { id: "text", label: "Text", kind: "text" },
   { id: "logo", label: "Client logo", kind: "logo" },
@@ -800,6 +951,33 @@ export function checkWidget(q: WidgetQuery): Check {
       }
       return OK;
     }
+    case "creatives": {
+      if (q.platform !== "meta") {
+        return no("Creative cards are Meta only. Google and TikTok don't report individual ads here.");
+      }
+      if (q.stats.length < 1 || q.stats.length > CARDS.statsMax) {
+        return no(`Show between 1 and ${CARDS.statsMax} stats on each card.`);
+      }
+      if (new Set(q.stats).size !== q.stats.length) return no("Each stat can appear once.");
+      for (const m of [...q.stats, q.sort]) {
+        if (METRICS[m].needs.includes("crm") || METRICS[m].needs.includes("revenue")) {
+          return no(`${METRICS[m].label} comes from the CRM, which can't reliably tell which ad a lead came from.`);
+        }
+        if (!metricSupports(m, "meta") || !metricDims(m, "meta").includes(q.by)) {
+          return no(`${METRICS[m].label} is not reported per ${q.by}.`);
+        }
+      }
+      if (q.topN < CARDS.min || q.topN > CARDS.max) {
+        return no(`Show between ${CARDS.min} and ${CARDS.max} cards.`);
+      }
+      if (q.campaigns !== undefined) {
+        if (q.campaigns.length < 1 || q.campaigns.length > CARDS.campaignsMax) {
+          return no(`Pick up to ${CARDS.campaignsMax} campaigns, or show every campaign.`);
+        }
+        if (new Set(q.campaigns).size !== q.campaigns.length) return no("Each campaign can be picked once.");
+      }
+      return OK;
+    }
     case "funnel":
     case "text":
     case "logo":
@@ -828,6 +1006,8 @@ export function defaultTitle(q: WidgetQuery): string {
         : q.metrics.includes("results")
           ? `${metricLabel("results", q.platform)} by ${DIMENSIONS[q.dimension].rowNoun}`
           : `Performance by ${DIMENSIONS[q.dimension].rowNoun}`;
+    case "creatives":
+      return `${q.by === "ad" ? "Top ads" : "Top creatives"} by ${metricLabel(q.sort, "meta")}`;
     case "funnel":
       return "Pipeline funnel";
     case "text":
@@ -846,9 +1026,12 @@ export function widgetMetrics(q: WidgetQuery): MetricId[] {
       return [q.metric];
     case "table":
       return [...q.metrics];
+    case "creatives":
+      return [...new Set([...q.stats, q.sort])];
     case "funnel":
       return ["leads"];
-    default:
+    case "text":
+    case "logo":
       return [];
   }
 }
@@ -980,6 +1163,49 @@ export const PRESETS: readonly Preset[] = [
       sort: "spend",
       topN: 10,
     },
+  },
+  {
+    id: "creative_cards",
+    label: "Creative performance",
+    description: "Each creative's spend, leads, cost per lead, hook, hold and land",
+    query: {
+      kind: "creatives",
+      platform: "meta",
+      by: "creative",
+      stats: ["spend", "fb_leads", "cp_fb_lead", "hook_rate", "hold_rate", "land_rate"],
+      sort: "spend",
+      topN: 6,
+      rankings: true,
+    },
+    size: { w: 12, h: 12 },
+  },
+  {
+    id: "ad_cards_leads",
+    label: "Ads by On-Facebook leads",
+    description: "Ad cards ranked by form leads, with their cost",
+    query: {
+      kind: "creatives",
+      platform: "meta",
+      by: "ad",
+      stats: ["impressions", "fb_onsite_leads", "cp_onsite_lead"],
+      sort: "fb_onsite_leads",
+      topN: 6,
+    },
+    size: { w: 12, h: 12 },
+  },
+  {
+    id: "ad_cards_clicks",
+    label: "Ads by link clicks",
+    description: "Ad cards ranked by link clicks, with CTR (all)",
+    query: {
+      kind: "creatives",
+      platform: "meta",
+      by: "ad",
+      stats: ["impressions", "clicks", "ctr_all"],
+      sort: "clicks",
+      topN: 6,
+    },
+    size: { w: 12, h: 12 },
   },
   {
     id: "campaign_table",

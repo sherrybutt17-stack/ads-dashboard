@@ -57,8 +57,11 @@ describe("every stat explains itself", () => {
   it("contains only aggregate, client-safe stats", () => {
     expect([...METRIC_IDS]).toEqual([
       "spend", "impressions", "clicks", "ctr", "cpc", "cpm",
-      "clicks_all", "fb_leads", "cp_fb_lead", "reach", "frequency",
-      "landing_page_views", "video_3s_views", "hook_rate", "thruplays",
+      "clicks_all", "ctr_all", "cpc_all", "fb_leads", "cp_fb_lead",
+      // Meta's two lead counts apart — totals per ad, no lead details.
+      "fb_onsite_leads", "cp_onsite_lead", "fb_pixel_leads", "cp_pixel_lead",
+      "reach", "frequency",
+      "landing_page_views", "land_rate", "video_3s_views", "hook_rate", "hold_rate", "thruplays",
       "post_reactions", "comments", "shares", "saves", "page_likes", "post_engagement",
       "purchases", "cp_purchase",
       // Each platform's own results: counts and spend, no lead details.
@@ -236,6 +239,84 @@ describe("platform results", () => {
       const results = board.filter((w) => w.kind === "kpi" && w.metric === "results").map((w) => (w as { platform: string }).platform);
       expect(results.sort()).toEqual(["google", "meta", "tiktok"]);
       for (const w of board) expect(BoardWidgetSchema.safeParse(w).success, w.id).toBe(true);
+    }
+  });
+});
+
+describe("creative cards", () => {
+  type Cards = Extract<Parameters<typeof checkWidget>[0], { kind: "creatives" }>;
+  const cards = (over: Partial<Cards> = {}): Cards => ({
+    kind: "creatives",
+    platform: "meta",
+    by: "ad",
+    stats: ["impressions", "fb_onsite_leads", "cp_onsite_lead"],
+    sort: "fb_onsite_leads",
+    topN: 6,
+    ...over,
+  });
+
+  it("are Meta's alone — Google and TikTok report no individual ads", () => {
+    expect(checkWidget(cards()).ok).toBe(true);
+    for (const platform of ["google", "tiktok"] as const) {
+      const v = checkWidget(cards({ platform }));
+      expect(v.ok).toBe(false);
+      if (!v.ok) expect(v.reason).toMatch(/Meta only/);
+    }
+  });
+
+  it("carry 1 to 6 different stats, each reported per ad or per creative", () => {
+    expect(checkWidget(cards({ stats: [] })).ok).toBe(false);
+    expect(checkWidget(cards({ stats: ["spend", "spend"] })).ok).toBe(false);
+    expect(
+      checkWidget(cards({ stats: ["spend", "impressions", "clicks", "ctr", "cpc", "cpm", "clicks_all"] })).ok,
+    ).toBe(false);
+    // Reach is one figure for a whole range: there is no per-ad reach to put on a card.
+    expect(checkWidget(cards({ stats: ["reach"] })).ok).toBe(false);
+    // Hook and hold exist per ad and per creative; so does every new Meta stat.
+    for (const by of ["ad", "creative"] as const) {
+      expect(
+        checkWidget(cards({ by, stats: ["hook_rate", "hold_rate", "land_rate", "ctr_all", "cpc_all"], sort: "hook_rate" })).ok,
+      ).toBe(true);
+    }
+  });
+
+  it("🔴 refuse CRM stats with the reason, not a bare 'not supported'", () => {
+    const v = checkWidget(cards({ stats: ["spend", "leads"] }));
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toMatch(/comes from the CRM/);
+    expect(checkWidget(cards({ sort: "cp_lead" })).ok).toBe(false);
+  });
+
+  it("may rank by a stat that is not on the card", () => {
+    expect(checkWidget(cards({ stats: ["impressions"], sort: "spend" })).ok).toBe(true);
+  });
+
+  it("bound the cards and the campaign filter", () => {
+    expect(checkWidget(cards({ topN: 0 })).ok).toBe(false);
+    expect(checkWidget(cards({ topN: 13 })).ok).toBe(false);
+    expect(checkWidget(cards({ campaigns: ["120", "121"] })).ok).toBe(true);
+    expect(checkWidget(cards({ campaigns: [] })).ok).toBe(false);
+    expect(checkWidget(cards({ campaigns: ["120", "120"] })).ok).toBe(false);
+    expect(checkWidget(cards({ campaigns: Array.from({ length: 21 }, (_, i) => String(100 + i)) })).ok).toBe(false);
+  });
+
+  it("take a pinned result type only when they read results", () => {
+    expect(checkWidget(cards({ resultType: "onsite_conversion.lead_grouped" })).ok).toBe(false);
+    expect(
+      checkWidget(cards({ stats: ["spend", "results"], sort: "results", resultType: "onsite_conversion.lead_grouped" })).ok,
+    ).toBe(true);
+  });
+
+  it("are titled by what ranks them", () => {
+    expect(defaultTitle(cards())).toBe("Top ads by On-Facebook leads");
+    expect(defaultTitle(cards({ by: "creative", sort: "spend" }))).toBe("Top creatives by Ad spend");
+  });
+
+  it("offer Whatagraph's two reports and the Overview's cards as presets", () => {
+    const ids = PRESETS.filter((p) => p.query.kind === "creatives").map((p) => p.id);
+    expect(ids).toEqual(["creative_cards", "ad_cards_leads", "ad_cards_clicks"]);
+    for (const p of PRESETS.filter((x) => x.query.kind === "creatives")) {
+      expect(WidgetQuerySchema.safeParse(p.query).success, p.id).toBe(true);
     }
   });
 });

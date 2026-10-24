@@ -1,6 +1,8 @@
 import type { AdPlatform } from "@/lib/platforms";
 import type { FunnelStep } from "@/lib/metrics/compute";
+import type { CreativeType, DeliveryRanking } from "@/db/schema";
 import type {
+  CardGrouping,
   CategoryForm,
   DimensionId,
   MetricId,
@@ -50,6 +52,23 @@ export type WidgetQuery =
        */
       resultType?: string;
     }
+  | {
+      /** Ads as cards, like Whatagraph's "Creatives performance". Meta only. */
+      kind: "creatives";
+      platform: AdPlatform;
+      /** One card per ad, or per creative (ads sharing an image or video, merged). */
+      by: CardGrouping;
+      /** The stats on each card, in order. */
+      stats: MetricId[];
+      /** What the cards are ranked by — need not be one of `stats`. */
+      sort: MetricId;
+      topN: number;
+      /** Meta's delivery rankings under each card, as on the Overview. */
+      rankings?: boolean;
+      resultType?: string;
+      /** Only these Meta campaign ids. Absent = every campaign. */
+      campaigns?: string[];
+    }
   | { kind: "funnel"; platform: AdPlatform }
   | { kind: "text"; text: string; size: "heading" | "body" }
   | { kind: "logo" };
@@ -97,6 +116,36 @@ export interface TableRow {
   values: Array<number | null>;
 }
 
+/** One ad (or creative) on a creative-cards widget. Plain JSON, like everything here. */
+export interface CreativeCardData {
+  /** The ad id, or the creative key. */
+  key: string;
+  /** The ad's name — for a creative, its biggest-spending ad's. */
+  name: string;
+  /** The ad's headline; null when it would only repeat the name. */
+  headline: string | null;
+  body: string | null;
+  type: CreativeType;
+  videoSeconds: number | null;
+  /**
+   * `ref` — a thumbnail the page loads from the client's own thumb route;
+   * `src` — a data URI, for documents read without a session. Null: none.
+   */
+  thumb: { ref: string } | { src: string } | null;
+  /** Facebook's preview of the live ad (needs a Facebook login to open). */
+  previewUrl: string | null;
+  /** One per `stats`, in order. Null = no honest value. */
+  values: Array<number | null>;
+  /** "3 ads · 74% of spend", or the ad's campaign and its share. */
+  context: string;
+  /** The kind of result this card's results count, when a results stat shows. */
+  resultLabel: string | null;
+  rankings: Array<{ label: "Quality" | "Engagement" | "Conversion"; value: DeliveryRanking }>;
+  /** Why no rankings show, when they were asked for and none qualify. */
+  rankingNote: string | null;
+  learning: "learning" | "limited" | null;
+}
+
 export type WidgetData =
   | {
       kind: "value";
@@ -137,6 +186,16 @@ export type WidgetData =
       /** Re-derived from summed components, never averaged. */
       totals: Array<number | null>;
       /** Rows beyond the top N, folded into the totals. */
+      more: number;
+      currency: string;
+      notes?: string[];
+    }
+  | {
+      kind: "creatives";
+      by: CardGrouping;
+      stats: MetricId[];
+      cards: CreativeCardData[];
+      /** Ads (or creatives) beyond the top N. */
       more: number;
       currency: string;
       notes?: string[];

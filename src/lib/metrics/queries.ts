@@ -2119,7 +2119,7 @@ export async function getCreativeFatigueInput(
 }
 
 const CREATIVE_TYPES: readonly CreativeType[] = ["image", "video", "carousel", "unknown"];
-function asCreativeType(v: string | null): CreativeType {
+export function asCreativeType(v: string | null): CreativeType {
   return CREATIVE_TYPES.includes(v as CreativeType) ? (v as CreativeType) : "unknown";
 }
 
@@ -2131,7 +2131,7 @@ const RANKINGS: readonly DeliveryRanking[] = [
   "above_average",
   "unknown",
 ];
-function asRanking(v: string | null): DeliveryRanking | null {
+export function asRanking(v: string | null): DeliveryRanking | null {
   return v && RANKINGS.includes(v as DeliveryRanking) ? (v as DeliveryRanking) : null;
 }
 

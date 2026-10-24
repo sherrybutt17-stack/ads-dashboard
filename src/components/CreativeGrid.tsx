@@ -14,8 +14,10 @@ import {
   hookRateGrade,
   holdRateGrade,
   landRate,
+  rankingColor,
   rankingIsMeaningful,
   sortCreatives,
+  RANKING_LABEL,
   RANKING_MIN_IMPRESSIONS,
   type Grade,
   type CreativeSortKey,
@@ -28,7 +30,8 @@ import type {
 import type { CreativeWithOutcome } from "@/lib/metrics/dashboard";
 import type { DeliveryRanking } from "@/db/schema";
 import { DataState, PipeNotice, type DataStateProps } from "@/components/DataState";
-import { Icon, type IconName } from "@/components/Icon";
+import { Icon } from "@/components/Icon";
+import { CreativeThumb } from "@/components/CreativeThumb";
 import { CategoryChart, type CategoryFormat } from "@/components/CategoryChart";
 
 /**
@@ -57,41 +60,12 @@ const SORTS: Array<{ key: CreativeSortKey; label: string }> = [
   { key: "hold", label: "Hold rate" },
 ];
 
-const TYPE_ICON: Record<CreativeWithOutcome["creativeType"], IconName> = {
-  video: "play",
-  image: "image",
-  carousel: "layers",
-  unknown: "help",
-};
-
 const GRADE_COLOR: Record<Grade, string> = {
   strong: "var(--status-good)",
   solid: "var(--seq-450)",
   weak: "var(--status-warning)",
   unknown: "var(--text-muted)",
 };
-
-/**
- * Meta's delivery rankings, in plain words.
- *
- * `unknown` never reaches here — it is filtered upstream, because "we have not
- * formed a judgement" and "average" are different facts and rendering them the
- * same turns an ad with no data yet into a mediocre performer.
- */
-const RANKING_LABEL: Record<DeliveryRanking, string> = {
-  above_average: "Above average",
-  average: "Average",
-  below_average_35: "Bottom 35%",
-  below_average_20: "Bottom 20%",
-  below_average_10: "Bottom 10%",
-  unknown: "Not yet judged",
-};
-
-function rankingColor(r: DeliveryRanking): string {
-  if (r === "above_average") return "var(--status-good)";
-  if (r === "average") return "var(--text-secondary)";
-  return "var(--status-warning)";
-}
 
 export function CreativeGrid({
   slug,
@@ -785,7 +759,6 @@ function Thumb({
   creative: CreativeWithOutcome;
   slug: string;
 }) {
-  const [failed, setFailed] = useState(false);
   /*
    * Our own origin, never Meta's URL directly — see the route's header comment.
    * The short version: a quarter of these URLs are `www.facebook.com/ads/…`,
@@ -795,46 +768,14 @@ function Thumb({
   const src = c.creativeKey
     ? `/api/c/${slug}/creative/${encodeURIComponent(c.creativeKey)}/thumb`
     : null;
-  const show = c.thumbnailUrl && src && !failed;
-
   return (
-    <div
-      className="relative flex aspect-[1.91/1] items-center justify-center overflow-hidden"
-      style={{ background: "var(--surface-2)" }}
-    >
-      {show ? (
-        /* Our own tenant-scoped route, so `next/image` would need a
-           remotePatterns entry for our own origin and would cache across a
-           re-resolve. The bytes are already cached by the route's headers. */
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={src ?? ""}
-          alt={c.title ? `Creative: ${c.title}` : "Ad creative preview"}
-          className="h-full w-full object-cover"
-          loading="lazy"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <div
-          className="flex flex-col items-center gap-1.5"
-          style={{ color: "var(--text-muted)" }}
-        >
-          <Icon name={TYPE_ICON[c.creativeType]} size={22} />
-          <span className="text-[10px] uppercase tracking-wider">
-            {c.thumbnailUrl ? "Preview unavailable" : "No preview"}
-          </span>
-        </div>
-      )}
-      {c.creativeType === "video" && show && (
-        <span
-          className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium"
-          style={{ background: "rgba(0,0,0,0.6)", color: "#fff" }}
-        >
-          <Icon name="play" size={9} />
-          {c.videoLengthSeconds ? `${Math.round(c.videoLengthSeconds)}s` : "Video"}
-        </span>
-      )}
-    </div>
+    <CreativeThumb
+      src={c.thumbnailUrl ? src : null}
+      alt={c.title ? `Creative: ${c.title}` : "Ad creative preview"}
+      type={c.creativeType}
+      videoSeconds={c.videoLengthSeconds}
+      stored={Boolean(c.thumbnailUrl)}
+    />
   );
 }
 

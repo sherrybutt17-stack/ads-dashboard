@@ -1,5 +1,6 @@
 import { div, costPer } from "./compute";
 import { lengthBucket, type LengthBucket } from "@/lib/meta/creative";
+import type { DeliveryRanking } from "@/db/schema";
 
 /**
  * Creative performance metrics — pure, so every benchmark claim is testable.
@@ -178,6 +179,26 @@ export function holdRateGrade(
  */
 export const RANKING_MIN_IMPRESSIONS = 500;
 
+/**
+ * Meta's ranking buckets in words. "Not yet judged" rather than a grade for
+ * UNKNOWN: "Meta has not formed a judgement" and "average" are different facts,
+ * and rendering them the same turns an ad with no data yet into a mediocre one.
+ */
+export const RANKING_LABEL: Record<DeliveryRanking, string> = {
+  above_average: "Above average",
+  average: "Average",
+  below_average_35: "Bottom 35%",
+  below_average_20: "Bottom 20%",
+  below_average_10: "Bottom 10%",
+  unknown: "Not yet judged",
+};
+
+export function rankingColor(r: DeliveryRanking): string {
+  if (r === "above_average") return "var(--status-good)";
+  if (r === "average") return "var(--text-secondary)";
+  return "var(--status-warning)";
+}
+
 export function rankingIsMeaningful(
   ranking: string | null | undefined,
   impressions: number,
@@ -230,15 +251,34 @@ export function sortCreatives<T extends { totals: CreativeTotals }>(
         return holdRate(c.totals);
     }
   };
-  const ascending = key === "cpl";
+  return orderByStat(rows, value, { ascending: key === "cpl", spend: (c) => c.totals.spend });
+}
+
+/**
+ * Rank rows by one value, with the leaderboard's two rules: `ascending` for a
+ * cost (its best is its smallest), and nulls last whichever way. Ties go to the
+ * bigger spend, then to `key`, so the order never depends on query order.
+ */
+export function orderByStat<T>(
+  rows: readonly T[],
+  value: (row: T) => number | null,
+  opts: { ascending: boolean; spend: (row: T) => number; key?: (row: T) => string },
+): T[] {
+  const tie = (a: T, b: T): number => {
+    const bySpend = opts.spend(b) - opts.spend(a);
+    if (bySpend !== 0 || !opts.key) return bySpend;
+    const ka = opts.key(a);
+    const kb = opts.key(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  };
   return [...rows].sort((a, b) => {
     const av = value(a);
     const bv = value(b);
-    if (av === null && bv === null) return b.totals.spend - a.totals.spend;
+    if (av === null && bv === null) return tie(a, b);
     if (av === null) return 1;
     if (bv === null) return -1;
-    if (av === bv) return b.totals.spend - a.totals.spend;
-    return ascending ? av - bv : bv - av;
+    if (av === bv) return tie(a, b);
+    return opts.ascending ? av - bv : bv - av;
   });
 }
 

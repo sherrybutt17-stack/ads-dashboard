@@ -135,6 +135,10 @@ export interface MetaExtrasRow extends MetaActionSums {
   label: string | null;
   landingPageViews: number;
   video3sViews: number;
+  /** Meta's Instant Form leads — part of `leads_total`, never added to it. */
+  leadsOnsite: number;
+  /** Meta's website pixel leads — part of `leads_total`, never added to it. */
+  leadsPixel: number;
   /** Rows in the group with no stored `raw` at all — named in a note. */
   rowsWithoutRaw: number;
 }
@@ -165,6 +169,8 @@ export async function getMetaCampaignExtras(
            ${label} AS label,
            COALESCE(SUM(m.landing_page_views), 0)::float AS landing_page_views,
            COALESCE(SUM(m.video_3s_views), 0)::float AS video_3s_views,
+           COALESCE(SUM(m.leads_onsite), 0)::float AS leads_onsite,
+           COALESCE(SUM(m.leads_pixel), 0)::float AS leads_pixel,
            COUNT(*) FILTER (WHERE m.raw IS NULL)::int AS rows_without_raw,
            ${ACTION_SELECT}
     FROM fb_daily_metrics m
@@ -181,6 +187,8 @@ export async function getMetaCampaignExtras(
     label: string | null;
     landing_page_views: number;
     video_3s_views: number;
+    leads_onsite: number;
+    leads_pixel: number;
     rows_without_raw: number;
   };
   return resultRows<Row>(res).map((r) => ({
@@ -188,6 +196,8 @@ export async function getMetaCampaignExtras(
     label: r.label,
     landingPageViews: Number(r.landing_page_views) || 0,
     video3sViews: Number(r.video_3s_views) || 0,
+    leadsOnsite: Number(r.leads_onsite) || 0,
+    leadsPixel: Number(r.leads_pixel) || 0,
     rowsWithoutRaw: Number(r.rows_without_raw) || 0,
     ...actionsOf(r),
   }));
@@ -203,6 +213,8 @@ export interface MetaAdLevelRow extends MetaActionSums {
   clicksAll: number;
   linkClicks: number;
   fbLeads: number;
+  leadsOnsite: number;
+  leadsPixel: number;
   landingPageViews: number;
   video3sViews: number;
   videoPlays: number;
@@ -254,6 +266,8 @@ export async function getMetaAdLevel(
            COALESCE(SUM(m.clicks_all), 0)::float AS clicks_all,
            COALESCE(SUM(m.link_clicks), 0)::float AS link_clicks,
            COALESCE(SUM(m.leads_total), 0)::float AS fb_leads,
+           COALESCE(SUM(m.leads_onsite), 0)::float AS leads_onsite,
+           COALESCE(SUM(m.leads_pixel), 0)::float AS leads_pixel,
            COALESCE(SUM(m.landing_page_views), 0)::float AS landing_page_views,
            COALESCE(SUM(m.video_3s_views), 0)::float AS video_3s_views,
            COALESCE(SUM(m.video_plays), 0)::float AS video_plays,
@@ -278,6 +292,8 @@ export async function getMetaAdLevel(
     clicks_all: number;
     link_clicks: number;
     fb_leads: number;
+    leads_onsite: number;
+    leads_pixel: number;
     landing_page_views: number;
     video_3s_views: number;
     video_plays: number;
@@ -292,12 +308,227 @@ export async function getMetaAdLevel(
     clicksAll: Number(r.clicks_all) || 0,
     linkClicks: Number(r.link_clicks) || 0,
     fbLeads: Number(r.fb_leads) || 0,
+    leadsOnsite: Number(r.leads_onsite) || 0,
+    leadsPixel: Number(r.leads_pixel) || 0,
     landingPageViews: Number(r.landing_page_views) || 0,
     video3sViews: Number(r.video_3s_views) || 0,
     videoPlays: Number(r.video_plays) || 0,
     thruPlays: Number(r.thru_plays) || 0,
     ...actionsOf(r),
   }));
+}
+
+/**
+ * One ad's delivery under one creative over a window — the unit creative cards
+ * are built from. An ad normally has one creative; one whose creative was
+ * swapped has a row for each, so grouping by ad and grouping by creative both
+ * come from the same rows and add up.
+ */
+export interface MetaAdPairRow extends MetaActionSums {
+  /** The asset (image hash or video id). "" = no single asset: Dynamic Creative, carousels. */
+  creativeKey: string;
+  creativeType: string | null;
+  adId: string;
+  adName: string | null;
+  campaignId: string;
+  campaignName: string | null;
+  spend: number;
+  impressions: number;
+  clicksAll: number;
+  linkClicks: number;
+  fbLeads: number;
+  leadsOnsite: number;
+  leadsPixel: number;
+  landingPageViews: number;
+  video3sViews: number;
+  videoPlays: number;
+  thruPlays: number;
+  /** Meta's most recent judgement, not an average — see `getCreativePerformance`. */
+  qualityRanking: string | null;
+  engagementRanking: string | null;
+  conversionRanking: string | null;
+}
+
+export async function getMetaAdCreativePairs(
+  clientId: string,
+  window: DateWindow,
+): Promise<MetaAdPairRow[]> {
+  const ranking = (col: string) =>
+    sql`(ARRAY_AGG(${sql.raw(`m.${col}`)}::text ORDER BY m.date DESC)
+           FILTER (WHERE ${sql.raw(`m.${col}`)} IS NOT NULL AND ${sql.raw(`m.${col}`)} <> 'unknown'))[1]`;
+  const res = await db.execute(sql`
+    SELECT COALESCE(m.creative_key, '') AS creative_key,
+           MAX(m.creative_type::text) AS creative_type,
+           m.meta_ad_id AS ad_id,
+           ${latest(sql`m.ad_name`)} AS ad_name,
+           ${latest(sql`m.meta_campaign_id`)} AS campaign_id,
+           ${latest(sql`m.campaign_name`)} AS campaign_name,
+           COALESCE(SUM(m.spend), 0)::float AS spend,
+           COALESCE(SUM(m.impressions), 0)::float AS impressions,
+           COALESCE(SUM(m.clicks_all), 0)::float AS clicks_all,
+           COALESCE(SUM(m.link_clicks), 0)::float AS link_clicks,
+           COALESCE(SUM(m.leads_total), 0)::float AS fb_leads,
+           COALESCE(SUM(m.leads_onsite), 0)::float AS leads_onsite,
+           COALESCE(SUM(m.leads_pixel), 0)::float AS leads_pixel,
+           COALESCE(SUM(m.landing_page_views), 0)::float AS landing_page_views,
+           COALESCE(SUM(m.video_3s_views), 0)::float AS video_3s_views,
+           COALESCE(SUM(m.video_plays), 0)::float AS video_plays,
+           COALESCE(SUM(m.thru_plays), 0)::float AS thru_plays,
+           ${ranking("quality_ranking")} AS quality_ranking,
+           ${ranking("engagement_rate_ranking")} AS engagement_ranking,
+           ${ranking("conversion_rate_ranking")} AS conversion_ranking,
+           ${ACTION_SELECT}
+    FROM fb_daily_metrics m
+    ${actionsLateral()}
+    WHERE m.client_id = ${clientId}
+      AND m.level = 'ad'
+      AND m.date >= ${window.startKey}
+      AND m.date <= ${window.endKey}
+      AND m.meta_ad_id <> ''
+    GROUP BY COALESCE(m.creative_key, ''), m.meta_ad_id
+  `);
+
+  type Row = ActionColumns & {
+    creative_key: string;
+    creative_type: string | null;
+    ad_id: string;
+    ad_name: string | null;
+    campaign_id: string | null;
+    campaign_name: string | null;
+    spend: number;
+    impressions: number;
+    clicks_all: number;
+    link_clicks: number;
+    fb_leads: number;
+    leads_onsite: number;
+    leads_pixel: number;
+    landing_page_views: number;
+    video_3s_views: number;
+    video_plays: number;
+    thru_plays: number;
+    quality_ranking: string | null;
+    engagement_ranking: string | null;
+    conversion_ranking: string | null;
+  };
+  return resultRows<Row>(res).map((r) => ({
+    creativeKey: r.creative_key ?? "",
+    creativeType: r.creative_type,
+    adId: r.ad_id,
+    adName: r.ad_name,
+    campaignId: r.campaign_id ?? "",
+    campaignName: r.campaign_name,
+    spend: Number(r.spend) || 0,
+    impressions: Number(r.impressions) || 0,
+    clicksAll: Number(r.clicks_all) || 0,
+    linkClicks: Number(r.link_clicks) || 0,
+    fbLeads: Number(r.fb_leads) || 0,
+    leadsOnsite: Number(r.leads_onsite) || 0,
+    leadsPixel: Number(r.leads_pixel) || 0,
+    landingPageViews: Number(r.landing_page_views) || 0,
+    video3sViews: Number(r.video_3s_views) || 0,
+    videoPlays: Number(r.video_plays) || 0,
+    thruPlays: Number(r.thru_plays) || 0,
+    qualityRanking: r.quality_ranking,
+    engagementRanking: r.engagement_ranking,
+    conversionRanking: r.conversion_ranking,
+    ...actionsOf(r),
+  }));
+}
+
+/** What one ad looks like: its text, its asset, and Facebook's preview link. */
+export interface MetaAdIdentity {
+  adId: string;
+  adName: string | null;
+  creativeKey: string;
+  creativeType: string | null;
+  title: string | null;
+  body: string | null;
+  hasThumbnail: boolean;
+  videoLengthSeconds: number | null;
+  status: string | null;
+  learningStage: string | null;
+  /** `preview_shareable_link` as Meta returned it — validate before showing. */
+  previewLink: string | null;
+}
+
+/** Ads per statement: one bound parameter each, far below Postgres's limit. */
+const IDENTITY_CHUNK = 1000;
+
+export async function getMetaAdIdentity(
+  clientId: string,
+  adIds: readonly string[],
+): Promise<Map<string, MetaAdIdentity>> {
+  const out = new Map<string, MetaAdIdentity>();
+  const ids = [...new Set(adIds.filter(Boolean))];
+  for (let i = 0; i < ids.length; i += IDENTITY_CHUNK) {
+    const chunk = ids.slice(i, i + IDENTITY_CHUNK);
+    const res = await db.execute(sql`
+      SELECT c.meta_ad_id, c.ad_name, COALESCE(c.creative_key, '') AS creative_key,
+             c.creative_type::text AS creative_type, c.title, c.body,
+             (c.thumbnail_url IS NOT NULL) AS has_thumbnail,
+             c.video_length_seconds::float AS video_length_seconds,
+             c.status, c.learning_stage,
+             CASE WHEN jsonb_typeof(c.raw->'preview_shareable_link') = 'string'
+                  THEN c.raw->>'preview_shareable_link' END AS preview_link
+      FROM meta_ad_creatives c
+      WHERE c.client_id = ${clientId}
+        AND c.meta_ad_id IN (${sql.join(chunk.map((id) => sql`${id}`), sql`, `)})
+    `);
+    for (const r of resultRows<{
+      meta_ad_id: string;
+      ad_name: string | null;
+      creative_key: string;
+      creative_type: string | null;
+      title: string | null;
+      body: string | null;
+      has_thumbnail: boolean;
+      video_length_seconds: number | null;
+      status: string | null;
+      learning_stage: string | null;
+      preview_link: string | null;
+    }>(res)) {
+      out.set(r.meta_ad_id, {
+        adId: r.meta_ad_id,
+        adName: r.ad_name,
+        creativeKey: r.creative_key ?? "",
+        creativeType: r.creative_type,
+        title: r.title,
+        body: r.body,
+        hasThumbnail: Boolean(r.has_thumbnail),
+        videoLengthSeconds: r.video_length_seconds === null ? null : Number(r.video_length_seconds),
+        status: r.status,
+        learningStage: r.learning_stage,
+        previewLink: r.preview_link,
+      });
+    }
+  }
+  return out;
+}
+
+/** A campaign the creative-cards filter can offer. */
+export interface CampaignOption {
+  id: string;
+  name: string | null;
+}
+
+/**
+ * Meta campaigns that ran in the last 400 days, most recent first — the list a
+ * creative-cards widget can be narrowed to. Campaign rows, because they are
+ * backfilled; ad rows may not reach back as far yet.
+ */
+export async function getMetaCampaignOptions(clientId: string): Promise<CampaignOption[]> {
+  const res = await db.execute(sql`
+    SELECT m.meta_campaign_id AS id, ${latest(sql`m.campaign_name`)} AS name
+    FROM fb_daily_metrics m
+    WHERE m.client_id = ${clientId}
+      AND m.level = 'campaign'
+      AND m.meta_campaign_id <> ''
+      AND m.date >= CURRENT_DATE - 400
+    GROUP BY m.meta_campaign_id
+    ORDER BY MAX(m.date) DESC, SUM(m.spend) DESC
+    LIMIT 200
+  `);
+  return resultRows<{ id: string; name: string | null }>(res).map((r) => ({ id: r.id, name: r.name }));
 }
 
 export interface MetaCoverage {
@@ -368,7 +599,12 @@ export async function getPeriodReachRow(
  * Platform results — Ads Manager's own "Results"
  * ------------------------------------------------------------------ */
 
-export type ResultsBy = "total" | "day" | "campaign" | "adset" | "ad";
+/**
+ * `creative` — per asset; `ad_creative` — per (ad, asset) pair, keyed
+ * `<ad id>|<creative key>`, which creative cards merge either way. Both read ad
+ * rows, so Meta only.
+ */
+export type ResultsBy = "total" | "day" | "campaign" | "adset" | "ad" | "creative" | "ad_creative";
 
 export interface PlatformResultsRow {
   /** Day key, campaign / ad set / ad id, or "" for the total. */
@@ -409,7 +645,7 @@ export async function getPlatformResults(
   by: ResultsBy,
 ): Promise<PlatformResultsRow[]> {
   if (platform === "meta") return metaResults(clientId, window, by);
-  if (by === "ad" || by === "adset") return [];
+  if (by === "ad" || by === "adset" || by === "creative" || by === "ad_creative") return [];
   return platform === "google"
     ? googleResults(clientId, window, by)
     : tiktokResults(clientId, window, by);
@@ -460,7 +696,7 @@ async function metaResults(
   window: DateWindow,
   by: ResultsBy,
 ): Promise<PlatformResultsRow[]> {
-  const adLevel = by === "ad" || by === "adset";
+  const adLevel = by === "ad" || by === "adset" || by === "creative" || by === "ad_creative";
   const key =
     by === "day"
       ? DAY_KEY
@@ -470,7 +706,11 @@ async function metaResults(
           ? sql`m.meta_ad_id`
           : by === "adset"
             ? sql`m.meta_adset_id`
-            : sql`''`;
+            : by === "creative"
+              ? sql`COALESCE(m.creative_key, '')`
+              : by === "ad_creative"
+                ? sql`m.meta_ad_id || '|' || COALESCE(m.creative_key, '')`
+                : sql`''`;
   const label =
     by === "campaign"
       ? latest(sql`m.campaign_name`)
@@ -481,7 +721,11 @@ async function metaResults(
           : sql`NULL::text`;
   const parent = adLevel ? latest(sql`m.campaign_name`) : sql`NULL::text`;
   const notBlank =
-    by === "ad" ? sql`AND m.meta_ad_id <> ''` : by === "adset" ? sql`AND m.meta_adset_id <> ''` : sql``;
+    by === "ad" || by === "ad_creative"
+      ? sql`AND m.meta_ad_id <> ''`
+      : by === "adset"
+        ? sql`AND m.meta_adset_id <> ''`
+        : sql``;
   const group = by === "total" ? sql`` : sql`GROUP BY 1`;
   const where = sql`
     WHERE m.client_id = ${clientId}
@@ -543,7 +787,7 @@ async function metaResults(
 async function googleResults(
   clientId: string,
   window: DateWindow,
-  by: Exclude<ResultsBy, "ad" | "adset">,
+  by: Exclude<ResultsBy, "ad" | "adset" | "creative" | "ad_creative">,
 ): Promise<PlatformResultsRow[]> {
   const key = by === "day" ? DAY_KEY : by === "campaign" ? sql`m.google_campaign_id` : sql`''`;
   const label = by === "campaign" ? latest(sql`m.campaign_name`) : sql`NULL::text`;
@@ -580,7 +824,7 @@ async function googleResults(
 async function tiktokResults(
   clientId: string,
   window: DateWindow,
-  by: Exclude<ResultsBy, "ad" | "adset">,
+  by: Exclude<ResultsBy, "ad" | "adset" | "creative" | "ad_creative">,
 ): Promise<PlatformResultsRow[]> {
   const key = by === "day" ? DAY_KEY : by === "campaign" ? sql`m.tiktok_campaign_id` : sql`''`;
   const label = by === "campaign" ? latest(sql`m.campaign_name`) : sql`NULL::text`;

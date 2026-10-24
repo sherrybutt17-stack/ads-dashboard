@@ -32,6 +32,10 @@ export interface Bag {
   linkClicks: number;
   clicksAll: number;
   fbLeads: number;
+  /** Meta's Instant Form leads (`onsite_conversion.lead_grouped`) — part of `fbLeads`. */
+  leadsOnsite: number;
+  /** Meta's website pixel leads (`offsite_conversion.fb_pixel_lead`) — part of `fbLeads`. */
+  leadsPixel: number;
   landingPageViews: number;
   video3sViews: number;
   videoPlays: number;
@@ -66,6 +70,8 @@ export const EMPTY_BAG: Bag = Object.freeze({
   linkClicks: 0,
   clicksAll: 0,
   fbLeads: 0,
+  leadsOnsite: 0,
+  leadsPixel: 0,
   landingPageViews: 0,
   video3sViews: 0,
   videoPlays: 0,
@@ -92,6 +98,8 @@ const ADDITIVE_KEYS = [
   "linkClicks",
   "clicksAll",
   "fbLeads",
+  "leadsOnsite",
+  "leadsPixel",
   "landingPageViews",
   "video3sViews",
   "videoPlays",
@@ -179,6 +187,10 @@ export function metricValue(id: MetricId, b: Bag, opts: MetricOptions = {}): num
       return b.clicksAll;
     case "fb_leads":
       return b.fbLeads;
+    case "fb_onsite_leads":
+      return b.leadsOnsite;
+    case "fb_pixel_leads":
+      return b.leadsPixel;
     case "landing_page_views":
       return b.landingPageViews;
     case "video_3s_views":
@@ -205,8 +217,18 @@ export function metricValue(id: MetricId, b: Bag, opts: MetricOptions = {}): num
       return div(b.spend, b.linkClicks);
     case "cpm":
       return b.impressions === 0 ? null : div(b.spend * 1000, b.impressions);
+    case "ctr_all":
+      return div(b.clicksAll, b.impressions);
+    case "cpc_all":
+      return div(b.spend, b.clicksAll);
+    case "land_rate":
+      return div(b.landingPageViews, b.linkClicks);
     case "cp_fb_lead":
       return costPer(b.spend, b.fbLeads);
+    case "cp_onsite_lead":
+      return costPer(b.spend, b.leadsOnsite);
+    case "cp_pixel_lead":
+      return costPer(b.spend, b.leadsPixel);
     case "cp_purchase":
       return costPer(b.spend, b.purchases);
     case "results":
@@ -218,6 +240,10 @@ export function metricValue(id: MetricId, b: Bag, opts: MetricOptions = {}): num
       // Same rule as `creative.ts` hookRate: no plays of any kind = not a video.
       if (b.video3sViews === 0 && b.videoPlays === 0) return null;
       return div(b.video3sViews, b.impressions);
+    case "hold_rate":
+      // `creative.ts` holdRate: no ThruPlays and no 3-second plays = not a video.
+      if (b.thruPlays === 0 && b.video3sViews === 0) return null;
+      return div(b.thruPlays, b.video3sViews);
     case "reach":
       return b.reach;
     case "frequency":

@@ -39,6 +39,19 @@ export function widgetQueryOf(w: BoardWidget): WidgetQuery {
         topN: w.topN,
         ...pinned(w),
       };
+    case "creatives":
+      return {
+        kind: "creatives",
+        platform: w.platform,
+        by: w.by,
+        stats: [...w.stats],
+        sort: w.sort,
+        topN: w.topN,
+        ...(w.rankings ? { rankings: true } : {}),
+        ...pinned(w),
+        // Sorted, so the same choice is the same cache key and data URL.
+        ...(w.campaigns && w.campaigns.length > 0 ? { campaigns: [...w.campaigns].sort() } : {}),
+      };
     case "funnel":
       return { kind: "funnel", platform: w.platform };
     case "text":

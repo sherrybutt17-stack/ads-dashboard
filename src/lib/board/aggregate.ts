@@ -14,11 +14,14 @@ import {
   type AdTotals,
   type FunnelCounts,
 } from "@/lib/metrics/compute";
-import type { CreativeTotals } from "@/lib/metrics/creative";
+import { METRIC_POLARITY } from "@/lib/metrics/compute";
+import { RANKING_MIN_IMPRESSIONS, orderByStat, rankingIsMeaningful } from "@/lib/metrics/creative";
+import { safePreviewUrl } from "@/lib/meta/creative";
 import {
+  asCreativeType,
+  asRanking,
   getBreakdowns,
   getCampaignBreakdown,
-  getCreativePerformance,
   getDailySeries,
   getFunnelByCampaign,
   getPeriodMetrics,
@@ -26,17 +29,22 @@ import {
   type PaidLeadFilter,
 } from "@/lib/metrics/queries";
 import {
+  getMetaAdCreativePairs,
+  getMetaAdIdentity,
   getMetaAdLevel,
   getMetaCampaignExtras,
   getMetaCoverage,
   getPeriodReachRow,
   getPlatformResults,
+  type MetaAdIdentity,
   type MetaAdLevelRow,
+  type MetaAdPairRow,
   type MetaExtrasRow,
   type PlatformResultsRow,
   type ResultsBy,
 } from "@/lib/metrics/board-queries";
 import {
+  mergeByType,
   othersFootnote,
   resultTypeFromKey,
   resultsHeadline,
@@ -50,7 +58,9 @@ import {
   TOP_N,
   canBeCircle,
   checkWidget,
+  metricLabel,
   metricSeries,
+  metricStatKey,
   widgetMetrics,
   type DimensionId,
   type MetricId,
@@ -71,6 +81,7 @@ import type {
   BoardData,
   BoardWidget,
   CategoryRow,
+  CreativeCardData,
   TableRow,
   WidgetData,
   WidgetQuery,
@@ -195,6 +206,8 @@ function fromAds(a: AdTotals): Partial<Bag> {
 
 function fromExtras(e: MetaExtrasRow): Partial<Bag> {
   return {
+    leadsOnsite: e.leadsOnsite,
+    leadsPixel: e.leadsPixel,
     landingPageViews: e.landingPageViews,
     video3sViews: e.video3sViews,
     postReactions: e.postReactions,
@@ -207,13 +220,16 @@ function fromExtras(e: MetaExtrasRow): Partial<Bag> {
   };
 }
 
-function fromAdLevel(r: MetaAdLevelRow): Bag {
+/** One ad-level row — grouped (ad, ad set, day, total) or one (ad, creative) pair. */
+function fromAdLevel(r: MetaAdLevelRow | MetaAdPairRow): Bag {
   return bag({
     spend: r.spend,
     impressions: r.impressions,
     linkClicks: r.linkClicks,
     clicksAll: r.clicksAll,
     fbLeads: r.fbLeads,
+    leadsOnsite: r.leadsOnsite,
+    leadsPixel: r.leadsPixel,
     landingPageViews: r.landingPageViews,
     video3sViews: r.video3sViews,
     videoPlays: r.videoPlays,
@@ -225,19 +241,6 @@ function fromAdLevel(r: MetaAdLevelRow): Bag {
     pageLikes: r.pageLikes,
     postEngagement: r.postEngagement,
     purchases: r.purchases,
-  });
-}
-
-function fromCreative(t: CreativeTotals): Bag {
-  return bag({
-    spend: t.spend,
-    impressions: t.impressions,
-    linkClicks: t.linkClicks,
-    fbLeads: t.leads,
-    landingPageViews: t.landingPageViews,
-    video3sViews: t.video3sViews,
-    videoPlays: t.videoPlays,
-    thruPlays: t.thruPlays,
   });
 }
 
@@ -258,9 +261,9 @@ function needs(metrics: readonly MetricId[], need: "extras" | "crm" | "results")
   return metrics.some((m) => METRICS[m].needs.includes(need));
 }
 
-/** Ad-level rows are the only source of ThruPlays and plays. */
+/** Ad-level rows are the only source of ThruPlays and plays (`MetricDef.adRows`). */
 function fromAdRows(metric: MetricId): boolean {
-  return metric === "thruplays" || metric === "hook_rate";
+  return METRICS[metric].adRows === true;
 }
 
 function unavailable(
@@ -348,8 +351,17 @@ class BoardLoader {
     return this.once("breakdowns", () => getBreakdowns(this.id, this.input.window));
   }
 
-  creatives() {
-    return this.once("creatives", () => getCreativePerformance(this.id, this.input.window));
+  /** Ad-level delivery per (ad, creative) — the one source for creative splits and cards. */
+  creativePairs() {
+    return this.once("creativePairs", () => getMetaAdCreativePairs(this.id, this.input.window));
+  }
+
+  /**
+   * What each ad looks like. Keyed once per loader: every caller passes the ads
+   * of the same `creativePairs()`, so the first call's list is everyone's list.
+   */
+  adIdentity(adIds: readonly string[]) {
+    return this.once("adIdentity", () => getMetaAdIdentity(this.id, adIds));
   }
 
   coverage() {
@@ -529,13 +541,34 @@ class BoardLoader {
         });
       }
       case "creative": {
-        const rows = await this.creatives();
-        return rows.map((c, i) => ({
-          key: c.creativeKey,
-          label: c.adName ?? c.title ?? `Creative ${i + 1}`,
-          sub: c.campaignNames[0],
-          bag: fromCreative(c.totals),
-        }));
+        /*
+         * From the (ad, creative) pairs, merged by asset — so every stat ad rows
+         * carry works per creative, not only the handful the leaderboard sums.
+         * The no-single-asset bucket stays a row of its own, so a table by
+         * creative still adds up to the ad-level total.
+         */
+        const [pairs, results] = await Promise.all([
+          this.creativePairs(),
+          needs(metrics, "results") ? this.results(platform, "creative", "cur") : Promise.resolve(null),
+        ]);
+        const identity = await this.adIdentity(pairs.map((p) => p.adId));
+        const byKey = results ? new Map(results.map((r) => [r.key, r])) : null;
+        return [...groupBy(pairs, (p) => p.creativeKey)].map(([key, list], i) => {
+          const rep = biggest(list);
+          const ident = identity.get(rep.adId);
+          const res = byKey ? fromResults(byKey.get(key), focus) : null;
+          const b = sumBags(list.map(fromAdLevel));
+          return {
+            key,
+            label:
+              key === ""
+                ? "Not attributable to one asset"
+                : (ident?.adName ?? rep.adName ?? ident?.title ?? `Creative ${i + 1}`),
+            sub: rep.campaignName ?? undefined,
+            rtype: res?.type,
+            bag: res ? { ...b, ...res.parts } : b,
+          };
+        });
       }
       default: {
         const b = await this.breakdowns();
@@ -559,7 +592,9 @@ class BoardLoader {
     const start = this.input.window.startKey;
     const out: string[] = [];
     if (opts.adRows && c.firstAdDay && start < c.firstAdDay) {
-      out.push(`Ad-level figures start ${dayLabel(c.firstAdDay)}; earlier days are not included.`);
+      out.push(
+        `Ad-level figures start ${dayLabel(c.firstAdDay)}; earlier days are not included. Import ad-level history on the Connections page to add them.`,
+      );
     }
     if (opts.audience && c.firstBreakdownDay && start < c.firstBreakdownDay) {
       out.push(
@@ -1065,6 +1100,204 @@ async function tableData(
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Creative cards
+ * ------------------------------------------------------------------ */
+
+function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const r of rows) {
+    const k = key(r);
+    const list = out.get(k);
+    if (list) list.push(r);
+    else out.set(k, [r]);
+  }
+  return out;
+}
+
+/** The pair that speaks for a group: the one most money went to. */
+function biggest(list: readonly MetaAdPairRow[]): MetaAdPairRow {
+  return list.reduce((a, b) => (b.spend > a.spend ? b : a));
+}
+
+/** The first non-empty value, the representative ad's own first. */
+function firstOf<T>(values: Array<T | null | undefined>): T | null {
+  for (const v of values) if (v !== null && v !== undefined && v !== "") return v;
+  return null;
+}
+
+function shareOfSpend(spend: number, total: number): string | null {
+  if (total <= 0 || spend <= 0) return null;
+  const share = spend / total;
+  if (share < 0.005) return null;
+  return share < 0.01 ? "<1% of spend" : `${Math.round(share * 100)}% of spend`;
+}
+
+const RANKING_FIELDS = [
+  ["Quality", "qualityRanking"],
+  ["Engagement", "engagementRanking"],
+  ["Conversion", "conversionRanking"],
+] as const;
+
+/**
+ * Ads (or creatives) as cards, ranked by one stat — Whatagraph's "Creatives
+ * performance", built from the same ad rows as every other ad-level widget.
+ *
+ * Grouping by creative merges the ads that share an image or video, as the
+ * Overview's leaderboard does; by ad keeps each ad on its own card, as
+ * Whatagraph does. The no-single-asset bucket (Dynamic Creative, carousels)
+ * has no picture to show, so by creative it is left off the cards and named in
+ * a note; its spend still counts in every card's share.
+ */
+async function creativesData(
+  L: BoardLoader,
+  q: Extract<WidgetQuery, { kind: "creatives" }>,
+): Promise<WidgetData> {
+  const reads = widgetMetrics(q);
+  const wantsResults = needs(reads, "results");
+  const f = wantsResults ? await L.resultFocus("meta", q.resultType) : null;
+  // Each card counts its own kind of result, as each Ads Manager row does — unless one is pinned.
+  const focus: ResultFocus = !wantsResults ? null : q.resultType ? (f?.type?.key ?? q.resultType) : "own";
+
+  const [currency, pairs, coverage, results] = await Promise.all([
+    L.currency("meta"),
+    L.creativePairs(),
+    L.coverageNotes({ adRows: true, audience: false }),
+    wantsResults ? L.results("meta", "ad_creative", "cur") : Promise.resolve(null),
+  ]);
+  const identity = await L.adIdentity(pairs.map((p) => p.adId));
+  const chosen = q.campaigns ? new Set(q.campaigns) : null;
+  const scoped = chosen ? pairs.filter((p) => chosen.has(p.campaignId)) : pairs;
+  const totalSpend = scoped.reduce((s, p) => s + p.spend, 0);
+  const resultsByPair = results ? new Map(results.map((r) => [r.key, r])) : null;
+
+  const groups = groupBy(scoped, (p) => (q.by === "ad" ? p.adId : p.creativeKey));
+  const unresolved = q.by === "creative" ? (groups.get("") ?? []) : [];
+  if (q.by === "creative") groups.delete("");
+
+  const built = [...groups].map(([key, list]) => {
+    let b = sumBags(list.map(fromAdLevel));
+    let rtype: ResultType | null = null;
+    if (resultsByPair) {
+      const typed = mergeByType(
+        list.flatMap((p) => resultsByPair.get(`${p.adId}|${p.creativeKey}`)?.byType ?? []),
+      );
+      const r = fromResults(
+        { key, label: null, parent: null, byType: typed, spend: 0, mixedSpend: 0, rowsWithoutResults: 0 },
+        focus,
+      );
+      b = { ...b, ...r.parts };
+      rtype = r.type;
+    }
+    return { key, list, bag: b, rtype };
+  });
+
+  const ascending = METRIC_POLARITY[metricStatKey(q.sort, "meta")] === "lower-better";
+  const ordered = orderByStat(
+    built.filter((c) => c.bag.spend > 0 || c.bag.impressions > 0),
+    (c) => metricValue(q.sort, c.bag),
+    { ascending, spend: (c) => c.bag.spend, key: (c) => c.key },
+  );
+  const shown = ordered.slice(0, q.topN);
+
+  const showsResults = q.stats.some((m) => METRICS[m].needs.includes("results"));
+  const cards: CreativeCardData[] = shown.map((c) => {
+    const rep = biggest(c.list);
+    // The biggest ad first, then the others, for any field it leaves blank.
+    const idents = [rep, ...c.list.filter((p) => p !== rep)]
+      .map((p) => identity.get(p.adId))
+      .filter((x): x is MetaAdIdentity => Boolean(x));
+    const name =
+      firstOf([idents[0]?.adName, rep.adName, ...idents.map((x) => x.adName)]) ??
+      (q.by === "ad" ? `Ad ${c.key}` : "Untitled creative");
+    const headline = firstOf(idents.map((x) => x.title));
+    const adCount = new Set(c.list.map((p) => p.adId)).size;
+    const share = shareOfSpend(c.bag.spend, totalSpend);
+    const context =
+      q.by === "creative"
+        ? [`${adCount} ${adCount === 1 ? "ad" : "ads"}`, share].filter(Boolean).join(" · ")
+        : [rep.campaignName, share].filter(Boolean).join(" · ");
+    // The asset's own thumbnail; an ad with no single asset is looked up by ad.
+    const thumbKey = q.by === "creative" ? c.key : rep.creativeKey || `ad.${rep.adId}`;
+    const thumbRef = idents.some((x) => x.hasThumbnail) ? thumbKey : null;
+
+    // Rankings: the most-delivered pair that has any, judged on the card's volume.
+    let rankings: CreativeCardData["rankings"] = [];
+    let rankingNote: string | null = null;
+    if (q.rankings) {
+      const source = [...c.list]
+        .filter((p) => p.qualityRanking || p.engagementRanking || p.conversionRanking)
+        .sort((a, b) => b.impressions - a.impressions)[0];
+      if (source) {
+        rankings = RANKING_FIELDS.flatMap(([label, field]) => {
+          const value = asRanking(source[field]);
+          return value && rankingIsMeaningful(value, c.bag.impressions) ? [{ label, value }] : [];
+        });
+      }
+      if (rankings.length === 0) {
+        rankingNote =
+          c.bag.impressions < RANKING_MIN_IMPRESSIONS
+            ? `Meta rankings need about ${RANKING_MIN_IMPRESSIONS} impressions — this has ${formatNumber(c.bag.impressions)}.`
+            : `Meta has not returned a delivery ranking for this ${q.by}.`;
+      }
+    }
+
+    const stages = idents.map((x) => x.learningStage);
+    return {
+      key: c.key,
+      name,
+      headline: headline && headline.trim() !== name.trim() ? headline : null,
+      body: firstOf(idents.map((x) => x.body)),
+      type: asCreativeType(firstOf([...idents.map((x) => x.creativeType), rep.creativeType])),
+      videoSeconds: idents.reduce<number | null>(
+        (m, x) => (x.videoLengthSeconds !== null && (m === null || x.videoLengthSeconds > m) ? x.videoLengthSeconds : m),
+        null,
+      ),
+      thumb: thumbRef ? { ref: thumbRef } : null,
+      previewUrl: firstOf(idents.map((x) => safePreviewUrl(x.previewLink))),
+      values: q.stats.map((m) => metricValue(m, c.bag)),
+      context,
+      resultLabel:
+        showsResults && c.rtype && (c.bag.resultCount > 0 || c.bag.resultSpend > 0) ? c.rtype.label : null,
+      rankings,
+      rankingNote,
+      learning: stages.includes("LEARNING") ? "learning" : stages.includes("LEARNING_LIMITED") ? "limited" : null,
+    };
+  });
+
+  const notes = [...resultNotes(f, reads, currency, { counting: focus !== "own" }), ...coverage];
+  if (focus === "own" && showsResults) notes.push("Each card counts its own kind of result, as Ads Manager does.");
+  if (chosen) {
+    const names = new Map(pairs.map((p) => [p.campaignId, p.campaignName]));
+    const listed = [...chosen].map((id) => names.get(id) ?? `Campaign ${id}`);
+    notes.push(`Only ads in ${listed.length === 1 ? "the campaign" : `${listed.length} campaigns`}: ${listed.join(", ")}.`);
+  }
+  const unresolvedSpend = unresolved.reduce((s, p) => s + p.spend, 0);
+  if (unresolvedSpend > 0) {
+    notes.push(
+      `${formatCurrency(unresolvedSpend, currency)} went to ads with no single image or video (Dynamic Creative, carousels), so it is on no card.`,
+    );
+  }
+  if (ascending && cards.length > 1) notes.push(`Ranked by ${metricLabel(q.sort, "meta").toLowerCase()}, lowest first.`);
+
+  if (cards.length === 0) {
+    return unavailable(
+      "empty",
+      chosen ? "No ads from the chosen campaigns ran in this range" : "No ads ran in this range",
+      coverage[0],
+    );
+  }
+  return {
+    kind: "creatives",
+    by: q.by,
+    stats: [...q.stats],
+    cards,
+    more: Math.max(0, ordered.length - shown.length),
+    currency,
+    notes: notes.length ? notes : undefined,
+  };
+}
+
 async function funnelData(
   L: BoardLoader,
   q: Extract<WidgetQuery, { kind: "funnel" }>,
@@ -1093,6 +1326,8 @@ async function widgetData(L: BoardLoader, q: WidgetQuery): Promise<WidgetData> {
       return categoryData(L, q);
     case "table":
       return tableData(L, q);
+    case "creatives":
+      return creativesData(L, q);
     case "funnel":
       return funnelData(L, q);
     case "text":

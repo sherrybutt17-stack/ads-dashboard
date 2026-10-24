@@ -3048,6 +3048,12 @@ function WebhookStep({
 /* ------------------------------------------------------------------ */
 
 /** "90 days" / "12 months" / "36 months", for button and result copy. */
+/** "2026-09" → "Sep 2026". */
+function monthName(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
 function windowLabel(days: number): string {
   return days >= 365 ? `${Math.round(days / 30.44 / 12) * 12} months` : `${days} days`;
 }
@@ -3075,6 +3081,64 @@ function BackfillStep({
    * broken connection rather than an old one. Meta keeps ~37 months.
    */
   const [days, setDays] = useState(90);
+  /** The ad-level import's months so far, while it runs. */
+  const [progress, setProgress] = useState<string | null>(null);
+  const stopRef = useRef(false);
+
+  /*
+   * Ad-level history arrives a few months per request (each fits the route's
+   * time limit), so the button keeps asking until the window is done. Stopping
+   * keeps what was imported; pressing again carries on, because months that
+   * are already complete are skipped on the server.
+   */
+  async function importAdLevel() {
+    setBusy("meta_adlevel_backfill");
+    setMsg(null);
+    setProgress(null);
+    stopRef.current = false;
+    let before: string | undefined;
+    let rows = 0;
+    const months: string[] = [];
+    try {
+      for (let request = 0; request < 40; request++) {
+        const res = await fetch(`/api/clients/${clientId}/sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "meta_adlevel_backfill", days, ...(before ? { before } : {}) }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setMsg({ ok: false, msg: failureText(body, "The ad-level import failed") });
+          return;
+        }
+        rows += Number(body.rowsWritten) || 0;
+        for (const m of (body.months ?? []) as Array<{ month: string }>) months.push(monthName(m.month));
+        if (body.done) {
+          setMsg({
+            ok: true,
+            msg:
+              rows === 0
+                ? `Ad-level detail for the last ${windowLabel(days)} was already complete.`
+                : `Imported ${rows} ad-level rows across ${months.length} months. Creative cards and ad tables now reach back ${windowLabel(days)}.`,
+          });
+          return;
+        }
+        before = body.nextBefore ?? undefined;
+        setProgress(`${months.join(", ")} done — carrying on…`);
+        if (stopRef.current) {
+          setMsg({
+            ok: true,
+            msg: `Stopped after ${months.length} months (${rows} rows). Press the button again to carry on where it stopped.`,
+          });
+          return;
+        }
+      }
+      setMsg({ ok: false, msg: "The import is taking longer than expected. Press the button again to carry on." });
+    } finally {
+      setBusy(null);
+      setProgress(null);
+    }
+  }
 
   async function run(
     action: "meta_backfill" | "google_backfill" | "tiktok_backfill" | "ghl_backfill",
@@ -3110,7 +3174,7 @@ function BackfillStep({
     <Card
       step={step}
       title="Import historical data"
-      description="Optional, run once. Ad platform history imports fully, results included; GHL history does not."
+      description="Optional, run once. Ad platform history imports fully, results included; GHL history does not. Ad-level detail — what creative cards and ad tables read — imports separately, month by month."
     >
       <div className="flex flex-wrap items-center gap-2">
         <label className="sr-only" htmlFor="backfill-window">
@@ -3145,6 +3209,28 @@ function BackfillStep({
             ? "Importing…"
             : `Import ${windowLabel(days)} of Meta data`}
         </button>
+        <button
+          onClick={importAdLevel}
+          disabled={busy !== null}
+          className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+          style={{
+            borderColor: "var(--border-strong)",
+            color: "var(--text-secondary)",
+          }}
+        >
+          {busy === "meta_adlevel_backfill" ? "Importing ad-level detail…" : "Import ad-level detail (creative cards)"}
+        </button>
+        {busy === "meta_adlevel_backfill" && (
+          <button
+            onClick={() => {
+              stopRef.current = true;
+            }}
+            className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Stop after this month
+          </button>
+        )}
         {hasGoogle && (
           <button
             onClick={() => run("google_backfill")}
@@ -3197,6 +3283,11 @@ function BackfillStep({
         from when the webhook went live.
       </p>
 
+      {progress && (
+        <p className="mt-3 text-xs" role="status" style={{ color: "var(--text-muted)" }}>
+          {progress}
+        </p>
+      )}
       {msg && <Result ok={msg.ok}>{msg.msg}</Result>}
 
       <a

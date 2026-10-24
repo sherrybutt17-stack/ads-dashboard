@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { backfillClientMetrics, syncClientMetrics } from "@/lib/meta/sync";
+import { backfillClientMetrics, importMetaAdLevelHistory, syncClientMetrics } from "@/lib/meta/sync";
 import { backfillClientTiktokMetrics } from "@/lib/tiktok/sync";
 import { backfillClientGoogleMetrics } from "@/lib/google/sync";
 import { backfillClientSnapshot } from "@/lib/ghl/backfill";
 import { trailingWindowInclusive } from "@/lib/dates";
 import { isSuperadmin, requireClient } from "@/lib/auth";
 import { safeFailure } from "@/lib/api-failure";
+import { rateLimit } from "@/lib/rate-limit";
+import { record } from "@/lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +16,14 @@ export const maxDuration = 300;
 
 const BodySchema = z.object({
   action: z
-    .enum(["meta_sync", "meta_backfill", "google_backfill", "tiktok_backfill", "ghl_backfill"])
+    .enum([
+      "meta_sync",
+      "meta_backfill",
+      "meta_adlevel_backfill",
+      "google_backfill",
+      "tiktok_backfill",
+      "ghl_backfill",
+    ])
     .default("meta_sync"),
   /*
    * Meta retains insights for ~37 months, so the ceiling is 36 to leave a
@@ -23,7 +32,15 @@ const BodySchema = z.object({
    * zero rows from a backfill that reported success.
    */
   days: z.number().int().min(1).max(1095).default(90),
+  /** Ad-level import only: carry on with the months before this day (the last answer's `nextBefore`). */
+  before: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
 });
+
+/** Ad-level import requests per client per hour: a year resumes in a handful; this stops a loop gone wrong. */
+const ADLEVEL_IMPORTS_PER_HOUR = 40;
 
 /** Manual sync triggers, used by the onboarding wizard and the Re-test button. */
 export async function POST(
@@ -58,6 +75,38 @@ export async function POST(
       case "meta_backfill": {
         const rows = await backfillClientMetrics(client, parsed.data.days);
         return NextResponse.json({ ok: true, rowsWritten: rows });
+      }
+      case "meta_adlevel_backfill": {
+        /*
+         * No lock: every write is an upsert and each month checks whether it is
+         * already complete, so two overlapping runs only repeat work. The rate
+         * limit and the button's own busy state keep that rare.
+         */
+        const limited = rateLimit(`adlevel-import:${client.id}`, ADLEVEL_IMPORTS_PER_HOUR, 60 * 60 * 1000);
+        if (!limited.ok) {
+          return NextResponse.json(
+            { ok: false, error: "Too many imports in the last hour. Try again later." },
+            { status: 429, headers: { "Retry-After": String(Math.ceil(limited.retryAfterMs / 1000)) } },
+          );
+        }
+        const res = await importMetaAdLevelHistory(client, {
+          days: parsed.data.days,
+          before: parsed.data.before,
+        });
+        await record({
+          action: "client.adlevel_import",
+          targetType: "client",
+          targetId: client.id,
+          clientId: client.id,
+          metadata: {
+            days: parsed.data.days,
+            before: parsed.data.before ?? null,
+            done: res.done,
+            months: res.months.length,
+            rowsWritten: res.rowsWritten,
+          },
+        });
+        return NextResponse.json({ ok: true, ...res });
       }
       case "google_backfill": {
         const rows = await backfillClientGoogleMetrics(client, parsed.data.days);

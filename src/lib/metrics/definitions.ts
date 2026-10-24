@@ -210,6 +210,44 @@ export const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     formula: "Ad spend ÷ Meta-reported leads.",
     caveat: "Uses Meta's attribution, so it can differ from the cost per lead calculated from the CRM.",
   },
+  fbLeadsOnsite: {
+    what: "Leads from Meta's Instant Forms — forms people submitted without leaving Facebook or Instagram.",
+    formula: "Sum of Meta's daily on-Facebook lead count.",
+    caveat:
+      "Meta's own attribution, across every campaign — so it can be higher than Results, which count only what each campaign optimises for. Not the CRM's count.",
+  },
+  cpFbLeadOnsite: {
+    what: "What each on-Facebook (Instant Form) lead cost.",
+    formula: "Ad spend ÷ on-Facebook leads.",
+    caveat:
+      "Divides ALL the spend in the row by these leads, including spend on campaigns after other results. Meta's attribution, not the CRM.",
+  },
+  fbLeadsPixel: {
+    what: "Leads the Meta pixel recorded on the client's website and credited to the ads.",
+    formula: "Sum of Meta's daily website (pixel) lead count.",
+    caveat:
+      "Only appears if the website sends lead events to Meta. Meta's own attribution, across every campaign, so it can differ from Results and from the CRM.",
+  },
+  cpFbLeadPixel: {
+    what: "What each website (pixel) lead cost.",
+    formula: "Ad spend ÷ website leads.",
+    caveat: "Divides ALL the spend in the row by these leads. Meta's attribution, not the CRM.",
+  },
+  ctrAll: {
+    what: "How often an ad was clicked anywhere — the link, the profile, a reaction, 'see more'.",
+    formula: "Clicks (all) ÷ impressions, as Ads Manager's 'CTR (all)'.",
+    caveat: "Higher than the link CTR. Use the link CTR for anything about traffic to the website.",
+  },
+  cpcAll: {
+    what: "What each click of any kind cost.",
+    formula: "Ad spend ÷ clicks (all), as Ads Manager's 'CPC (all)'.",
+    caveat: "Lower than the cost per link click, because every kind of click counts.",
+  },
+  landRate: {
+    what: "Of the people who clicked the link, how many waited for the page to load.",
+    formula: "Landing page views ÷ link clicks.",
+    caveat: "A low land rate usually means a slow page or accidental clicks, not a weak ad.",
+  },
   results: {
     what: "What the ad platform counts as the campaigns' results — whatever each campaign is set to get: website leads, calls, messages, landing page views. On Google, its Conversions column.",
     formula: "Sum of the platform's daily results of the type shown, exactly as its Ads Manager reports them.",
@@ -252,6 +290,12 @@ export const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     what: "How often a video stopped the scroll.",
     formula: "3-second video plays ÷ impressions, from ad-level figures.",
     caveat: "Only meaningful for video ads; image ads have no hook rate and show a dash.",
+  },
+  holdRate: {
+    what: "Of the people a video hooked, how many kept watching.",
+    formula: "ThruPlays ÷ 3-second video plays, from ad-level figures.",
+    caveat:
+      "Not comparable across video lengths: under 15 seconds a ThruPlay means watched to the end, from 15 seconds on it means reached 15 seconds. Image ads show a dash.",
   },
   thruPlays: {
     what: "Times a video was watched to the end, or for at least 15 seconds.",

@@ -18,6 +18,7 @@ import { encodeWidgetQuery, widgetQueryOf } from "@/lib/board/query";
 import type { BoardWidget as Widget, WidgetData } from "@/lib/board/types";
 import { PLATFORM_LABEL } from "@/lib/platforms";
 import { BoardCategoryChart, BoardSeriesChart, type FixedSize } from "./BoardChart";
+import { BoardCreatives } from "./BoardCreatives";
 import { BoardTable } from "./BoardTable";
 
 /**
@@ -333,6 +334,9 @@ export function BoardWidget({
           maxRows={chartBox ? tableRowsThatFit(chartBox.height, live.rows.some((r) => r.sub)) : undefined}
         />
       );
+    }
+    if (query.kind === "creatives" && live.kind === "creatives") {
+      return <BoardCreatives data={live} slug={slug} fixed={chartBox} />;
     }
     // Data of the wrong kind for the widget: a stale cache after an edit.
     return <DataState size="compact" title="Nothing to show yet" />;

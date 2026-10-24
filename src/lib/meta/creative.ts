@@ -212,3 +212,29 @@ export function thruPlayMeaning(bucket: LengthBucket): string {
       ? "completion under 15s, or 15s reached above it — length unknown for this asset"
       : "watched at least 15 seconds";
 }
+
+/**
+ * Hosts a Facebook ad preview link (`preview_shareable_link`) may point at.
+ * The link is shown to clients and printed in PDFs, so anything else — another
+ * scheme, another host, credentials in the URL — is dropped, not shown.
+ */
+const PREVIEW_HOSTS = new Set([
+  "fb.me",
+  "facebook.com",
+  "www.facebook.com",
+  "m.facebook.com",
+  "business.facebook.com",
+]);
+
+/** Facebook's preview link for an ad, or null for anything that isn't one. */
+export function safePreviewUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 500) return null;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || u.username || u.password) return null;
+  return PREVIEW_HOSTS.has(u.hostname.toLowerCase()) ? u.toString() : null;
+}

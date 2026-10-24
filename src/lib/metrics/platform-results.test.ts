@@ -181,3 +181,26 @@ describe("TikTok results", () => {
     expect(total.spend).toBe(175);
   });
 });
+
+describe("Meta results per creative", () => {
+  it("group ad rows by asset, and by (ad, asset) pair — Meta only", async () => {
+    const adRow = (ad: string, key: string, date: string, value: string) => sql`
+      INSERT INTO fb_daily_metrics (client_id, date, level, meta_campaign_id, meta_ad_id, ad_name, creative_key, spend, raw)
+      VALUES (${CLIENT_A}, ${date}, 'ad', 'c1', ${ad}, ${"Ad " + ad}, ${key}, 10,
+              ${JSON.stringify({ results: [res("actions:onsite_conversion.lead_grouped", value)] })}::jsonb)`;
+    await harness.db.execute(adRow("a1", "vid", "2026-09-01", "2"));
+    await harness.db.execute(adRow("a2", "vid", "2026-09-01", "3"));
+    await harness.db.execute(adRow("a3", "img", "2026-09-02", "1"));
+    // A campaign row of the same day: never counted per creative.
+    await meta({ date: "2026-09-01", spend: 999, results: [res("actions:onsite_conversion.lead_grouped", "99")] });
+
+    const byCreative = await bq.getPlatformResults("meta", CLIENT_A, SEPT, "creative");
+    expect(Object.fromEntries(byCreative.map((r) => [r.key, r.byType[0]?.count]))).toEqual({ vid: 5, img: 1 });
+
+    const byPair = await bq.getPlatformResults("meta", CLIENT_A, SEPT, "ad_creative");
+    expect(byPair.map((r) => r.key).sort()).toEqual(["a1|vid", "a2|vid", "a3|img"]);
+
+    expect(await bq.getPlatformResults("google", CLIENT_A, SEPT, "creative")).toEqual([]);
+    expect(await bq.getPlatformResults("tiktok", CLIENT_A, SEPT, "ad_creative")).toEqual([]);
+  });
+});

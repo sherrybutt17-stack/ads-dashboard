@@ -3,6 +3,7 @@ import {
   parseInsightRow,
   segmentLabel,
   insightFields,
+  isFieldRefusal,
   isResultFieldRefusal,
   metaVersion,
   META_BREAKDOWNS,
@@ -492,5 +493,62 @@ describe("results fields", () => {
       new MetaClient("tok").getDailyInsights("act_1", "2026-09-01", "2026-09-01"),
     ).rejects.toBeInstanceOf(MetaApiError);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ad preview links", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const ok = (body: unknown) =>
+    ({ ok: true, status: 200, headers: new Headers(), json: async () => body }) as unknown as Response;
+  const refused = (message: string) =>
+    ({
+      ok: false,
+      status: 400,
+      headers: new Headers(),
+      json: async () => ({ error: { code: 100, message } }),
+    }) as unknown as Response;
+
+  it("asks for each ad's preview link, and for ARCHIVED ads only when told to", async () => {
+    const seen: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        seen.push(new URL(String(url)));
+        return ok({ data: [{ id: "1", preview_shareable_link: "https://fb.me/x" }] });
+      }),
+    );
+    const ads = await new MetaClient("tok").getAds("act_1");
+    expect(ads[0].preview_shareable_link).toBe("https://fb.me/x");
+    expect(seen[0].searchParams.get("fields")).toContain("preview_shareable_link");
+    expect(seen[0].searchParams.get("effective_status")).toBeNull();
+
+    await new MetaClient("tok").getAds("act_1", { statuses: ["ARCHIVED"] });
+    expect(seen[1].searchParams.get("effective_status")).toBe('["ARCHIVED"]');
+  });
+
+  it("🔴 lists the ads anyway when Meta refuses the link — thumbnails must not depend on it", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const fields = new URL(String(url)).searchParams.get("fields") ?? "";
+        seen.push(fields);
+        return fields.includes("preview_shareable_link")
+          ? refused("(#100) Tried accessing nonexisting field (preview_shareable_link) on node type (Ad)")
+          : ok({ data: [{ id: "1" }] });
+      }),
+    );
+    const ads = await new MetaClient("tok").getAds("act_1");
+    expect(ads).toHaveLength(1);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toContain("preview_shareable_link");
+  });
+
+  it("recognises only a refusal of the fields it was given", () => {
+    const refusal = (code: number, message: string) => new MetaApiError(message, 400, code);
+    expect(isFieldRefusal(refusal(100, "(#100) Tried accessing nonexisting field (preview_shareable_link)"), ["preview_shareable_link"])).toBe(true);
+    expect(isFieldRefusal(refusal(100, "(#100) Param limit is invalid"), ["preview_shareable_link"])).toBe(false);
+    expect(isFieldRefusal(refusal(190, "preview_shareable_link"), ["preview_shareable_link"])).toBe(false);
   });
 });

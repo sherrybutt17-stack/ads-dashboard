@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { sql } from "drizzle-orm";
 import type { Client } from "@/db/schema";
 import { createTestDb, type TestDb } from "@/lib/metrics/__testdb__/harness";
+import { trailingWindowInclusive } from "@/lib/dates";
 
 /**
  * The ingest run: what gets written, and what the sync_runs row says afterwards.
@@ -44,7 +45,11 @@ let insightRows: Record<string, unknown>[] = [];
 let reachRows: { campaignId: string; reach: number; frequency: number }[] = [];
 let breakdownError: Error | null = null;
 let dailyError: Error | null = null;
-const calls: { method: string; account: string; since?: string; until?: string }[] = [];
+/** When set, insights are answered by this instead — for the ad-level import, which asks per window and level. */
+let dailyImpl: ((since: string, until: string, level: string) => Record<string, unknown>[]) | null = null;
+/** The ads listing, by the statuses asked for. */
+let adsListing: (opts?: { statuses?: readonly string[] }) => unknown[] = () => [];
+const calls: { method: string; account: string; since?: string; until?: string; level?: string }[] = [];
 
 const ACC_1 = "cccccccc-0000-4000-8000-000000000001";
 const ACC_2 = "cccccccc-0000-4000-8000-000000000002";
@@ -57,9 +62,10 @@ let activeAccounts = [ACCOUNTS[0]];
 vi.mock("./accounts", () => ({
   activeAdAccounts: async () => activeAccounts,
   metaClientForAccount: (account: { adAccountId: string }) => ({
-    async getDailyInsights(acct: string, since: string, until: string) {
-      calls.push({ method: "daily", account: acct, since, until });
+    async getDailyInsights(acct: string, since: string, until: string, level = "campaign") {
+      calls.push({ method: "daily", account: acct, since, until, level });
       if (dailyError) throw dailyError;
+      if (dailyImpl) return dailyImpl(since, until, level).map((r) => ({ ...r, account_id: account.adAccountId }));
       return insightRows.map((r) => ({ ...r, account_id: account.adAccountId }));
     },
     async getPeriodReach(acct: string, since: string, until: string) {
@@ -71,8 +77,9 @@ vi.mock("./accounts", () => ({
       if (breakdownError) throw breakdownError;
       return [];
     },
-    async getAds() {
-      return [];
+    async getAds(acct: string, opts?: { statuses?: readonly string[] }) {
+      calls.push({ method: opts?.statuses ? `ads:${opts.statuses.join(",")}` : "ads", account: acct });
+      return adsListing(opts);
     },
     async getVideoLengths() {
       return new Map();
@@ -142,6 +149,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   calls.length = 0;
+  dailyImpl = null;
+  adsListing = () => [];
   insightRows = [insight()];
   reachRows = [];
   breakdownError = null;
@@ -559,5 +568,116 @@ describe("RECONCILE_DAYS", () => {
      * Manager forever.
      */
     expect(mod.RECONCILE_DAYS).toBe(META_PROVISIONAL_DAYS);
+  });
+});
+
+
+/* ------------------------------------------------------------------ *
+ * Ad-level history import
+ * ------------------------------------------------------------------ */
+
+describe("planMonths", () => {
+  it("lists the window's months newest first, clipped to the window", () => {
+    expect(mod.planMonths({ startKey: "2026-07-15", endKey: "2026-09-10" })).toEqual([
+      { month: "2026-09", since: "2026-09-01", until: "2026-09-10" },
+      { month: "2026-08", since: "2026-08-01", until: "2026-08-31" },
+      { month: "2026-07", since: "2026-07-15", until: "2026-07-31" },
+    ]);
+  });
+
+  it("carries on with the months before a day", () => {
+    const months = mod.planMonths({ startKey: "2026-07-15", endKey: "2026-09-10" }, "2026-08-31");
+    expect(months.map((m) => m.month)).toEqual(["2026-08", "2026-07"]);
+  });
+});
+
+describe("importMetaAdLevelHistory", () => {
+  /** An ad-level insight on a day, shaped the way the API sends it. */
+  const adInsight = (date: string, ad: string, spend = "10") => ({
+    ...insight({ date_start: date, spend }),
+    ad_id: ad,
+    ad_name: `Ad ${ad}`,
+    adset_id: "set_1",
+    adset_name: "Set",
+  });
+  const video = (id: string, link?: string) => ({
+    id,
+    name: `Ad ${id}`,
+    status: "ACTIVE",
+    ...(link ? { preview_shareable_link: link } : {}),
+    creative: { id: `cr_${id}`, video_id: `vid_${id}`, thumbnail_url: "https://cdn.example/t.jpg" },
+  });
+
+  beforeEach(async () => {
+    await run(`TRUNCATE meta_ad_creatives`);
+    // One ad row per requested window; the archived ad on every second one.
+    dailyImpl = (since, _until, level) =>
+      level === "ad" ? [adInsight(since, "a1"), adInsight(since, "a9", "5")] : [];
+    adsListing = (opts) => (opts?.statuses?.includes("ARCHIVED") ? [video("a9")] : [video("a1", "https://fb.me/one")]);
+  });
+
+  it("🔴 imports newest month first, names archived ads, and writes no sync run", async () => {
+    const res = await mod.importMetaAdLevelHistory(client(), { days: 60 });
+    expect(res.done).toBe(true);
+    expect(res.nextBefore).toBeNull();
+    const windows = calls.filter((c) => c.method === "daily" && c.level === "ad").map((c) => c.since!);
+    expect(windows.length).toBeGreaterThanOrEqual(2);
+    expect([...windows].sort().reverse()).toEqual(windows);
+    expect(calls.map((c) => c.method)).toEqual(expect.arrayContaining(["ads", "ads:ARCHIVED"]));
+
+    const named = (await run(`SELECT DISTINCT creative_key FROM fb_daily_metrics WHERE meta_ad_id = 'a9'`)).rows;
+    expect(named).toEqual([{ creative_key: "vid_a9" }]);
+    // A failed month from last year must not turn the Meta pipe red.
+    expect(await runs()).toEqual([]);
+  });
+
+  it("skips a month whose ad rows already add up to its campaign rows", async () => {
+    // The window's newest month, as the import will plan it.
+    const [newest] = mod.planMonths(trailingWindowInclusive(20, TZ));
+    const start = newest.since;
+    await run(`
+      INSERT INTO fb_daily_metrics (client_id, meta_ad_account_id, date, level, meta_campaign_id, meta_ad_id, spend)
+      VALUES ('${CLIENT_ID}', '111', '${start}', 'campaign', 'camp_1', '', 40),
+             ('${CLIENT_ID}', '111', '${start}', 'ad', 'camp_1', 'a1', 40)
+    `);
+    const res = await mod.importMetaAdLevelHistory(client(), { days: 20 });
+    expect(res.months[0]).toEqual({ month: start.slice(0, 7), status: "complete", rows: 0 });
+    expect(calls.some((c) => c.method === "daily" && c.since === start)).toBe(false);
+  });
+
+  it("🔴 stops at its budget and carries on, without listing the ads again", async () => {
+    const first = await mod.importMetaAdLevelHistory(client(), { days: 60, budgetMs: -1 });
+    expect(first.done).toBe(false);
+    expect(first.months).toEqual([]);
+    expect(first.nextBefore).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    calls.length = 0;
+    const rest = await mod.importMetaAdLevelHistory(client(), { days: 60, before: first.nextBefore! });
+    expect(rest.done).toBe(true);
+    expect(rest.months.length).toBeGreaterThanOrEqual(2);
+    expect(calls.some((c) => c.method.startsWith("ads"))).toBe(false);
+  });
+
+  it("halves a window Meta says is too much, down to a week", async () => {
+    dailyImpl = (since, until, level) => {
+      if (level !== "ad") return [];
+      const days = (Date.parse(until) - Date.parse(since)) / 86_400_000 + 1;
+      if (days > 10) throw new Error("Please reduce the amount of data you're asking for, then retry your request");
+      return [adInsight(since, "a1")];
+    };
+    const res = await mod.importMetaAdLevelHistory(client(), { days: 45 });
+    expect(res.done).toBe(true);
+    const long = calls.filter((c) => c.method === "daily" && c.level === "ad");
+    expect(long.some((c) => (Date.parse(c.until!) - Date.parse(c.since!)) / 86_400_000 + 1 <= 10)).toBe(true);
+  });
+
+  it("🔴 keeps a stored preview link when a later listing comes back without it", async () => {
+    await mod.importMetaAdLevelHistory(client(), { days: 20 });
+    adsListing = (opts) => (opts?.statuses ? [] : [video("a1")]);
+    await mod.importMetaAdLevelHistory(client(), { days: 20 });
+    const [row] = (
+      await run(`SELECT raw->>'preview_shareable_link' AS link FROM meta_ad_creatives WHERE meta_ad_id = 'a1'`)
+    ).rows;
+    expect(row).toEqual({ link: "https://fb.me/one" });
   });
 });

@@ -134,3 +134,51 @@ describe("sending a widget to the data API", () => {
     expect(widgetQueryOf({ ...kpi("a1"), title: "Spend" })).toEqual({ kind: "kpi", platform: "meta", metric: "spend" });
   });
 });
+
+describe("creative cards", () => {
+  const cards = {
+    kind: "creatives" as const,
+    platform: "meta" as const,
+    by: "creative" as const,
+    stats: ["spend", "fb_leads", "cp_fb_lead", "hook_rate", "hold_rate", "land_rate"],
+    sort: "spend",
+    topN: 6,
+    rankings: true,
+  };
+
+  it("round-trip strictly, as a query and as a placed widget", () => {
+    expect(WidgetQuerySchema.safeParse(cards).success).toBe(true);
+    expect(BoardWidgetSchema.safeParse({ ...cards, id: "w-cards", x: 0, y: 0, w: 12, h: 10 }).success).toBe(true);
+    expect(WidgetQuerySchema.safeParse({ ...cards, colour: "red" }).success).toBe(false);
+  });
+
+  it("🔴 take campaign ids as digits only, so nothing else reaches a query", () => {
+    expect(WidgetQuerySchema.safeParse({ ...cards, campaigns: ["120210000000001"] }).success).toBe(true);
+    expect(WidgetQuerySchema.safeParse({ ...cards, campaigns: ["1 OR 1=1"] }).success).toBe(false);
+    expect(WidgetQuerySchema.safeParse({ ...cards, campaigns: ["../x"] }).success).toBe(false);
+  });
+
+  it("stay under the data API's URL limit at their largest", () => {
+    const biggest = {
+      ...cards,
+      by: "ad" as const,
+      stats: ["cp_onsite_lead", "cp_pixel_lead", "fb_onsite_leads", "fb_pixel_leads", "cost_per_result", "landing_page_views"],
+      sort: "cost_per_result",
+      resultType: "offsite_conversion.fb_pixel_complete_registration",
+      // Twenty of the longest ids the schema allows: 30 digits each.
+      campaigns: Array.from({ length: 20 }, (_, i) => "1".padEnd(28, "0") + String(i).padStart(2, "0")),
+    };
+    expect(WidgetQuerySchema.safeParse(biggest).success).toBe(true);
+    expect(encodeWidgetQuery(biggest as never).length).toBeLessThan(MAX_ENCODED_QUERY);
+  });
+
+  it("are dropped, not fatal, when a stored one no longer validates", () => {
+    const stored = [
+      { ...cards, id: "ok", x: 0, y: 0, w: 12, h: 10 },
+      { ...cards, id: "bad", x: 0, y: 10, w: 12, h: 10, platform: "google" },
+    ];
+    const r = resolveWidgets(stored, BOARD_SCHEMA_VERSION);
+    expect(r.widgets.map((w) => w.id)).toEqual(["ok"]);
+    expect(r.dropped).toBe(1);
+  });
+});

@@ -231,3 +231,89 @@ describe("getPeriodReachRow", () => {
     expect(await bq.getPeriodReachRow(CLIENT_A, SEPT)).toBe("multiple");
   });
 });
+
+describe("creative pairs, ad identity and campaign choices", () => {
+  beforeEach(async () => {
+    await harness.db.execute(sql`DELETE FROM meta_ad_creatives`);
+  });
+
+  async function adDay(f: {
+    client?: string;
+    date: string;
+    level?: "ad" | "campaign";
+    campaign?: string;
+    ad?: string;
+    key?: string;
+    spend: number;
+    clicksAll?: number;
+    onsite?: number;
+    pixel?: number;
+    quality?: string | null;
+  }) {
+    await harness.db.execute(sql`
+      INSERT INTO fb_daily_metrics (client_id, date, level, meta_campaign_id, campaign_name, meta_ad_id, ad_name,
+                                    creative_key, spend, clicks_all, leads_onsite, leads_pixel, quality_ranking)
+      VALUES (${f.client ?? CLIENT_A}, ${f.date}, ${f.level ?? "ad"}, ${f.campaign ?? "c1"}, ${"Camp " + (f.campaign ?? "c1")},
+              ${f.level === "campaign" ? "" : (f.ad ?? "a1")}, ${f.level === "campaign" ? null : "Ad " + (f.ad ?? "a1")},
+              ${f.key ?? ""}, ${f.spend}, ${f.clicksAll ?? 0}, ${f.onsite ?? 0}, ${f.pixel ?? 0},
+              ${f.quality ?? null}::delivery_ranking)
+    `);
+  }
+
+  it("🔴 gives one row per (creative, ad) — ad rows only, this client only", async () => {
+    await adDay({ date: "2026-09-01", ad: "a1", key: "vid", spend: 10, onsite: 2, quality: "average" });
+    await adDay({ date: "2026-09-02", ad: "a1", key: "vid", spend: 30, onsite: 1, quality: "above_average" });
+    await adDay({ date: "2026-09-03", ad: "a1", key: "vid", spend: 5, quality: "unknown" });
+    // The same ad after its creative was swapped.
+    await adDay({ date: "2026-09-04", ad: "a1", key: "img", spend: 7, pixel: 3 });
+    await adDay({ date: "2026-09-01", level: "campaign", spend: 999 });
+    await adDay({ date: "2026-09-01", client: CLIENT_B, ad: "b1", key: "vid", spend: 999 });
+
+    const pairs = await bq.getMetaAdCreativePairs(CLIENT_A, SEPT);
+    const byKey = new Map(pairs.map((p) => [`${p.adId}|${p.creativeKey}`, p]));
+    expect([...byKey.keys()].sort()).toEqual(["a1|img", "a1|vid"]);
+    expect(byKey.get("a1|vid")).toMatchObject({ spend: 45, leadsOnsite: 3, leadsPixel: 0, campaignId: "c1" });
+    expect(byKey.get("a1|img")).toMatchObject({ spend: 7, leadsPixel: 3 });
+    // The most recent judgement, never "unknown", never an average.
+    expect(byKey.get("a1|vid")?.qualityRanking).toBe("above_average");
+  });
+
+  it("sums Meta's on-Facebook and website leads apart, at both levels", async () => {
+    await adDay({ date: "2026-09-01", level: "campaign", spend: 20, onsite: 4, pixel: 1 });
+    await adDay({ date: "2026-09-02", level: "campaign", spend: 20, onsite: 2, pixel: 5 });
+    await adDay({ date: "2026-09-01", ad: "a1", spend: 20, onsite: 4, pixel: 1 });
+    const [extras] = await bq.getMetaCampaignExtras(CLIENT_A, SEPT, "total");
+    expect(extras).toMatchObject({ leadsOnsite: 6, leadsPixel: 6 });
+    const [ads] = await bq.getMetaAdLevel(CLIENT_A, SEPT, "total");
+    expect(ads).toMatchObject({ leadsOnsite: 4, leadsPixel: 1 });
+  });
+
+  it("reads each ad's identity and stored preview link, for this client only", async () => {
+    await harness.db.execute(sql`
+      INSERT INTO meta_ad_creatives (client_id, meta_ad_id, ad_name, creative_key, creative_type, title, thumbnail_url, raw)
+      VALUES (${CLIENT_A}, 'a1', 'Spring', 'vid', 'video', 'Book now', 'https://cdn.example/x.jpg',
+              '{"preview_shareable_link":"https://fb.me/x"}'::jsonb),
+             (${CLIENT_A}, 'a2', 'No raw', 'img', 'image', NULL, NULL, NULL),
+             (${CLIENT_B}, 'b1', 'Other tenant', 'vid', 'video', NULL, NULL, NULL)
+    `);
+    const ids = await bq.getMetaAdIdentity(CLIENT_A, ["a1", "a2", "b1", "missing"]);
+    expect([...ids.keys()].sort()).toEqual(["a1", "a2"]);
+    expect(ids.get("a1")).toMatchObject({ adName: "Spring", title: "Book now", hasThumbnail: true, previewLink: "https://fb.me/x" });
+    expect(ids.get("a2")).toMatchObject({ hasThumbnail: false, previewLink: null });
+  });
+
+  it("offers recent campaigns, the latest first, by their current name", async () => {
+    await harness.db.execute(sql`
+      INSERT INTO fb_daily_metrics (client_id, date, level, meta_campaign_id, campaign_name, spend)
+      VALUES (${CLIENT_A}, CURRENT_DATE - 30, 'campaign', 'old', 'Old name', 5),
+             (${CLIENT_A}, CURRENT_DATE - 2, 'campaign', 'old', 'Renamed', 5),
+             (${CLIENT_A}, CURRENT_DATE - 10, 'campaign', 'mid', 'Middle', 50),
+             (${CLIENT_A}, CURRENT_DATE - 900, 'campaign', 'ancient', 'Ancient', 50),
+             (${CLIENT_B}, CURRENT_DATE - 1, 'campaign', 'theirs', 'Theirs', 50)
+    `);
+    expect(await bq.getMetaCampaignOptions(CLIENT_A)).toEqual([
+      { id: "old", name: "Renamed" },
+      { id: "mid", name: "Middle" },
+    ]);
+  });
+});

@@ -1,4 +1,4 @@
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, eq, lt, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clients,
@@ -251,7 +251,7 @@ async function syncAccountMetrics(
     level,
   );
 
-  let written = 0;
+  const batch: Array<typeof fbDailyMetrics.$inferInsert> = [];
   for (const raw of rows) {
     const parsed = parseInsightRow(raw);
     const isAd = level === "ad";
@@ -310,12 +310,51 @@ async function syncAccountMetrics(
       raw: raw as object,
       syncedAt: new Date(),
     };
+    batch.push(values);
+  }
+  return upsertFbDailyRows(batch);
+}
 
+/** Rows per INSERT. A year of ad-level history is tens of thousands of rows; one round trip each would not fit a request. */
+const UPSERT_BATCH = 250;
+
+/** `excluded.<column>` for every column a row sets, so a multi-row upsert writes each row's own values. */
+function excludedSet(table: Record<string, unknown>, sample: Record<string, unknown>): Record<string, SQL> {
+  const set: Record<string, SQL> = {};
+  for (const key of Object.keys(sample)) {
+    const name = (table[key] as { name?: unknown } | undefined)?.name;
+    if (typeof name === "string") set[key] = sql.raw(`excluded."${name}"`);
+  }
+  return set;
+}
+
+/**
+ * Upsert daily metric rows in batches.
+ *
+ * Upsert, not insert — this is what makes re-pulling a restated day correct
+ * rather than a duplicate-key error. Rows are de-duplicated on the conflict key
+ * first: Postgres refuses a statement that would update one row twice.
+ *
+ * `raw` is merged, not replaced. If Meta ever refuses the optional results
+ * fields, the retry stores a row without them — and that must not erase the
+ * results an earlier run stored for the same day.
+ */
+export async function upsertFbDailyRows(
+  rows: ReadonlyArray<typeof fbDailyMetrics.$inferInsert>,
+): Promise<number> {
+  const byKey = new Map<string, typeof fbDailyMetrics.$inferInsert>();
+  for (const r of rows) {
+    byKey.set(
+      [r.clientId, r.metaAdAccountId, r.date, r.level, r.metaCampaignId, r.metaAdsetId, r.metaAdId].join("|"),
+      r,
+    );
+  }
+  const unique = [...byKey.values()];
+  for (let i = 0; i < unique.length; i += UPSERT_BATCH) {
+    const chunk = unique.slice(i, i + UPSERT_BATCH);
     await db
       .insert(fbDailyMetrics)
-      .values(values)
-      // Upsert, not insert — this is what makes re-pulling a restated day
-      // correct rather than a duplicate-key error.
+      .values(chunk)
       .onConflictDoUpdate({
         target: [
           fbDailyMetrics.clientId,
@@ -326,19 +365,13 @@ async function syncAccountMetrics(
           fbDailyMetrics.metaAdsetId,
           fbDailyMetrics.metaAdId,
         ],
-        /*
-         * `raw` is merged, not replaced. If Meta ever refuses the optional
-         * results fields, the retry stores a row without them — and that must
-         * not erase the results an earlier run stored for the same day.
-         */
         set: {
-          ...values,
+          ...excludedSet(fbDailyMetrics as unknown as Record<string, unknown>, chunk[0] as Record<string, unknown>),
           raw: sql`COALESCE(${fbDailyMetrics.raw}, '{}'::jsonb) || excluded.raw`,
         },
       });
-    written++;
   }
-  return written;
+  return unique.length;
 }
 
 /**
@@ -444,9 +477,10 @@ async function syncAccountBreakdowns(
 async function syncAccountCreatives(
   client: Client,
   account: MetaAdAccount,
+  opts: { statuses?: readonly string[] } = {},
 ): Promise<Map<string, { key: string; type: CreativeType }>> {
   const meta = metaClientForAccount(account, client.agencyId);
-  const ads = await meta.getAds(account.adAccountId);
+  const ads = await meta.getAds(account.adAccountId, opts);
 
   const resolved = ads.map((ad) => ({ ad, creative: resolveCreative(ad.creative) }));
 
@@ -516,7 +550,14 @@ async function syncAccountCreatives(
       .values(values)
       .onConflictDoUpdate({
         target: [metaAdCreatives.clientId, metaAdCreatives.metaAdId],
-        set: values,
+        /*
+         * `raw` merged, not replaced: a listing run without the preview link
+         * (Meta refused the field) must not erase the link stored before.
+         */
+        set: {
+          ...values,
+          raw: sql`COALESCE(${metaAdCreatives.raw}, '{}'::jsonb) || excluded.raw`,
+        },
       });
 
     out.set(ad.id, { key: creative.key, type: creative.type });
@@ -630,6 +671,186 @@ export async function backfillClientMetrics(
       .where(eq(syncRuns.id, run.id));
     throw err;
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Ad-level history import
+ * ------------------------------------------------------------------ */
+
+/** One calendar month of an import window, clipped to the window. */
+export interface ImportMonth {
+  /** "YYYY-MM". */
+  month: string;
+  since: string;
+  until: string;
+}
+
+/**
+ * The window's months, NEWEST first — the months a report reads first are the
+ * ones that should land first — and only those before `before` (a day key), so
+ * a resumed import picks up where the last request stopped.
+ */
+export function planMonths(window: { startKey: string; endKey: string }, before?: string): ImportMonth[] {
+  const out: ImportMonth[] = [];
+  let cursor = window.startKey;
+  let guard = 0;
+  while (cursor <= window.endKey && guard++ < 60) {
+    const [y, m] = cursor.split("-").map(Number);
+    const lastOfMonth = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    out.push({
+      month: cursor.slice(0, 7),
+      since: cursor,
+      until: lastOfMonth < window.endKey ? lastOfMonth : window.endKey,
+    });
+    cursor = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  }
+  out.reverse();
+  return before ? out.filter((x) => x.since < before) : out;
+}
+
+export interface AdLevelImportResult {
+  /** Every month of the window is now complete. */
+  done: boolean;
+  /** Where the next request carries on (months before this day), or null when done. */
+  nextBefore: string | null;
+  months: Array<{ month: string; status: "imported" | "complete"; rows: number }>;
+  rowsWritten: number;
+}
+
+/** Meta asking for less, or our own refusal to truncate — both mean "ask for a shorter window". */
+function isTooMuchData(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /reduce the amount of data|exceeded [\d,]+ rows/i.test(message);
+}
+
+function addDays(key: string, n: number): string {
+  const d = new Date(`${key}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetween(since: string, until: string): number {
+  return Math.round((Date.parse(`${until}T00:00:00Z`) - Date.parse(`${since}T00:00:00Z`)) / 86_400_000) + 1;
+}
+
+/**
+ * Ad-level insights for one window, halving it when Meta says it is too much —
+ * a large account's month of ads can exceed one response. Down to a week; a
+ * week Meta still refuses is a real failure and is thrown.
+ */
+async function pullAdLevel(
+  client: Client,
+  account: MetaAdAccount,
+  since: string,
+  until: string,
+  creatives: Map<string, { key: string; type: CreativeType }>,
+): Promise<number> {
+  try {
+    return await syncAccountMetrics(client, account, since, until, client.timezone, "ad", creatives);
+  } catch (err) {
+    const days = daysBetween(since, until);
+    if (!isTooMuchData(err) || days <= 7) throw err;
+    const mid = addDays(since, Math.floor(days / 2) - 1);
+    return (
+      (await pullAdLevel(client, account, since, mid, creatives)) +
+      (await pullAdLevel(client, account, addDays(mid, 1), until, creatives))
+    );
+  }
+}
+
+/** Spend by level for one window: a month whose ad rows already add up to its campaign rows is done. */
+async function monthIsComplete(clientId: string, since: string, until: string): Promise<boolean> {
+  const res = await db.execute(sql`
+    SELECT COALESCE(SUM(spend) FILTER (WHERE level = 'campaign'), 0)::float AS campaign,
+           COALESCE(SUM(spend) FILTER (WHERE level = 'ad'), 0)::float AS ad
+    FROM fb_daily_metrics
+    WHERE client_id = ${clientId} AND date >= ${since} AND date <= ${until}
+  `);
+  const row = (res as unknown as { rows: Array<{ campaign: number; ad: number }> }).rows[0];
+  const campaign = Number(row?.campaign) || 0;
+  const ad = Number(row?.ad) || 0;
+  return campaign > 0 && Math.abs(ad - campaign) <= campaign * 0.005;
+}
+
+/** Ad id → creative identity, from what earlier syncs stored — for a resumed import. */
+async function storedCreativeMap(clientId: string): Promise<Map<string, { key: string; type: CreativeType }>> {
+  const rows = await db
+    .select({
+      adId: metaAdCreatives.metaAdId,
+      key: metaAdCreatives.creativeKey,
+      type: metaAdCreatives.creativeType,
+    })
+    .from(metaAdCreatives)
+    .where(eq(metaAdCreatives.clientId, clientId));
+  return new Map(rows.map((r) => [r.adId, { key: r.key ?? "", type: r.type ?? "unknown" }]));
+}
+
+/**
+ * Import ad-level history — what creative cards, ad tables and every per-ad
+ * stat read — for a window the nightly sync never reached.
+ *
+ * Campaign history is imported by `backfillClientMetrics`; ad rows only ever
+ * came from the nightly 28-day reconcile, so before this a report on last
+ * quarter's creatives had nothing to show. One request does as many months as
+ * fit in `budgetMs` (a route has 300s) and says where to carry on; months whose
+ * ad rows already add up to their campaign rows are skipped in a single query,
+ * so pressing the button again resumes rather than starting over.
+ *
+ * The first request refreshes every ad's creative — archived ads included,
+ * which Meta's default listing leaves out — so old months name their ads. It
+ * writes no `sync_runs` row: an import that fails on a month from last year
+ * must not turn the client's Meta pipe red for the sync that is working fine.
+ */
+export async function importMetaAdLevelHistory(
+  client: Client,
+  opts: { days: number; before?: string; budgetMs?: number },
+): Promise<AdLevelImportResult> {
+  const started = Date.now();
+  const budget = opts.budgetMs ?? 180_000;
+  const accounts = await activeAdAccounts(client.id);
+  if (accounts.length === 0) throw new Error("Client has no Meta ad account configured");
+
+  const months = planMonths(trailingWindowInclusive(opts.days, client.timezone), opts.before);
+
+  let creatives: Map<string, { key: string; type: CreativeType }>;
+  if (opts.before === undefined) {
+    creatives = new Map();
+    for (const account of accounts) {
+      for (const [k, v] of await syncAccountCreatives(client, account)) creatives.set(k, v);
+      try {
+        for (const [k, v] of await syncAccountCreatives(client, account, { statuses: ["ARCHIVED"] })) {
+          if (!creatives.has(k)) creatives.set(k, v);
+        }
+      } catch (err) {
+        // Best effort: an account with too many archived ads to list still imports, just less named.
+        console.warn(`[meta] archived ads not listed for ${account.adAccountId}:`, err instanceof Error ? err.message : err);
+      }
+    }
+  } else {
+    creatives = await storedCreativeMap(client.id);
+  }
+
+  const done: AdLevelImportResult["months"] = [];
+  let rowsWritten = 0;
+  for (const m of months) {
+    if (Date.now() - started > budget) {
+      // The next request starts with this month: every month it covers begins before the day after it.
+      return { done: false, nextBefore: addDays(m.until, 1), months: done, rowsWritten };
+    }
+    if (await monthIsComplete(client.id, m.since, m.until)) {
+      done.push({ month: m.month, status: "complete", rows: 0 });
+      continue;
+    }
+    let rows = 0;
+    for (const account of accounts) {
+      rows += await pullAdLevel(client, account, m.since, m.until, creatives);
+    }
+    rowsWritten += rows;
+    done.push({ month: m.month, status: "imported", rows });
+    // Meta warns that firing queries back to back invites throttling.
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return { done: true, nextBefore: null, months: done, rowsWritten };
 }
 
 /**

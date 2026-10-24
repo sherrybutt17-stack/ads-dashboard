@@ -144,6 +144,8 @@ export interface MetaAdRow {
   status?: string;
   adset_id?: string;
   campaign_id?: string;
+  /** Facebook's shareable preview of the ad (`fb.me/…`); opening it needs a Facebook login. */
+  preview_shareable_link?: string;
   creative?: Record<string, unknown>;
   adset?: {
     id?: string;
@@ -333,9 +335,17 @@ export function insightFields(
  * fields param"). Anything else — a bad token, a rate limit — is rethrown.
  */
 export function isResultFieldRefusal(err: unknown): boolean {
-  if (!(err instanceof MetaApiError) || err.code !== 100) return false;
-  return RESULT_INSIGHT_FIELDS.some((f) => new RegExp(`\\b${f}\\b`, "i").test(err.message));
+  return isFieldRefusal(err, RESULT_INSIGHT_FIELDS);
 }
+
+/** Meta refusing one of these optional fields (code 100, the field named), and nothing else. */
+export function isFieldRefusal(err: unknown, fields: readonly string[]): boolean {
+  if (!(err instanceof MetaApiError) || err.code !== 100) return false;
+  return fields.some((f) => new RegExp(`\\b${f}\\b`, "i").test(err.message));
+}
+
+/** The ad's shareable preview link — optional: the listing never fails for want of it. */
+export const PREVIEW_FIELDS = ["preview_shareable_link"] as const;
 
 /**
  * The creative sub-fields, named once.
@@ -565,7 +575,34 @@ export class MetaClient {
     });
   }
 
-  async getAds(accountId: string): Promise<MetaAdRow[]> {
+  /**
+   * Every ad in the account, with its creative and its preview link.
+   *
+   * `statuses`: Meta's default listing leaves ARCHIVED ads out (and DELETED
+   * cannot be asked for at all), so the history import passes ARCHIVED to name
+   * the old ads its months are full of.
+   *
+   * The preview link is optional: refused, the listing restarts without it, so
+   * the creatives sync — and with it every thumbnail — never fails for a link.
+   */
+  async getAds(accountId: string, opts: { statuses?: readonly string[] } = {}): Promise<MetaAdRow[]> {
+    try {
+      return await this.listAds(accountId, opts, true);
+    } catch (err) {
+      if (!isFieldRefusal(err, PREVIEW_FIELDS)) throw err;
+      console.warn(
+        `[meta] preview links refused for ${accountId}; listing ads without them:`,
+        err instanceof Error ? err.message : err,
+      );
+      return this.listAds(accountId, opts, false);
+    }
+  }
+
+  private async listAds(
+    accountId: string,
+    opts: { statuses?: readonly string[] },
+    withPreview: boolean,
+  ): Promise<MetaAdRow[]> {
     const act = MetaClient.normalizeAccountId(accountId);
     const rows: MetaAdRow[] = [];
     let next: string | undefined;
@@ -581,11 +618,13 @@ export class MetaClient {
               "status",
               "adset_id",
               "campaign_id",
+              ...(withPreview ? PREVIEW_FIELDS : []),
               // Nested field expansion — one round trip instead of one per ad.
               CREATIVE_FIELD_EXPANSION,
               "adset{id,name,learning_stage_info}",
             ].join(","),
             limit: 200,
+            ...(opts.statuses ? { effective_status: JSON.stringify(opts.statuses) } : {}),
           });
       rows.push(...(res.data ?? []));
       next = res.paging?.next;

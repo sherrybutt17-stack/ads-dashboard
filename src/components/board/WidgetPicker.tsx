@@ -3,6 +3,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { Modal } from "@/components/Modal";
 import {
+  CARDS,
   DIMENSION_IDS,
   METRICS,
   METRIC_GROUPS,
@@ -22,7 +23,9 @@ import {
   metricDims,
   metricLabel,
   metricSeries,
+  metricStatKey,
   metricSupports,
+  type CardGrouping,
   type CategoryForm,
   type DimensionId,
   type MetricId,
@@ -35,6 +38,7 @@ import { encodeWidgetQuery, widgetQueryKey } from "@/lib/board/query";
 import type { BoardWidget, WidgetData, WidgetQuery } from "@/lib/board/types";
 import { PLATFORM_LABEL, type AdPlatform } from "@/lib/platforms";
 import { resultTypeChoices } from "@/lib/metrics/results";
+import { METRIC_POLARITY } from "@/lib/metrics/compute";
 import { BoardWidget as WidgetCard } from "./BoardWidget";
 
 export interface PickerResult {
@@ -63,6 +67,21 @@ interface Draft {
   title: string;
   /** A pinned result type; "" counts the range's main type. */
   resultType: string;
+  /** Creative cards: one per ad or per creative. */
+  cardBy: CardGrouping;
+  /** The stats on each card, in order. */
+  cardStats: MetricId[];
+  cardSort: MetricId;
+  cards: number;
+  cardRankings: boolean;
+  /** Meta campaign ids; empty = every campaign. */
+  campaigns: string[];
+}
+
+/** A Meta campaign the cards can be narrowed to. */
+export interface CampaignChoice {
+  id: string;
+  name: string | null;
 }
 
 const BLANK: Omit<Draft, "platform"> = {
@@ -79,7 +98,17 @@ const BLANK: Omit<Draft, "platform"> = {
   textSize: "heading",
   title: "",
   resultType: "",
+  // Whatagraph's link-click report: one card per ad, ranked by link clicks.
+  cardBy: "ad",
+  cardStats: ["impressions", "clicks", "ctr_all"],
+  cardSort: "clicks",
+  cards: 6,
+  cardRankings: false,
+  campaigns: [],
 };
+
+/** The stats a fresh card set falls back to when the chosen ones no longer fit. */
+const DEFAULT_CARD_STATS: readonly MetricId[] = ["impressions", "clicks", "ctr_all", "spend"];
 
 const LOADING: WidgetData = { kind: "pending", reason: "load" };
 
@@ -111,9 +140,21 @@ function draftFrom(q: WidgetQuery, title: string | undefined, platform: AdPlatfo
         rows: q.topN,
         resultType: q.resultType ?? "",
       };
+    case "creatives":
+      return {
+        ...d,
+        cardBy: q.by,
+        cardStats: [...q.stats],
+        cardSort: q.sort,
+        cards: q.topN,
+        cardRankings: Boolean(q.rankings),
+        campaigns: q.campaigns ? [...q.campaigns] : [],
+        resultType: q.resultType ?? "",
+      };
     case "text":
       return { ...d, text: q.text, textSize: q.size };
-    default:
+    case "funnel":
+    case "logo":
       return d;
   }
 }
@@ -154,6 +195,19 @@ function queryOf(d: Draft): WidgetQuery {
         topN: d.rows,
         ...pin,
       };
+    case "creatives":
+      return {
+        kind: "creatives",
+        // Ad-level data exists for Meta only.
+        platform: "meta",
+        by: d.cardBy,
+        stats: d.cardStats,
+        sort: d.cardSort,
+        topN: d.cards,
+        ...(d.cardRankings ? { rankings: true } : {}),
+        ...pin,
+        ...(d.campaigns.length > 0 ? { campaigns: [...d.campaigns].sort() } : {}),
+      };
     case "funnel":
       return { kind: "funnel", platform: d.platform };
     case "text":
@@ -182,6 +236,13 @@ function columnFits(m: MetricId, d: Draft): boolean {
   return d.tableDimension === "date"
     ? metricSeries(m, d.platform)
     : metricDims(m, d.platform).includes(d.tableDimension);
+}
+
+/** Whether a stat can go on a creative card: reported per ad (or creative), and not a CRM figure. */
+function cardStatFits(m: MetricId, by: CardGrouping): boolean {
+  const def = METRICS[m];
+  if (def.needs.includes("crm") || def.needs.includes("revenue")) return false;
+  return metricSupports(m, "meta") && metricDims(m, "meta").includes(by);
 }
 
 /** Row choices for a table: every split some stat on this platform supports, and days. */
@@ -223,6 +284,15 @@ function fixUp(d: Draft): Draft {
     if (!next.columns.includes(next.sort)) next.sort = next.columns[0] ?? "spend";
     next.rows = Math.min(TABLE_ROWS.max, Math.max(TABLE_ROWS.min, next.rows));
   }
+  if (kind === "creatives") {
+    next.platform = "meta";
+    let stats = [...new Set(next.cardStats)].filter((m) => cardStatFits(m, next.cardBy));
+    if (stats.length === 0) stats = DEFAULT_CARD_STATS.filter((m) => cardStatFits(m, next.cardBy));
+    next.cardStats = stats.slice(0, CARDS.statsMax);
+    if (!cardStatFits(next.cardSort, next.cardBy)) next.cardSort = next.cardStats[0] ?? "spend";
+    next.cards = Math.min(CARDS.max, Math.max(CARDS.min, next.cards));
+    next.campaigns = [...new Set(next.campaigns)].slice(0, CARDS.campaignsMax);
+  }
   // A pinned result type only on a results widget it can apply to.
   if (!pinsResultType(next) || !resultTypeChoices(next.platform).some((c) => c.key === next.resultType)) {
     next.resultType = "";
@@ -238,6 +308,7 @@ function pinsResultType(d: Draft): boolean {
   if (kind === "kpi" || kind === "series") return reads(d.metric);
   if (kind === "category") return reads(d.metric) && d.dimension !== "result_type";
   if (kind === "table") return d.tableDimension !== "result_type" && d.columns.some(reads);
+  if (kind === "creatives") return [...d.cardStats, d.cardSort].some(reads);
   return false;
 }
 
@@ -259,6 +330,7 @@ export function WidgetPicker({
   open,
   editing,
   platforms,
+  campaigns = [],
   slug,
   range,
   basis,
@@ -270,6 +342,8 @@ export function WidgetPicker({
   editing: BoardWidget | null;
   /** Ad platforms this client has connected; the first is the default source. */
   platforms: readonly AdPlatform[];
+  /** Meta campaigns the creative cards can be narrowed to. */
+  campaigns?: readonly CampaignChoice[];
   slug: string;
   range: { start: string; end: string };
   basis: string;
@@ -357,7 +431,8 @@ export function WidgetPicker({
   }
 
   const kind = VISUALS.find((x) => x.id === draft.visual)?.kind ?? "kpi";
-  const hasSource = kind !== "text" && kind !== "logo";
+  // Creative cards are Meta's alone, so there is no source to choose.
+  const hasSource = kind !== "text" && kind !== "logo" && kind !== "creatives";
 
   return (
     <Modal
@@ -555,6 +630,10 @@ export function WidgetPicker({
 
                 {kind === "table" && (
                   <TableFields draft={draft} update={update} ids={ids} />
+                )}
+
+                {kind === "creatives" && (
+                  <CreativeFields draft={draft} update={update} ids={ids} campaigns={campaigns} />
                 )}
 
                 {pinsResultType(draft) && (
@@ -775,6 +854,240 @@ function TableFields({
           })}
         </div>
       </fieldset>
+    </>
+  );
+}
+
+/** Stats a card can carry, grouped as the Stat list is, for the add and rank selects. */
+function CardStatOptions({ by, omit }: { by: CardGrouping; omit?: readonly MetricId[] }) {
+  return (
+    <>
+      {METRIC_GROUPS.map((g) => {
+        const inGroup = METRIC_IDS.filter(
+          (m) => METRICS[m].group === g && cardStatFits(m, by) && !omit?.includes(m),
+        );
+        if (inGroup.length === 0) return null;
+        return (
+          <optgroup key={g} label={g}>
+            {inGroup.map((m) => (
+              <option key={m} value={m}>
+                {metricLabel(m, "meta")}
+              </option>
+            ))}
+          </optgroup>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * The creative cards' own settings — Whatagraph's "Creatives performance":
+ * the stats each card shows (in order), what ranks them, how many, and which
+ * campaigns. A lead report ranks by leads, a click report by link clicks.
+ */
+function CreativeFields({
+  draft,
+  update,
+  ids,
+  campaigns,
+}: {
+  draft: Draft;
+  update: (patch: Partial<Draft>) => void;
+  ids: string;
+  campaigns: readonly CampaignChoice[];
+}) {
+  const [filter, setFilter] = useState("");
+  const stats = draft.cardStats;
+  const full = stats.length >= CARDS.statsMax;
+  const lowestFirst = METRIC_POLARITY[metricStatKey(draft.cardSort, "meta")] === "lower-better";
+  const move = (from: number, to: number) => {
+    const next = [...stats];
+    const [m] = next.splice(from, 1);
+    next.splice(to, 0, m);
+    update({ cardStats: next });
+  };
+  // Saved campaigns no longer in the list stay, named by id, until removed.
+  const known = new Set(campaigns.map((c) => c.id));
+  const listed: CampaignChoice[] = [
+    ...campaigns,
+    ...draft.campaigns.filter((id) => !known.has(id)).map((id) => ({ id, name: null })),
+  ];
+  const needle = filter.trim().toLowerCase();
+  const visible = needle
+    ? listed.filter((c) => (c.name ?? c.id).toLowerCase().includes(needle))
+    : listed;
+  const picked = new Set(draft.campaigns);
+  const atCap = draft.campaigns.length >= CARDS.campaignsMax;
+
+  return (
+    <>
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_100px]">
+        <Field label="One card per" htmlFor={`${ids}-card-by`}>
+          <select
+            id={`${ids}-card-by`}
+            className="field w-full"
+            value={draft.cardBy}
+            onChange={(e) => update({ cardBy: e.target.value as CardGrouping })}
+          >
+            <option value="ad">Ad — every ad on its own card</option>
+            <option value="creative">Creative — ads sharing an image or video, merged</option>
+          </select>
+        </Field>
+        <Field label="Cards" htmlFor={`${ids}-cards`}>
+          <input
+            id={`${ids}-cards`}
+            type="number"
+            className="field w-full"
+            min={CARDS.min}
+            max={CARDS.max}
+            value={draft.cards}
+            onChange={(e) => update({ cards: Number(e.target.value) || CARDS.min })}
+          />
+        </Field>
+      </div>
+
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className="mb-1.5 text-[11px] font-semibold tracking-[0.06em] uppercase" style={{ color: "var(--text-muted)" }}>
+          Stats on each card ({stats.length} of at most {CARDS.statsMax})
+        </legend>
+        <ol className="flex flex-col gap-1">
+          {stats.map((m, i) => {
+            const label = metricLabel(m, "meta");
+            return (
+              <li key={m} className="flex items-center gap-2 text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
+                <span className="min-w-0 flex-1 truncate">{label}</span>
+                <button
+                  type="button"
+                  className="btn-ghost rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[12px]"
+                  disabled={i === 0}
+                  aria-label={`Move ${label} earlier`}
+                  onClick={() => move(i, i - 1)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[12px]"
+                  disabled={i === stats.length - 1}
+                  aria-label={`Move ${label} later`}
+                  onClick={() => move(i, i + 1)}
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[12px]"
+                  disabled={stats.length <= 1}
+                  aria-label={`Remove ${label}`}
+                  onClick={() => update({ cardStats: stats.filter((x) => x !== m) })}
+                >
+                  ✕
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <select
+          className="field w-full"
+          aria-label="Add a stat to each card"
+          value=""
+          disabled={full}
+          onChange={(e) => {
+            const m = e.target.value as MetricId;
+            if (m) update({ cardStats: [...stats, m] });
+          }}
+        >
+          <option value="">{full ? `${CARDS.statsMax} stats is the most a card holds` : "Add a stat…"}</option>
+          <CardStatOptions by={draft.cardBy} omit={stats} />
+        </select>
+      </fieldset>
+
+      <Field label="Rank cards by" htmlFor={`${ids}-card-sort`}>
+        <select
+          id={`${ids}-card-sort`}
+          className="field w-full"
+          value={draft.cardSort}
+          onChange={(e) => update({ cardSort: e.target.value as MetricId })}
+        >
+          <CardStatOptions by={draft.cardBy} />
+        </select>
+        <span className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
+          {lowestFirst ? "Lowest first — the cheapest at the top." : "Highest first."}
+        </span>
+      </Field>
+
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className="mb-1.5 text-[11px] font-semibold tracking-[0.06em] uppercase" style={{ color: "var(--text-muted)" }}>
+          Campaigns
+        </legend>
+        <label className="flex items-center gap-2 text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
+          <input
+            type="radio"
+            name={`${ids}-campaign-scope`}
+            checked={draft.campaigns.length === 0}
+            onChange={() => update({ campaigns: [] })}
+          />
+          Every campaign
+        </label>
+        {listed.length === 0 ? (
+          <p className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
+            No Meta campaigns in the last 400 days to choose from.
+          </p>
+        ) : (
+          <>
+            {listed.length > 12 && (
+              <input
+                className="field w-full"
+                placeholder="Find a campaign"
+                aria-label="Find a campaign"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+            )}
+            <div className="grid max-h-[180px] grid-cols-1 gap-y-1 overflow-y-auto">
+              {visible.map((c) => {
+                const on = picked.has(c.id);
+                return (
+                  <label
+                    key={c.id}
+                    className="flex items-center gap-2 text-[12.5px]"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={!on && atCap}
+                      onChange={(e) =>
+                        update({
+                          campaigns: e.target.checked
+                            ? [...draft.campaigns, c.id]
+                            : draft.campaigns.filter((id) => id !== c.id),
+                        })
+                      }
+                    />
+                    <span className="min-w-0 truncate">{c.name ?? `Campaign ${c.id}`}</span>
+                  </label>
+                );
+              })}
+            </div>
+            {atCap && (
+              <p className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
+                {CARDS.campaignsMax} campaigns is the most one widget can be narrowed to.
+              </p>
+            )}
+          </>
+        )}
+      </fieldset>
+
+      <label className="flex items-center gap-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+        <input
+          type="checkbox"
+          checked={draft.cardRankings}
+          onChange={(e) => update({ cardRankings: e.target.checked })}
+        />
+        Show Meta&apos;s delivery rankings under each card
+      </label>
     </>
   );
 }

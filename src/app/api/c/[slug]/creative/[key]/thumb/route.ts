@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { clients, metaAdCreatives, metaAdAccounts } from "@/db/schema";
+import { clients } from "@/db/schema";
 import { clientAccessGuard } from "@/lib/auth";
-import { metaClientForAccount } from "@/lib/meta/accounts";
-import { resolveCreative } from "@/lib/meta/creative";
+import { loadThumb, parseThumbRef } from "@/lib/meta/thumbs";
 
 export const runtime = "nodejs";
 
@@ -40,7 +39,10 @@ export const runtime = "nodejs";
  *
  * Keyed by `creative_key` (the `image_hash` / `video_id`), not by row id,
  * because that is the identity the grid groups on: one asset commonly runs
- * under several ads, and the card represents the asset.
+ * under several ads, and the card represents the asset. An ad with no single
+ * asset (Dynamic Creative, carousels) is asked for as `ad.<ad id>`. The
+ * fetching itself lives in `src/lib/meta/thumbs.ts`, shared with board PDFs and
+ * share links.
  */
 export async function GET(
   _req: NextRequest,
@@ -60,45 +62,14 @@ export async function GET(
     .limit(1);
   if (!client) return new NextResponse(null, { status: 404 });
 
-  /*
-   * Scoped to the client from the path, never looked up by key alone —
-   * otherwise anyone holding one slug could read another tenant's creative by
-   * guessing an image hash. Newest row wins: the same asset may appear under
-   * several ads and the most recently synced carries the freshest URL.
-   */
-  const [creative] = await db
-    .select({
-      id: metaAdCreatives.id,
-      metaAdId: metaAdCreatives.metaAdId,
-      accountId: metaAdCreatives.metaAdAccountId,
-      thumbnailUrl: metaAdCreatives.thumbnailUrl,
-    })
-    .from(metaAdCreatives)
-    .where(
-      and(
-        eq(metaAdCreatives.clientId, client.id),
-        eq(metaAdCreatives.creativeKey, decodeURIComponent(key)),
-        isNotNull(metaAdCreatives.thumbnailUrl),
-      ),
-    )
-    .orderBy(desc(metaAdCreatives.syncedAt))
-    .limit(1);
-  if (!creative) return new NextResponse(null, { status: 404 });
-
-  let image = creative.thumbnailUrl
-    ? await fetchImage(creative.thumbnailUrl)
-    : null;
+  const ref = parseThumbRef(decodeURIComponent(key));
+  if (!ref) return new NextResponse(null, { status: 404 });
 
   /*
-   * Only on failure, never speculatively. Re-reading the creative for every
-   * card of every view would turn one page load into thirty Graph calls and
-   * spend the account's rate limit on pictures — so the stored URL is tried
-   * first, and Meta is asked only once it has actually stopped working.
+   * Refreshes from Meta only once the stored URL has actually stopped working —
+   * never speculatively, or one page load would be thirty Graph calls.
    */
-  if (!image) {
-    const fresh = await refreshThumbnailUrl(client, creative);
-    if (fresh) image = await fetchImage(fresh);
-  }
+  const image = await loadThumb(client, ref, { refresh: true });
 
   // No placeholder bytes: the grid already renders a typed fallback card, which
   // says more than a grey square would.
@@ -119,61 +90,4 @@ export async function GET(
       "Content-Disposition": "inline",
     },
   });
-}
-
-/**
- * Fetch the bytes, and be strict about what counts as an image.
- *
- * Meta answers an expired or unauthorised preview with a `200` HTML page often
- * enough that trusting the status code alone would cache a login screen and
- * serve it as a JPEG. The content type is the check that matters.
- */
-async function fetchImage(
-  url: string,
-): Promise<{ bytes: Buffer; contentType: string } | null> {
-  try {
-    const res = await fetch(url, { cache: "no-store", redirect: "follow" });
-    if (!res.ok) return null;
-    const contentType = res.headers.get("content-type") ?? "";
-    if (!contentType.startsWith("image/")) return null;
-    const bytes = Buffer.from(await res.arrayBuffer());
-    return bytes.length > 0 ? { bytes, contentType } : null;
-  } catch {
-    // A CDN timeout is a missing preview, not a 500 on the dashboard.
-    return null;
-  }
-}
-
-/** Re-resolve from Meta and persist, so the next viewer skips the round trip. */
-async function refreshThumbnailUrl(
-  client: { id: string; agencyId: string },
-  creative: { id: string; metaAdId: string; accountId: string },
-): Promise<string | null> {
-  try {
-    const [account] = await db
-      .select()
-      .from(metaAdAccounts)
-      .where(
-        and(
-          eq(metaAdAccounts.clientId, client.id),
-          eq(metaAdAccounts.adAccountId, creative.accountId),
-        ),
-      )
-      .limit(1);
-    if (!account) return null;
-
-    const meta = metaClientForAccount(account, client.agencyId);
-    const resolved = resolveCreative(await meta.getAdCreative(creative.metaAdId));
-    if (!resolved.thumbnailUrl) return null;
-
-    await db
-      .update(metaAdCreatives)
-      .set({ thumbnailUrl: resolved.thumbnailUrl })
-      .where(eq(metaAdCreatives.id, creative.id));
-    return resolved.thumbnailUrl;
-  } catch {
-    // A deleted ad, a lapsed token, a throttle — all mean "no preview right
-    // now", and none of them should take the page down.
-    return null;
-  }
 }
