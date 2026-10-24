@@ -1,3 +1,7 @@
+import { widgetMetrics } from "./catalog";
+import { readFrozenMetrics } from "./custom-metric-schema";
+import { widgetQueryOf } from "./query";
+import { customId, type CustomMetric } from "./registry";
 import { BOARD_SCHEMA_VERSION, resolveWidgets } from "./schema";
 import type { BoardWidget } from "./types";
 
@@ -13,16 +17,28 @@ import type { BoardWidget } from "./types";
  *
  * A snapshot, not a pointer to the board: the link shows what the sender saw.
  * The client may rearrange their board the next morning, and a link already in
- * someone's inbox must not change underneath the email that sent it.
+ * someone's inbox must not change underneath the email that sent it. The same
+ * goes for the agency's own metrics: the definitions its widgets use are frozen
+ * with them, so renaming or rewriting a metric in Settings → Metrics — or
+ * deleting it — never changes a link already sent.
  */
 export interface BoardSnapshot {
   kind: "board";
   schemaVersion: number;
   widgets: BoardWidget[];
+  /** The agency metrics the widgets name, as defined when the link was made. */
+  metrics?: CustomMetric[];
 }
 
-export function toSnapshot(widgets: readonly BoardWidget[]): BoardSnapshot {
-  return { kind: "board", schemaVersion: BOARD_SCHEMA_VERSION, widgets: [...widgets] };
+export function toSnapshot(widgets: readonly BoardWidget[], metrics: readonly CustomMetric[] = []): BoardSnapshot {
+  const used = new Set(widgets.flatMap((w) => widgetMetrics(widgetQueryOf(w))));
+  const frozen = metrics.filter((m) => used.has(customId(m)));
+  return {
+    kind: "board",
+    schemaVersion: BOARD_SCHEMA_VERSION,
+    widgets: [...widgets],
+    ...(frozen.length > 0 ? { metrics: frozen } : {}),
+  };
 }
 
 /**
@@ -33,12 +49,14 @@ export function toSnapshot(widgets: readonly BoardWidget[]): BoardSnapshot {
  * and a snapshot written by a newer build is refused — null — instead of
  * guessed at.
  */
-export function parseSnapshot(raw: unknown): { widgets: BoardWidget[]; dropped: number } | null {
+export function parseSnapshot(
+  raw: unknown,
+): { widgets: BoardWidget[]; dropped: number; metrics: CustomMetric[] } | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as { kind?: unknown; schemaVersion?: unknown; widgets?: unknown };
+  const r = raw as { kind?: unknown; schemaVersion?: unknown; widgets?: unknown; metrics?: unknown };
   if (r.kind !== "board") return null;
   const version = typeof r.schemaVersion === "number" ? r.schemaVersion : BOARD_SCHEMA_VERSION;
   const resolved = resolveWidgets(r.widgets, version);
   if (resolved.problem) return null;
-  return { widgets: resolved.widgets, dropped: resolved.dropped };
+  return { widgets: resolved.widgets, dropped: resolved.dropped, metrics: readFrozenMetrics(r.metrics) };
 }

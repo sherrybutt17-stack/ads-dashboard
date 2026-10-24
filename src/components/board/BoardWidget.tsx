@@ -6,13 +6,7 @@ import { StatTile } from "@/components/StatTile";
 import { Funnel } from "@/components/Funnel";
 import { DataState } from "@/components/DataState";
 import { MetricInfo } from "@/components/MetricInfo";
-import {
-  METRICS,
-  defaultTitle,
-  dimensionLabel,
-  metricLabel,
-  metricStatKey,
-} from "@/lib/board/catalog";
+import { defaultTitle, dimensionLabel, isMetricId, metricStatKey } from "@/lib/board/catalog";
 import { formatMetricValue, statTileFormat } from "@/lib/board/format";
 import { encodeWidgetQuery, widgetQueryOf } from "@/lib/board/query";
 import type { BoardWidget as Widget, WidgetData } from "@/lib/board/types";
@@ -20,6 +14,7 @@ import { PLATFORM_LABEL } from "@/lib/platforms";
 import { BoardCategoryChart, BoardSeriesChart, type FixedSize } from "./BoardChart";
 import { BoardCreatives } from "./BoardCreatives";
 import { BoardTable } from "./BoardTable";
+import { useStats } from "./StatsContext";
 
 /**
  * One widget on a board: a card that draws whatever its data says.
@@ -55,8 +50,9 @@ export function BoardWidget({
    */
   fixed?: FixedSize;
 }) {
+  const reg = useStats();
   const query = widgetQueryOf(widget);
-  const title = widget.title?.trim() || defaultTitle(query);
+  const title = widget.title?.trim() || defaultTitle(query, reg);
   const printed = fixed !== undefined;
 
   // A new server render (another range, a saved edit) replaces what was fetched.
@@ -103,8 +99,12 @@ export function BoardWidget({
 
   /* ---------------- headline number: the tile is the card ---------------- */
   if (query.kind === "kpi") {
-    const m = METRICS[query.metric];
-    const statKey = metricStatKey(query.metric, query.platform);
+    const format = reg.format(query.metric);
+    // The shared maps' key for a built-in; an agency metric carries its own.
+    const statKey = isMetricId(query.metric) ? metricStatKey(query.metric, query.platform) : query.metric;
+    const polarity = reg.polarity(query.metric, query.platform);
+    const definition = reg.definition(query.metric, query.platform);
+    const base = reg.base(query.metric);
     if (live.kind === "pending") {
       // Shaped like the tile it becomes, so the row does not jump when reach lands.
       return (
@@ -114,7 +114,7 @@ export function BoardWidget({
             style={{ color: "var(--text-muted)" }}
           >
             {tagged}
-            <MetricInfo metricKey={statKey} label={tagged} />
+            <MetricInfo metricKey={statKey} label={tagged} definition={definition} />
           </span>
           <div className="skeleton h-[27px] w-28 rounded-[var(--radius-xs)]" />
           {live.reason === "reach" && (
@@ -140,27 +140,31 @@ export function BoardWidget({
           value={DASH}
           numeric={null}
           metricKey={statKey}
+          polarity={polarity}
+          definition={definition}
           change={null}
           footnote={reason}
         />
       );
     }
-    const tileFormat = statTileFormat(m.format);
+    const tileFormat = statTileFormat(format);
     // A fractional count (Google's conversions) prints as text; the count-up
     // animation would round it on the way.
-    const animate = Boolean(tileFormat) && !printed && (m.format !== "count" || Number.isInteger(live.value ?? 0));
+    const animate = Boolean(tileFormat) && !printed && (format !== "count" || Number.isInteger(live.value ?? 0));
     return (
       <StatTile
         className="h-full"
         compact
         // Reach is asked of Meta for this exact range only; it has no previous.
-        comparable={query.metric !== "reach" && query.metric !== "frequency"}
+        comparable={base !== "reach" && base !== "frequency"}
         label={live.unit ? `${tagged} · ${live.unit}` : tagged}
-        value={formatMetricValue(m.format, live.value, live.currency)}
+        value={formatMetricValue(format, live.value, live.currency)}
         numeric={animate ? live.value : undefined}
         format={tileFormat}
         currency={live.currency}
         metricKey={statKey}
+        polarity={polarity}
+        definition={definition}
         change={live.change}
         spark={live.spark ?? undefined}
         footnote={[live.footnote, ...(live.notes ?? [])].filter(Boolean).join(" ") || undefined}
@@ -219,7 +223,11 @@ export function BoardWidget({
 
   const info =
     query.kind === "series" || query.kind === "category"
-      ? { key: metricStatKey(query.metric, query.platform), label: metricLabel(query.metric, query.platform) }
+      ? {
+          key: isMetricId(query.metric) ? metricStatKey(query.metric, query.platform) : query.metric,
+          label: reg.label(query.metric, query.platform),
+          definition: reg.definition(query.metric, query.platform),
+        }
       : null;
 
   // In a document: the card's padding (16px a side), its title line, and the
@@ -248,7 +256,7 @@ export function BoardWidget({
           >
             {title}
           </h2>
-          {info && <MetricInfo metricKey={info.key} label={info.label} />}
+          {info && <MetricInfo metricKey={info.key} label={info.label} definition={info.definition} />}
         </div>
         {platformTag && (
           <span
@@ -299,9 +307,9 @@ export function BoardWidget({
         <BoardSeriesChart
           points={live.points}
           form={query.form}
-          format={METRICS[query.metric].format}
+          format={reg.format(query.metric)}
           currency={live.currency}
-          measure={metricLabel(query.metric, query.platform)}
+          measure={reg.label(query.metric, query.platform)}
           prevLabel={live.prevLabel}
           fixed={chartBox}
         />
@@ -312,9 +320,9 @@ export function BoardWidget({
         <BoardCategoryChart
           rows={live.rows}
           form={query.form}
-          format={METRICS[query.metric].format}
+          format={reg.format(query.metric)}
           currency={live.currency}
-          measure={metricLabel(query.metric, query.platform)}
+          measure={reg.label(query.metric, query.platform)}
           total={live.total}
           dimension={query.dimension}
           fixed={chartBox}

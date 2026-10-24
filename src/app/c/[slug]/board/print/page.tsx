@@ -49,6 +49,7 @@ export default async function BoardPrintPage({
       logo={doc.logo}
       widgets={doc.widgets}
       data={doc.data}
+        metrics={doc.metrics}
       rangeStart={window.startKey}
       rangeEnd={window.endKey}
       toolbar={

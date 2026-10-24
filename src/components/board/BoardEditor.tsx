@@ -16,11 +16,13 @@ import { Icon } from "@/components/Icon";
 import { MAX_WIDGETS, WIDGET_KINDS, defaultTitle } from "@/lib/board/catalog";
 import { BOARD_COLS, firstFreeSlot, limitsFor, moveBy, normalizeLayout, resizeBy } from "@/lib/board/grid";
 import { encodeWidgetQuery, widgetQueryKey, widgetQueryOf } from "@/lib/board/query";
+import type { Registry } from "@/lib/board/registry";
 import type { BoardData, BoardWidget, WidgetBox, WidgetData, WidgetQuery } from "@/lib/board/types";
 import type { AdPlatform } from "@/lib/platforms";
 import { BoardWidget as WidgetCard } from "./BoardWidget";
 import { WidgetMenu, type WidgetAction } from "./WidgetMenu";
 import { WidgetPicker, type PickerResult } from "./WidgetPicker";
+import { useStats } from "./StatsContext";
 
 // The grid library measures the DOM, so it never renders on the server — and it
 // loads here only, never on the board a client opens to read.
@@ -50,8 +52,8 @@ function newId(): string {
   return `w-${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
 }
 
-function titleOf(w: BoardWidget): string {
-  return w.title?.trim() || defaultTitle(widgetQueryOf(w));
+function titleOf(w: BoardWidget, reg: Registry): string {
+  return w.title?.trim() || defaultTitle(widgetQueryOf(w), reg);
 }
 
 /** A widget with its query replaced, keeping its id, place and size. */
@@ -108,6 +110,7 @@ export function BoardEditor({
 }) {
   const router = useRouter();
   const [widgets, setWidgets] = useState<BoardWidget[]>(initialWidgets);
+  const reg = useStats();
   const [locked, setLocked] = useState(initialLocked);
   const [dirty, setDirty] = useState(false);
   const [cache, setCache] = useState<Record<string, WidgetData>>(() => {
@@ -195,15 +198,15 @@ export function BoardEditor({
   function move(w: BoardWidget, dx: number, dy: number) {
     const next = moveBy(widgets, w.id, dx, dy);
     const me = next.find((n) => n.id === w.id)!;
-    if (me.x === w.x && me.y === w.y) return setSaid(`${titleOf(w)} cannot move that way.`);
-    change(next, `${titleOf(w)} moved to row ${me.y + 1}, column ${me.x + 1}.`);
+    if (me.x === w.x && me.y === w.y) return setSaid(`${titleOf(w, reg)} cannot move that way.`);
+    change(next, `${titleOf(w, reg)} moved to row ${me.y + 1}, column ${me.x + 1}.`);
   }
 
   function resize(w: BoardWidget, dw: number, dh: number) {
     const next = resizeBy(widgets, w.id, dw, dh);
     const me = next.find((n) => n.id === w.id)!;
-    if (me.w === w.w && me.h === w.h) return setSaid(`${titleOf(w)} is already at that limit.`);
-    change(next, `${titleOf(w)} is now ${me.w} columns wide and ${me.h} rows tall.`);
+    if (me.w === w.w && me.h === w.h) return setSaid(`${titleOf(w, reg)} is already at that limit.`);
+    change(next, `${titleOf(w, reg)} is now ${me.w} columns wide and ${me.h} rows tall.`);
   }
 
   function onHandleKey(e: KeyboardEvent<HTMLButtonElement>, w: BoardWidget) {
@@ -215,7 +218,7 @@ export function BoardEditor({
   }
 
   function act(action: WidgetAction, w: BoardWidget) {
-    const title = titleOf(w);
+    const title = titleOf(w, reg);
     switch (action) {
       case "settings":
         seq.current += 1;
@@ -282,14 +285,14 @@ export function BoardEditor({
     }
     if (editing) {
       const next = normalizeLayout(widgets.map((w) => (w.id === editing.id ? withQuery(w, r.query, r.title) : w)));
-      change(next, `Updated ${titleOf(next.find((w) => w.id === editing.id)!)}.`);
+      change(next, `Updated ${titleOf(next.find((w) => w.id === editing.id)!, reg)}.`);
       return;
     }
     const size = r.size ?? WIDGET_KINDS[r.query.kind].size;
     const slot = firstFreeSlot(widgets, size.w, size.h);
     const id = newId();
     const added = { ...r.query, id, x: slot.x, y: slot.y, w: size.w, h: size.h, ...(r.title ? { title: r.title } : {}) } as BoardWidget;
-    change(normalizeLayout([...widgets, added]), `Added ${titleOf(added)}.`);
+    change(normalizeLayout([...widgets, added]), `Added ${titleOf(added, reg)}.`);
     // Show where it landed — a slot freed higher up is easy to miss.
     setTimeout(() => {
       const el = document.querySelector<HTMLElement>(`[data-widget-id="${id}"]`);
@@ -506,7 +509,7 @@ export function BoardEditor({
               widgets={widgets}
               onArrange={arrange}
               renderItem={(w) => {
-                const title = titleOf(w);
+                const title = titleOf(w, reg);
                 return (
                   <div className="group relative h-full" data-widget-id={w.id}>
                     <WidgetCard

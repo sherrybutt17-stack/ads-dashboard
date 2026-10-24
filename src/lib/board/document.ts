@@ -5,6 +5,7 @@ import type { DateWindow } from "@/lib/dates";
 import { inlineThumbs } from "@/lib/meta/thumbs";
 import { loadBoardData, type BoardMode } from "./aggregate";
 import { loadBoardContext } from "./context";
+import { BUILTIN, buildRegistry, type CustomMetric, type Registry } from "./registry";
 import { getBoard } from "./store";
 import type { BoardData, BoardWidget } from "./types";
 
@@ -15,6 +16,8 @@ export interface BoardDocumentData {
   agency: AgencySettings;
   /** The client's logo as a data URI, or null. */
   logo: string | null;
+  /** The agency metrics the document's numbers were computed with — its labels must match. */
+  metrics: CustomMetric[];
 }
 
 /**
@@ -33,9 +36,15 @@ export async function loadBoardDocument(
   client: Client,
   window: DateWindow,
   mode: BoardMode,
-  source: "stored" | { snapshot: readonly BoardWidget[] },
+  source: "stored" | { snapshot: readonly BoardWidget[]; metrics: readonly CustomMetric[] },
 ): Promise<BoardDocumentData> {
   const context = await loadBoardContext(client);
+  /*
+   * A stored board names the agency's metrics as they are now; a share link,
+   * the definitions frozen into it when it was made.
+   */
+  const metrics = source === "stored" ? context.metrics : [...source.metrics];
+  const registry = source === "stored" ? context.registry : buildRegistry(metrics);
   const [widgets, logo, agency] = await Promise.all([
     source === "stored"
       ? getBoard(client.id, context.starter).then((b) => b.widgets)
@@ -51,11 +60,12 @@ export async function loadBoardDocument(
       mode,
       connections: context.connections,
       assets: { logoSrc: logo, brandName: context.brandName },
+      registry,
     },
     widgets,
   );
   await inlineCreativeThumbs(client, widgets, data);
-  return { widgets, data, branding: context.branding, agency, logo };
+  return { widgets, data, branding: context.branding, agency, logo, metrics };
 }
 
 /** Enough for every card a full-page widget holds, few enough to keep a PDF light. */
@@ -106,7 +116,14 @@ export async function inlineCreativeThumbs(
   }
 }
 
-/** Whether a board asks Meta for reach — one question per range, worth asking before a render. */
-export function needsReach(widgets: readonly BoardWidget[]): boolean {
-  return widgets.some((w) => w.kind === "kpi" && (w.metric === "reach" || w.metric === "frequency"));
+/**
+ * Whether a board asks Meta for reach — one question per range, worth asking
+ * before a render. An agency's own name for reach asks it too.
+ */
+export function needsReach(widgets: readonly BoardWidget[], reg: Registry = BUILTIN): boolean {
+  return widgets.some((w) => {
+    if (w.kind !== "kpi") return false;
+    const base = reg.base(w.metric);
+    return base === "reach" || base === "frequency";
+  });
 }

@@ -12,6 +12,7 @@ import {
   type ReportView,
 } from "@/lib/report/view";
 import { parseSnapshot, toSnapshot } from "@/lib/board/snapshot";
+import type { CustomMetric } from "@/lib/board/registry";
 import type { BoardWidget } from "@/lib/board/types";
 
 /**
@@ -60,6 +61,8 @@ export interface MintShareInput {
    * from the STORED board, never from a request body — see the share route.
    */
   board?: readonly BoardWidget[] | null;
+  /** The agency's metrics, of which the ones the board names are frozen with it. */
+  boardMetrics?: readonly CustomMetric[];
 }
 
 export interface MintedShare {
@@ -108,7 +111,7 @@ export async function mintShareLink(input: MintShareInput): Promise<MintedShare>
       // from the standard report, so a link made with the defaults keeps
       // meaning "the standard report" even if that standard is ever widened.
       view: input.board
-        ? toSnapshot(input.board)
+        ? toSnapshot(input.board, input.boardMetrics)
         : input.view && !isDefaultView(input.view)
           ? { sections: input.view.sections, kpis: input.view.kpis }
           : null,
@@ -132,7 +135,7 @@ export function viewForLink(link: Pick<ShareLink, "view">): ReportView {
  */
 export function boardForLink(
   link: Pick<ShareLink, "view">,
-): { widgets: BoardWidget[]; dropped: number } | null {
+): { widgets: BoardWidget[]; dropped: number; metrics: CustomMetric[] } | null {
   return parseSnapshot(link.view);
 }
 

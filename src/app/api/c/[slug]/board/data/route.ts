@@ -65,14 +65,19 @@ export async function GET(
     );
   }
 
-  // A reach question may call Meta; past its own limit it reads the cache only.
+  // The client's agency metrics resolve here, server-side, from the client row —
+  // never from anything in the request.
+  const context = await loadBoardContext(client);
+
+  // A reach question (or the agency's own name for one) may call Meta; past its
+  // own limit it reads the cache only.
   let mode: BoardMode = "api";
-  if (query.kind === "kpi" && (query.metric === "reach" || query.metric === "frequency")) {
+  const base = query.kind === "kpi" ? context.registry.base(query.metric) : null;
+  if (base === "reach" || base === "frequency") {
     const reachGate = rateLimit(`board-reach:${client.id}`, REACH_LIMIT, WINDOW_MS);
     if (!reachGate.ok) mode = "document";
   }
 
-  const context = await loadBoardContext(client);
   const data = await loadWidgetData(
     {
       client,
@@ -85,6 +90,7 @@ export async function GET(
           : null,
         brandName: context.brandName,
       },
+      registry: context.registry,
     },
     query,
   );

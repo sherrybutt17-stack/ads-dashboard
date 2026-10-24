@@ -1,6 +1,7 @@
 import { AD_PLATFORMS, type AdPlatform } from "@/lib/platforms";
-import { METRICS, widgetMetrics } from "./catalog";
+import { widgetMetrics } from "./catalog";
 import { widgetQueryOf } from "./query";
+import { BUILTIN, type Registry } from "./registry";
 import type { BoardWidget } from "./types";
 
 /**
@@ -11,12 +12,12 @@ import type { BoardWidget } from "./types";
  * printed document and its share link have to say which rule each figure
  * used. One function, so the three say the same thing.
  */
-export function leadPlatforms(widgets: readonly BoardWidget[]): AdPlatform[] {
+export function leadPlatforms(widgets: readonly BoardWidget[], reg: Registry = BUILTIN): AdPlatform[] {
   const used = new Set<AdPlatform>();
   for (const w of widgets) {
     const q = widgetQueryOf(w);
     if (!("platform" in q)) continue;
-    if (widgetMetrics(q).some((m) => METRICS[m].needs.includes("crm"))) used.add(q.platform);
+    if (widgetMetrics(q).some((m) => reg.needs(m).includes("crm"))) used.add(q.platform);
   }
   return AD_PLATFORMS.filter((p) => used.has(p));
 }

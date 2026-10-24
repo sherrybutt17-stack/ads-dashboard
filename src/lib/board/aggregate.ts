@@ -14,7 +14,6 @@ import {
   type AdTotals,
   type FunnelCounts,
 } from "@/lib/metrics/compute";
-import { METRIC_POLARITY } from "@/lib/metrics/compute";
 import { RANKING_MIN_IMPRESSIONS, orderByStat, rankingIsMeaningful } from "@/lib/metrics/creative";
 import { safePreviewUrl } from "@/lib/meta/creative";
 import {
@@ -56,18 +55,12 @@ import {
 import { platformCurrency } from "@/lib/metrics/currency";
 import {
   DIMENSIONS,
-  METRICS,
   TOP_N,
-  canBeCircle,
   checkWidget,
-  metricExtraKeys,
-  metricFromAdRows,
-  metricLabel,
-  metricSeries,
-  metricStatKey,
+  statSeries,
   widgetMetrics,
   type DimensionId,
-  type MetricId,
+  type StatId,
 } from "./catalog";
 import {
   EMPTY_BAG,
@@ -80,6 +73,7 @@ import {
   type MetricOptions,
 } from "./bag";
 import { widgetQueryOf } from "./query";
+import { BUILTIN, type Registry } from "./registry";
 import { ensurePeriodReach } from "./reach";
 import type {
   BoardData,
@@ -134,6 +128,11 @@ export interface BoardLoadInput {
   mode: BoardMode;
   connections: BoardConnections;
   assets: BoardAssets;
+  /**
+   * The stats this board can name: the built-ins and its agency's own metrics
+   * (`registry.ts`). The built-ins alone when absent.
+   */
+  registry?: Registry;
 }
 
 type Which = "cur" | "prev";
@@ -274,18 +273,8 @@ function funnelFrom(stages: Partial<Record<CanonicalStage, number>> | undefined)
   return { ...EMPTY_FUNNEL, ...(stages ?? {}) };
 }
 
-function needs(metrics: readonly MetricId[], need: "extras" | "crm" | "results"): boolean {
-  return metrics.some((m) => METRICS[m].needs.includes(need));
-}
-
-/** Meta's ad-level rows are the only source of ThruPlays and plays (`MetricDef.adRows`). */
-function fromAdRows(metric: MetricId, platform: AdPlatform): boolean {
-  return metricFromAdRows(metric, platform);
-}
-
-/** The extra figures a widget's stats read on Google or TikTok — whose collection a note owes. */
-function extraKeysOf(metrics: readonly MetricId[]): string[] {
-  return [...new Set(metrics.flatMap(metricExtraKeys))];
+function needs(reg: Registry, metrics: readonly StatId[], need: "extras" | "crm" | "results"): boolean {
+  return metrics.some((m) => reg.needs(m).includes(need));
 }
 
 function unavailable(
@@ -302,8 +291,10 @@ class BoardLoader {
   readonly tz: string;
   readonly filter: PaidLeadFilter;
   readonly prev: DateWindow;
+  readonly reg: Registry;
 
   constructor(readonly input: BoardLoadInput) {
+    this.reg = input.registry ?? BUILTIN;
     this.tz = input.client.timezone;
     this.filter = { mode: input.client.paidLeadFilter, tag: input.client.paidLeadTag };
     this.prev = previousWindow(input.window, this.tz);
@@ -441,16 +432,16 @@ class BoardLoader {
   async totals(
     platform: AdPlatform,
     which: Which,
-    metrics: readonly MetricId[],
+    metrics: readonly StatId[],
     focus: ResultFocus = null,
   ): Promise<Bag> {
     const p = await this.period(platform, which);
     let b = bag({ ...fromAds(p.ads), funnel: p.funnel, revenue: p.revenue });
-    if (needs(metrics, "extras")) {
+    if (needs(this.reg, metrics, "extras")) {
       const e = (await this.extraParts(platform, "total", which)).get("");
       if (e) b = { ...b, ...e };
     }
-    if (needs(metrics, "results")) {
+    if (needs(this.reg, metrics, "results")) {
       const [r] = await this.results(platform, "total", which);
       b = { ...b, ...fromResults(r, focus).parts };
     }
@@ -467,7 +458,7 @@ class BoardLoader {
   async days(
     platform: AdPlatform,
     which: Which,
-    metrics: readonly MetricId[],
+    metrics: readonly StatId[],
     adRows: boolean,
     focus: ResultFocus = null,
   ): Promise<Row[]> {
@@ -481,8 +472,8 @@ class BoardLoader {
       });
     }
     const points = await this.daily(platform, which);
-    const extras = needs(metrics, "extras") ? await this.extraParts(platform, "day", which) : null;
-    const results = needs(metrics, "results")
+    const extras = needs(this.reg, metrics, "extras") ? await this.extraParts(platform, "day", which) : null;
+    const results = needs(this.reg, metrics, "results")
       ? new Map((await this.results(platform, "day", which)).map((r) => [r.key, r]))
       : null;
     return points.map((p) => ({
@@ -501,7 +492,7 @@ class BoardLoader {
   async split(
     platform: AdPlatform,
     dimension: DimensionId,
-    metrics: readonly MetricId[],
+    metrics: readonly StatId[],
     focus: ResultFocus = null,
   ): Promise<Row[]> {
     switch (dimension) {
@@ -520,9 +511,9 @@ class BoardLoader {
       }
       case "campaign": {
         const rows = await this.campaigns(platform);
-        const crm = needs(metrics, "crm") ? await this.funnelByCampaign(platform) : null;
-        const extras = needs(metrics, "extras") ? await this.extraParts(platform, "campaign", "cur") : null;
-        const results = needs(metrics, "results")
+        const crm = needs(this.reg, metrics, "crm") ? await this.funnelByCampaign(platform) : null;
+        const extras = needs(this.reg, metrics, "extras") ? await this.extraParts(platform, "campaign", "cur") : null;
+        const results = needs(this.reg, metrics, "results")
           ? new Map((await this.results(platform, "campaign", "cur")).map((r) => [r.key, r]))
           : null;
         const out: Row[] = rows.map((c) => {
@@ -557,7 +548,7 @@ class BoardLoader {
       case "adset":
       case "ad": {
         const rows = await this.adLevel(dimension, "cur");
-        const results = needs(metrics, "results")
+        const results = needs(this.reg, metrics, "results")
           ? new Map((await this.results(platform, dimension, "cur")).map((x) => [x.key, x]))
           : null;
         return rows.map((r) => {
@@ -580,7 +571,7 @@ class BoardLoader {
          */
         const [pairs, results] = await Promise.all([
           this.creativePairs(),
-          needs(metrics, "results") ? this.results(platform, "creative", "cur") : Promise.resolve(null),
+          needs(this.reg, metrics, "results") ? this.results(platform, "creative", "cur") : Promise.resolve(null),
         ]);
         const identity = await this.adIdentity(pairs.map((p) => p.adId));
         const byKey = results ? new Map(results.map((r) => [r.key, r])) : null;
@@ -623,12 +614,12 @@ class BoardLoader {
   async coverageNotes(opts: {
     adRows: boolean;
     audience: boolean;
-    extras?: { platform: AdPlatform; metrics: readonly MetricId[] };
+    extras?: { platform: AdPlatform; metrics: readonly StatId[] };
   }): Promise<string[]> {
     const out: string[] = [];
     const ex = opts.extras;
     if (ex && ex.platform !== "meta") {
-      const keys = extraKeysOf(ex.metrics);
+      const keys = [...new Set(ex.metrics.flatMap((m) => this.reg.extraKeys(m)))];
       if (keys.length > 0) {
         const [total] = await this.simpleExtras(ex.platform, "total", "cur");
         if (keys.some((k) => (total?.uncollected[k] ?? 0) > 0)) {
@@ -659,14 +650,14 @@ class BoardLoader {
  * Widgets
  * ------------------------------------------------------------------ */
 
-function gate(q: WidgetQuery, c: BoardConnections): WidgetData | null {
+function gate(q: WidgetQuery, c: BoardConnections, reg: Registry): WidgetData | null {
   if (q.kind === "text" || q.kind === "logo") return null;
-  const verdict = checkWidget(q);
+  const verdict = checkWidget(q, reg);
   if (!verdict.ok) return unavailable("problem", "This widget cannot be shown", verdict.reason);
 
   const metrics = widgetMetrics(q);
   const adData = metrics.some((m) =>
-    METRICS[m].needs.some(
+    reg.needs(m).some(
       (n) => n === "ads" || n === "extras" || n === "adlevel" || n === "reach" || n === "results",
     ),
   );
@@ -677,7 +668,7 @@ function gate(q: WidgetQuery, c: BoardConnections): WidgetData | null {
       "Connect the ad account on the Connections page to fill this widget.",
     );
   }
-  if ((q.kind === "funnel" || needs(metrics, "crm")) && !c.crm) {
+  if ((q.kind === "funnel" || needs(reg, metrics, "crm")) && !c.crm) {
     return unavailable(
       "problem",
       "No CRM connected",
@@ -691,7 +682,7 @@ function gate(q: WidgetQuery, c: BoardConnections): WidgetData | null {
  * The line under a headline number, matching the Overview tile word for word,
  * so a figure means the same thing on both screens.
  */
-function kpiFootnote(metric: MetricId, b: Bag, currency: string): string | undefined {
+function kpiFootnote(metric: StatId, b: Bag, currency: string): string | undefined {
   const f = b.funnel;
   if (!f) return undefined;
   const coherence = funnelCoherence(f);
@@ -741,8 +732,9 @@ function kpiFootnote(metric: MetricId, b: Bag, currency: string): string | undef
  * and spend no type's cost could include.
  */
 function resultNotes(
+  reg: Registry,
   f: FocusInfo | null,
-  metrics: readonly MetricId[],
+  metrics: readonly StatId[],
   currency: string,
   opts: { counting?: boolean } = {},
 ): string[] {
@@ -760,7 +752,7 @@ function resultNotes(
       "Some days in this range were synced before results were collected — re-pull history on the Connections page to include them.",
     );
   }
-  if (metrics.includes("cost_per_result") && (f.total?.mixedSpend ?? 0) > 0) {
+  if (metrics.some((m) => reg.base(m) === "cost_per_result") && (f.total?.mixedSpend ?? 0) > 0) {
     out.push(
       `${formatCurrency(f.total!.mixedSpend, currency)} went to campaigns optimising for more than one kind of result, so it is not in the cost per result.`,
     );
@@ -792,16 +784,16 @@ async function resultsKpi(
     L.totals(platform, "prev", [metric], key),
     L.days(platform, "cur", [metric], false, key),
   ]);
-  const value = metricValue(metric, cur);
-  const previous = metricValue(metric, prev);
-  const values = days.map((d) => metricValue(metric, d.bag));
-  const notes = resultNotes(f, [metric], currency);
+  const value = L.reg.value(metric, cur);
+  const previous = L.reg.value(metric, prev);
+  const values = days.map((d) => L.reg.value(metric, d.bag));
+  const notes = resultNotes(L.reg, f, [metric], currency);
   return {
     kind: "value",
     value,
     previous,
     change: pctChange(value, previous),
-    spark: METRICS[metric].additive
+    spark: L.reg.additive(metric)
       ? values.map((v) => v ?? 0)
       : values.filter((v): v is number => v !== null),
     currency,
@@ -818,9 +810,11 @@ async function kpiData(
 ): Promise<WidgetData> {
   const { platform, metric } = q;
   const currency = await L.currency(platform);
-  if (needs([metric], "results")) return resultsKpi(L, q, currency);
+  if (needs(L.reg, [metric], "results")) return resultsKpi(L, q, currency);
 
-  if (metric === "reach" || metric === "frequency") {
+  // Reach, or the agency's own name for it, is one fetched figure for the range.
+  const base = L.reg.base(metric);
+  if (base === "reach" || base === "frequency") {
     let r = await L.reach();
     if (r === null && L.input.mode === "api") {
       const outcome = await ensurePeriodReach(L.input.client, L.input.window);
@@ -851,7 +845,7 @@ async function kpiData(
     }
     return {
       kind: "value",
-      value: metric === "reach" ? r.reach : r.frequency,
+      value: base === "reach" ? r.reach : r.frequency,
       previous: null,
       change: null,
       spark: null,
@@ -860,18 +854,19 @@ async function kpiData(
     };
   }
 
-  const adRows = fromAdRows(metric, platform);
+  const adRows = L.reg.fromAdRows(metric, platform);
   const [cur, prev] = adRows
     ? await Promise.all([L.adTotals("cur"), L.adTotals("prev")])
     : await Promise.all([L.totals(platform, "cur", [metric]), L.totals(platform, "prev", [metric])]);
 
-  const value = metricValue(metric, cur);
-  const previous = metricValue(metric, prev);
+  const value = L.reg.value(metric, cur);
+  const previous = L.reg.value(metric, prev);
   let spark: number[] | null = null;
-  if (metricSeries(metric, platform)) {
+  const def = L.reg.get(metric);
+  if (def && statSeries(def, platform)) {
     const days = await L.days(platform, "cur", [metric], adRows);
-    const values = days.map((d) => metricValue(metric, d.bag));
-    spark = METRICS[metric].additive
+    const values = days.map((d) => L.reg.value(metric, d.bag));
+    spark = L.reg.additive(metric)
       ? values.map((v) => v ?? 0)
       : values.filter((v): v is number => v !== null);
   }
@@ -883,7 +878,7 @@ async function kpiData(
     change: pctChange(value, previous),
     spark,
     currency,
-    footnote: kpiFootnote(metric, cur, currency),
+    footnote: kpiFootnote(base, cur, currency),
     notes: notes.length ? notes : undefined,
   };
 }
@@ -893,8 +888,8 @@ async function seriesData(
   q: Extract<WidgetQuery, { kind: "series" }>,
 ): Promise<WidgetData> {
   const { platform, metric } = q;
-  const adRows = fromAdRows(metric, platform);
-  const f = needs([metric], "results") ? await L.resultFocus(platform, q.resultType) : null;
+  const adRows = L.reg.fromAdRows(metric, platform);
+  const f = needs(L.reg, [metric], "results") ? await L.resultFocus(platform, q.resultType) : null;
   if (f && !f.type) return noResults(f);
   const focus: ResultFocus = f?.type?.key ?? null;
   const [currency, cur, prev, coverage] = await Promise.all([
@@ -903,14 +898,14 @@ async function seriesData(
     q.compare ? L.days(platform, "prev", [metric], adRows, focus) : Promise.resolve(null),
     L.coverageNotes({ adRows, audience: false, extras: { platform, metrics: [metric] } }),
   ]);
-  const notes = [...resultNotes(f, [metric], currency, { counting: true }), ...coverage];
+  const notes = [...resultNotes(L.reg, f, [metric], currency, { counting: true }), ...coverage];
   return {
     kind: "series",
     points: cur.map((d, i) => ({
       key: d.key,
       label: d.label,
-      value: metricValue(metric, d.bag),
-      prev: prev ? metricValue(metric, prev[i]?.bag ?? EMPTY_BAG) : null,
+      value: L.reg.value(metric, d.bag),
+      prev: prev ? L.reg.value(metric, prev[i]?.bag ?? EMPTY_BAG) : null,
     })),
     currency,
     prevLabel: q.compare ? "Previous period" : null,
@@ -936,14 +931,15 @@ async function categoryData(
   q: Extract<WidgetQuery, { kind: "category" }>,
 ): Promise<WidgetData> {
   const { platform, metric, dimension } = q;
-  const def = METRICS[metric];
+  // `gate` has checked the widget against this registry, so the stat resolves.
+  const def = L.reg.get(metric)!;
   const rankBy = def.rankBy ?? metric;
   const audience = isAudience(dimension);
   // By result type every bar is a different kind of thing: never a whole.
   const byType = dimension === "result_type";
   const additive = def.additive && !byType;
 
-  const f = needs([metric, rankBy], "results")
+  const f = needs(L.reg, [metric, rankBy], "results")
     ? await L.resultFocus(platform, byType ? undefined : q.resultType)
     : null;
   if (f && !f.type && !byType) return noResults(f);
@@ -955,7 +951,7 @@ async function categoryData(
     L.coverageNotes({ adRows: usesAdRows(dimension), audience, extras: { platform, metrics: [metric, rankBy] } }),
     dimension === "campaign" ? campaignOptions(L, platform) : Promise.resolve({}),
   ]);
-  const notes = [...resultNotes(f, [metric], currency, { counting: !byType }), ...coverage];
+  const notes = [...resultNotes(L.reg, f, [metric], currency, { counting: !byType }), ...coverage];
 
   if (rows.length === 0) {
     return unavailable(
@@ -967,8 +963,8 @@ async function categoryData(
 
   const valued = rows.map((r) => ({
     ...r,
-    value: metricValue(metric, r.bag, opts),
-    rank: metricValue(rankBy, r.bag, opts) ?? -Infinity,
+    value: L.reg.value(metric, r.bag, opts),
+    rank: L.reg.value(rankBy, r.bag, opts) ?? -Infinity,
   }));
   // A segment with nothing in it is not a slice; a ratio with no denominator is not a bar.
   const present = valued.filter((r) => (def.additive ? (r.value ?? 0) > 0 : r.value !== null));
@@ -986,7 +982,7 @@ async function categoryData(
   const extraNotes = [...notes];
   if (rest.length > 0) {
     if (additive) {
-      const other = metricValue(metric, sumBags(rest.map((r) => r.bag)));
+      const other = L.reg.value(metric, sumBags(rest.map((r) => r.bag)));
       if (other !== null && other > 0) {
         out.push({ key: "__other__", label: `Other (${rest.length})`, value: other, tone: "other" });
       }
@@ -996,10 +992,10 @@ async function categoryData(
   }
 
   let whole: Bag = sumBags(rows.map((r) => r.bag));
-  if (audience && canBeCircle(metric)) {
+  if (audience && L.reg.additive(metric)) {
     const totals = await L.totals(platform, "cur", [metric]);
     const missing = remainder(totals, whole);
-    const notReported = metricValue(metric, missing);
+    const notReported = L.reg.value(metric, missing);
     if (notReported !== null && notReported > 0) {
       out.push({ key: "__not_reported__", label: "Not reported by Meta", value: notReported, tone: "not_reported" });
       whole = totals;
@@ -1009,7 +1005,7 @@ async function categoryData(
   return {
     kind: "categories",
     rows: out,
-    total: additive ? metricValue(metric, whole) : null,
+    total: additive ? L.reg.value(metric, whole) : null,
     currency,
     notes: extraNotes.length ? extraNotes : undefined,
   };
@@ -1026,10 +1022,10 @@ async function dailyTableData(
   q: Extract<WidgetQuery, { kind: "table" }>,
 ): Promise<WidgetData> {
   const { platform, metrics } = q;
-  const wantAd = metrics.some((m) => fromAdRows(m, platform));
-  const wantCampaign = metrics.some((m) => !fromAdRows(m, platform));
+  const wantAd = metrics.some((m) => L.reg.fromAdRows(m, platform));
+  const wantCampaign = metrics.some((m) => !L.reg.fromAdRows(m, platform));
   // One kind of result per day table, so its column adds up.
-  const f = needs(metrics, "results") ? await L.resultFocus(platform, q.resultType) : null;
+  const f = needs(L.reg, metrics, "results") ? await L.resultFocus(platform, q.resultType) : null;
   const focus: ResultFocus = f?.type?.key ?? null;
   const [currency, campaignDays, adDays, coverage] = await Promise.all([
     L.currency(platform),
@@ -1037,21 +1033,21 @@ async function dailyTableData(
     wantAd ? L.days(platform, "cur", metrics, true) : Promise.resolve(null),
     L.coverageNotes({ adRows: wantAd, audience: false, extras: { platform, metrics } }),
   ]);
-  const notes = [...resultNotes(f, metrics, currency, { counting: true }), ...coverage];
+  const notes = [...resultNotes(L.reg, f, metrics, currency, { counting: true }), ...coverage];
   const base = (campaignDays ?? adDays) as Row[];
-  const source = (m: MetricId): Row[] => ((fromAdRows(m, platform) ? adDays : campaignDays) ?? base);
+  const source = (m: StatId): Row[] => ((L.reg.fromAdRows(m, platform) ? adDays : campaignDays) ?? base);
 
   const rows: TableRow[] = base.map((d, i) => ({
     key: d.key,
     label: d.label,
-    values: metrics.map((m) => metricValue(m, source(m)[i]?.bag ?? EMPTY_BAG)),
+    values: metrics.map((m) => L.reg.value(m, source(m)[i]?.bag ?? EMPTY_BAG)),
   }));
   const shown = rows.slice(0, q.topN);
   return {
     kind: "table",
     columns: [...metrics],
     rows: shown,
-    totals: metrics.map((m) => metricValue(m, sumBags(source(m).map((r) => r.bag)))),
+    totals: metrics.map((m) => L.reg.value(m, sumBags(source(m).map((r) => r.bag)))),
     more: Math.max(0, rows.length - shown.length),
     currency,
     notes: notes.length ? notes : undefined,
@@ -1066,7 +1062,7 @@ async function tableData(
   const { platform, metrics, sort } = q;
   const dimension: DimensionId = q.dimension;
   const audience = isAudience(dimension);
-  const wantsResults = needs(metrics, "results");
+  const wantsResults = needs(L.reg, metrics, "results");
   const byType = dimension === "result_type";
   const f = wantsResults ? await L.resultFocus(platform, q.resultType) : null;
   /*
@@ -1081,7 +1077,7 @@ async function tableData(
     L.coverageNotes({ adRows: usesAdRows(dimension), audience, extras: { platform, metrics } }),
     dimension === "campaign" ? campaignOptions(L, platform) : Promise.resolve({}),
   ]);
-  const notes = [...resultNotes(f, metrics, currency), ...coverage];
+  const notes = [...resultNotes(L.reg, f, metrics, currency), ...coverage];
   // Name each row's kind of result under it (Google has only one kind).
   const rows: Row[] =
     focus === "own" && platform !== "google"
@@ -1094,7 +1090,7 @@ async function tableData(
       : splitRows;
 
   const all: Row[] = [...rows];
-  if (audience && metrics.some(canBeCircle)) {
+  if (audience && metrics.some((m) => L.reg.additive(m))) {
     const totals = await L.totals(platform, "cur", metrics);
     const missing = remainder(totals, sumBags(rows.map((r) => r.bag)));
     if (missing.spend > 0 || missing.impressions > 0 || missing.linkClicks > 0) {
@@ -1106,7 +1102,7 @@ async function tableData(
     return unavailable("empty", "No rows for this range");
   }
 
-  const value = (m: MetricId, b: Bag) => metricValue(m, b, opts);
+  const value = (m: StatId, b: Bag) => L.reg.value(m, b, opts);
   const sortIndex = metrics.indexOf(sort);
   const tableRows: Array<TableRow & { tone?: string }> = all.map((r) => ({
     key: r.key,
@@ -1142,7 +1138,7 @@ async function tableData(
     columns: [...metrics],
     rows: shown.map(({ key, label, sub, values }) => ({ key, label, sub, values })),
     totals: metrics.map((m) =>
-      mixedResults && METRICS[m].needs.includes("results") ? null : metricValue(m, whole),
+      mixedResults && L.reg.needs(m).includes("results") ? null : L.reg.value(m, whole),
     ),
     more: Math.max(0, ordered.length - shown.length),
     currency,
@@ -1204,7 +1200,7 @@ async function creativesData(
   q: Extract<WidgetQuery, { kind: "creatives" }>,
 ): Promise<WidgetData> {
   const reads = widgetMetrics(q);
-  const wantsResults = needs(reads, "results");
+  const wantsResults = needs(L.reg, reads, "results");
   const f = wantsResults ? await L.resultFocus("meta", q.resultType) : null;
   // Each card counts its own kind of result, as each Ads Manager row does — unless one is pinned.
   const focus: ResultFocus = !wantsResults ? null : q.resultType ? (f?.type?.key ?? q.resultType) : "own";
@@ -1242,15 +1238,15 @@ async function creativesData(
     return { key, list, bag: b, rtype };
   });
 
-  const ascending = METRIC_POLARITY[metricStatKey(q.sort, "meta")] === "lower-better";
+  const ascending = L.reg.polarity(q.sort, "meta") === "lower-better";
   const ordered = orderByStat(
     built.filter((c) => c.bag.spend > 0 || c.bag.impressions > 0),
-    (c) => metricValue(q.sort, c.bag),
+    (c) => L.reg.value(q.sort, c.bag),
     { ascending, spend: (c) => c.bag.spend, key: (c) => c.key },
   );
   const shown = ordered.slice(0, q.topN);
 
-  const showsResults = q.stats.some((m) => METRICS[m].needs.includes("results"));
+  const showsResults = q.stats.some((m) => L.reg.needs(m).includes("results"));
   const cards: CreativeCardData[] = shown.map((c) => {
     const rep = biggest(c.list);
     // The biggest ad first, then the others, for any field it leaves blank.
@@ -1305,7 +1301,7 @@ async function creativesData(
       ),
       thumb: thumbRef ? { ref: thumbRef } : null,
       previewUrl: firstOf(idents.map((x) => safePreviewUrl(x.previewLink))),
-      values: q.stats.map((m) => metricValue(m, c.bag)),
+      values: q.stats.map((m) => L.reg.value(m, c.bag)),
       context,
       resultLabel:
         showsResults && c.rtype && (c.bag.resultCount > 0 || c.bag.resultSpend > 0) ? c.rtype.label : null,
@@ -1315,7 +1311,7 @@ async function creativesData(
     };
   });
 
-  const notes = [...resultNotes(f, reads, currency, { counting: focus !== "own" }), ...coverage];
+  const notes = [...resultNotes(L.reg, f, reads, currency, { counting: focus !== "own" }), ...coverage];
   if (focus === "own" && showsResults) notes.push("Each card counts its own kind of result, as Ads Manager does.");
   if (chosen) {
     const names = new Map(pairs.map((p) => [p.campaignId, p.campaignName]));
@@ -1328,7 +1324,7 @@ async function creativesData(
       `${formatCurrency(unresolvedSpend, currency)} went to ads with no single image or video (Dynamic Creative, carousels), so it is on no card.`,
     );
   }
-  if (ascending && cards.length > 1) notes.push(`Ranked by ${metricLabel(q.sort, "meta").toLowerCase()}, lowest first.`);
+  if (ascending && cards.length > 1) notes.push(`Ranked by ${L.reg.label(q.sort, "meta").toLowerCase()}, lowest first.`);
 
   if (cards.length === 0) {
     return unavailable(
@@ -1365,7 +1361,7 @@ async function funnelData(
 }
 
 async function widgetData(L: BoardLoader, q: WidgetQuery): Promise<WidgetData> {
-  const blocked = gate(q, L.input.connections);
+  const blocked = gate(q, L.input.connections, L.reg);
   if (blocked) return blocked;
   switch (q.kind) {
     case "kpi":

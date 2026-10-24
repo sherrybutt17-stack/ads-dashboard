@@ -1,12 +1,13 @@
 "use client";
 
 import { CreativeThumb } from "@/components/CreativeThumb";
-import { METRICS, metricShortLabel } from "@/lib/board/catalog";
+
 import { CARD_GAP, CARD_MIN_WIDTH, cardGrid } from "@/lib/board/cards";
 import { formatMetricValue } from "@/lib/board/format";
 import { formatNumber } from "@/lib/metrics/compute";
 import { RANKING_LABEL, rankingColor } from "@/lib/metrics/creative";
 import type { CreativeCardData, WidgetData } from "@/lib/board/types";
+import { useStats } from "./StatsContext";
 
 type CreativesData = Extract<WidgetData, { kind: "creatives" }>;
 
@@ -86,6 +87,7 @@ function Card({
   compact: boolean;
   printed: boolean;
 }) {
+  const reg = useStats();
   const titleId = `card-${data.by}-${c.key}`;
   const src = c.thumb
     ? "src" in c.thumb
@@ -148,12 +150,12 @@ function Card({
               <dt
                 className="line-clamp-2 min-h-[26px] text-[10px] font-semibold uppercase leading-[13px] tracking-[0.06em] [overflow-wrap:anywhere]"
                 style={{ color: "var(--text-muted)" }}
-                title={METRICS[m].label}
+                title={reg.label(m, "meta")}
               >
-                {metricShortLabel(m, "meta")}
+                {reg.shortLabel(m, "meta")}
               </dt>
               <dd className="tnum text-[15px] font-semibold leading-5" style={{ color: "var(--text-primary)" }}>
-                {formatMetricValue(METRICS[m].format, c.values[i], data.currency)}
+                {formatMetricValue(reg.format(m), c.values[i], data.currency)}
               </dd>
             </div>
           ))}

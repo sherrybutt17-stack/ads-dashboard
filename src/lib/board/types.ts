@@ -5,8 +5,8 @@ import type {
   CardGrouping,
   CategoryForm,
   DimensionId,
-  MetricId,
   SeriesForm,
+  StatId,
   TableDimension,
 } from "./catalog";
 
@@ -19,11 +19,11 @@ import type {
  * data.
  */
 export type WidgetQuery =
-  | { kind: "kpi"; platform: AdPlatform; metric: MetricId; resultType?: string }
+  | { kind: "kpi"; platform: AdPlatform; metric: StatId; resultType?: string }
   | {
       kind: "series";
       platform: AdPlatform;
-      metric: MetricId;
+      metric: StatId;
       form: SeriesForm;
       /** Draw the previous period as a dashed ghost. */
       compare: boolean;
@@ -32,7 +32,7 @@ export type WidgetQuery =
   | {
       kind: "category";
       platform: AdPlatform;
-      metric: MetricId;
+      metric: StatId;
       dimension: DimensionId;
       form: CategoryForm;
       topN: number;
@@ -42,8 +42,8 @@ export type WidgetQuery =
       kind: "table";
       platform: AdPlatform;
       dimension: TableDimension;
-      metrics: MetricId[];
-      sort: MetricId;
+      metrics: StatId[];
+      sort: StatId;
       topN: number;
       /**
        * For results columns: the result type to count (a key from
@@ -59,9 +59,9 @@ export type WidgetQuery =
       /** One card per ad, or per creative (ads sharing an image or video, merged). */
       by: CardGrouping;
       /** The stats on each card, in order. */
-      stats: MetricId[];
+      stats: StatId[];
       /** What the cards are ranked by — need not be one of `stats`. */
-      sort: MetricId;
+      sort: StatId;
       topN: number;
       /** Meta's delivery rankings under each card, as on the Overview. */
       rankings?: boolean;
@@ -181,7 +181,7 @@ export type WidgetData =
     }
   | {
       kind: "table";
-      columns: MetricId[];
+      columns: StatId[];
       rows: TableRow[];
       /** Re-derived from summed components, never averaged. */
       totals: Array<number | null>;
@@ -193,7 +193,7 @@ export type WidgetData =
   | {
       kind: "creatives";
       by: CardGrouping;
-      stats: MetricId[];
+      stats: StatId[];
       cards: CreativeCardData[];
       /** Ads (or creatives) beyond the top N. */
       more: number;

@@ -110,6 +110,7 @@ export default async function RenderReportPage({
         logo={doc.logo}
         widgets={doc.widgets}
         data={doc.data}
+        metrics={doc.metrics}
         rangeStart={start}
         rangeEnd={end}
       />

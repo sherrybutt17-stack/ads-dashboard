@@ -1787,6 +1787,51 @@ export const agencyEmailDomains = pgTable(
 
 export type AgencyEmailDomainRow = typeof agencyEmailDomains.$inferSelect;
 
+/**
+ * An agency's own metrics — Settings → Metrics — usable on every board of its
+ * clients: a platform stat under the agency's own name (`rename`), or a
+ * formula over built-in stats (`formula`). `board/registry.ts` turns these rows
+ * into Board stats; widgets name them as `custom:<id>`.
+ *
+ * A formula is stored as tokens (`metrics/formula.ts`), never as text to
+ * evaluate. Archived metrics leave the picker but keep working on the widgets
+ * and share links that already use them; only an unused metric is deleted.
+ */
+export const customMetrics = pgTable(
+  "custom_metrics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    agencyId: uuid("agency_id")
+      .notNull()
+      .references(() => agencies.id, { onDelete: "cascade" }),
+    /** `rename` | `formula`. Fixed once created: Duplicate makes the other kind. */
+    kind: text("kind").notNull(),
+    /** `meta` | `google` | `tiktok`, or `any` for a formula every platform can answer. */
+    platform: text("platform").notNull(),
+    /** A rename's built-in stat id. */
+    baseMetric: text("base_metric"),
+    /** A formula's tokens. */
+    expression: jsonb("expression"),
+    label: text("label").notNull(),
+    description: text("description"),
+    /** A formula's display format and good/bad direction; a rename uses its base's. */
+    format: text("format"),
+    polarity: text("polarity"),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdBy: text("created_by"),
+    updatedBy: text("updated_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("custom_metrics_agency_idx").on(t.agencyId)],
+);
+
+export type CustomMetricRow = typeof customMetrics.$inferSelect;
+
 export const auditLog = pgTable(
   "audit_log",
   {
@@ -1994,7 +2039,7 @@ export const shareLinks = pgTable(
      */
     view: jsonb("view").$type<
       | { sections: string[]; kpis: string[] }
-      | { kind: "board"; schemaVersion: number; widgets: unknown[] }
+      | { kind: "board"; schemaVersion: number; widgets: unknown[]; metrics?: unknown[] }
     >(),
 
     /** scrypt hash, same scheme as user passwords. Null = no gate. */

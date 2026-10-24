@@ -606,6 +606,25 @@ CREATE TABLE agency_email_domains (
   CONSTRAINT agency_email_domains_domain_key UNIQUE (domain)
 );
 
+CREATE TABLE custom_metrics (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  agency_id uuid NOT NULL,
+  kind text NOT NULL,
+  platform text NOT NULL,
+  base_metric text,
+  expression jsonb,
+  label text NOT NULL,
+  description text,
+  format text,
+  polarity text,
+  archived_at timestamptz,
+  created_by text,
+  updated_by text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX custom_metrics_agency_idx ON custom_metrics (agency_id);
+
 CREATE TABLE agency_settings (
   agency_id uuid PRIMARY KEY,
   agency_name text,

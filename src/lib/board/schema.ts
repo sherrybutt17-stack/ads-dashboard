@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { AD_PLATFORMS } from "@/lib/platforms";
 import {
+  BUILTIN_STATS,
   CARDS,
   CARD_GROUPINGS,
   CATEGORY_FORMS,
   DIMENSION_IDS,
   MAX_WIDGETS,
-  METRIC_IDS,
   SERIES_FORMS,
   TABLE_COLUMNS,
   TABLE_ROWS,
@@ -14,6 +14,11 @@ import {
   TITLE_MAX,
   TOP_N,
   checkWidget,
+  isCustomMetricId,
+  isStatId,
+  type StatDef,
+  type StatId,
+  type StatLookup,
 } from "./catalog";
 import { BOARD_COLS, normalizeLayout } from "./grid";
 import { widgetQueryOf } from "./query";
@@ -34,8 +39,35 @@ export { MAX_WIDGETS };
 export const MAX_ROW = 400;
 
 const Platform = z.enum(AD_PLATFORMS);
-const Metric = z.enum(METRIC_IDS);
+/** A built-in stat, or an agency metric's `custom:<uuid>`. */
+const Metric = z.custom<StatId>((v) => isStatId(v), { message: "Not a stat this board knows." });
 const Dimension = z.enum(DIMENSION_IDS);
+
+/**
+ * How the schema checks a widget naming an agency metric: by shape alone.
+ *
+ * The schema has no agency to resolve `custom:` ids against, so it lets them
+ * through as if they could be anything — and the real check runs where the
+ * agency is known: the board PUT refuses an id its agency does not have, and
+ * the aggregator's `gate` explains a widget whose metric was since deleted.
+ * Reads stay lenient on purpose: a deleted metric must not silently drop the
+ * widget from the board, it must say what happened.
+ */
+const ANY_AGENCY_METRIC: Omit<StatDef, "id"> = {
+  label: "Custom metric",
+  format: "decimal",
+  group: "Custom metrics",
+  statKey: "",
+  platforms: AD_PLATFORMS,
+  additive: true,
+  series: AD_PLATFORMS,
+  dims: Object.fromEntries(AD_PLATFORMS.map((p) => [p, DIMENSION_IDS])),
+  needs: ["results"],
+};
+
+const SHAPE_ONLY: StatLookup = {
+  get: (id) => (isCustomMetricId(id) ? { ...ANY_AGENCY_METRIC, id } : BUILTIN_STATS.get(id)),
+};
 
 /**
  * A pinned result type — a key from `metrics/results.ts` (an action type such as
@@ -114,7 +146,7 @@ export const WidgetQuerySchema = z
     z.object(logoShape).strict(),
   ])
   .superRefine((q, ctx) => {
-    const verdict = checkWidget(q as WidgetQuery);
+    const verdict = checkWidget(q as WidgetQuery, SHAPE_ONLY);
     if (!verdict.ok) ctx.addIssue({ code: "custom", message: verdict.reason });
   });
 
@@ -131,7 +163,7 @@ export const BoardWidgetSchema = z
     z.object({ ...logoShape, ...boxShape }).strict(),
   ])
   .superRefine((w, ctx) => {
-    const verdict = checkWidget(widgetQueryOf(w as BoardWidget));
+    const verdict = checkWidget(widgetQueryOf(w as BoardWidget), SHAPE_ONLY);
     if (!verdict.ok) ctx.addIssue({ code: "custom", message: verdict.reason });
   });
 

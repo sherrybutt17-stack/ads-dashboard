@@ -7,12 +7,18 @@ import { activeAdAccounts } from "@/lib/meta/accounts";
 import { activeTiktokAccountsForDisplay } from "@/lib/tiktok/accounts";
 import type { BoardConnections } from "./aggregate";
 import type { StarterContext } from "./catalog";
+import { listCustomMetrics } from "./custom-metrics";
+import { buildRegistry, type CustomMetric, type Registry } from "./registry";
 
 export interface BoardContext {
   connections: BoardConnections;
   starter: StarterContext;
   branding: ClientBranding;
   brandName: string;
+  /** The agency's own metrics (Settings → Metrics), archived ones included. */
+  metrics: CustomMetric[];
+  /** The stats this client's board can name: the built-ins and `metrics`. */
+  registry: Registry;
 }
 
 /**
@@ -27,11 +33,13 @@ export interface BoardContext {
  * account list.
  */
 export async function loadBoardContext(client: Client): Promise<BoardContext> {
-  const [meta, google, tiktok, branding] = await Promise.all([
+  const [meta, google, tiktok, branding, metrics] = await Promise.all([
     activeAdAccounts(client.id).catch(() => []),
     activeGoogleAccountsForDisplay(client.id),
     activeTiktokAccountsForDisplay(client.id),
     getClientBranding(client.id),
+    // Never throws: a missing table or a failed read means "no custom metrics".
+    listCustomMetrics(client.agencyId),
   ]);
   const connections: BoardConnections = {
     meta: meta.length > 0,
@@ -52,5 +60,7 @@ export async function loadBoardContext(client: Client): Promise<BoardContext> {
     },
     branding,
     brandName,
+    metrics,
+    registry: buildRegistry(metrics),
   };
 }

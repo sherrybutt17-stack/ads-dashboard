@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { METRICS, metricLabel, type MetricId } from "@/lib/board/catalog";
+import type { StatId } from "@/lib/board/catalog";
 import { formatMetricValue } from "@/lib/board/format";
 import type { TableRow } from "@/lib/board/types";
 import type { AdPlatform } from "@/lib/platforms";
+import { useStats } from "./StatsContext";
 
 /**
  * A board table: one row per campaign, ad, audience segment or day, and the
@@ -25,7 +26,7 @@ export function BoardTable({
   rowHeading,
   maxRows,
 }: {
-  columns: MetricId[];
+  columns: StatId[];
   rows: TableRow[];
   totals: Array<number | null>;
   more: number;
@@ -38,6 +39,7 @@ export function BoardTable({
    */
   maxRows?: number;
 }) {
+  const reg = useStats();
   const [sort, setSort] = useState<{ index: number; desc: boolean } | null>(null);
   const shown = maxRows !== undefined && rows.length > maxRows ? rows.slice(0, maxRows) : rows;
   const hidden = more + (rows.length - shown.length);
@@ -53,7 +55,7 @@ export function BoardTable({
       })
     : shown;
 
-  const fmt = (m: MetricId, v: number | null) => formatMetricValue(METRICS[m].format, v, currency);
+  const fmt = (m: StatId, v: number | null) => formatMetricValue(reg.format(m), v, currency);
 
   return (
     // Its own height, scrolling once it outgrows the card — not `flex-1`, which
@@ -84,9 +86,9 @@ export function BoardTable({
                     onClick={() =>
                       setSort((s) => (s?.index === i ? { index: i, desc: !s.desc } : { index: i, desc: true }))
                     }
-                    title={`Sort by ${metricLabel(m, platform)}`}
+                    title={`Sort by ${reg.label(m, platform)}`}
                   >
-                    {metricLabel(m, platform)}
+                    {reg.label(m, platform)}
                     {active ? (sort!.desc ? " ↓" : " ↑") : ""}
                   </button>
                 </th>

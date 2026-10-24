@@ -7,10 +7,12 @@ import { rangeLabel, windowFromKeys } from "@/lib/dates";
 import { comparisonBasis } from "@/lib/dashboard/range";
 import { ROWS_PER_PAGE, boxHeightPx, cellRect, paginate } from "@/lib/board/grid";
 import { leadPlatforms } from "@/lib/board/leads";
+import { buildRegistry, type CustomMetric } from "@/lib/board/registry";
 import type { BoardData, BoardWidget as Widget, WidgetData } from "@/lib/board/types";
 import { leadFilterDescription } from "@/lib/metrics/lead-filter-copy";
 import { PLATFORM_LABEL, type AdPlatform } from "@/lib/platforms";
 import { BoardWidget } from "./BoardWidget";
+import { StatsProvider } from "./StatsContext";
 
 /** US Letter, landscape, in CSS pixels at 96 per inch — the sheet both the renderer and Cmd-P lay out. */
 export const PAGE_W = 1056;
@@ -52,6 +54,7 @@ export async function BoardDocument({
   rangeStart,
   rangeEnd,
   toolbar,
+  metrics,
 }: {
   client: Client;
   branding: ClientBranding;
@@ -64,6 +67,8 @@ export async function BoardDocument({
   rangeEnd: string;
   /** Rendered above the pages and never printed — a print button, an expiry note. */
   toolbar?: ReactNode;
+  /** The agency metrics the numbers were computed with (`loadBoardDocument`). */
+  metrics: readonly CustomMetric[];
 }) {
   // Skipped when the mark is off: reading a logo to discard it is work for nothing.
   const agencyLogo =
@@ -77,7 +82,7 @@ export async function BoardDocument({
   const period = rangeLabel(rangeStart, rangeEnd);
   const showPlatform = new Set(widgets.flatMap((w) => ("platform" in w ? [w.platform] : []))).size > 1;
   const leadFilter = { mode: client.paidLeadFilter, tag: client.paidLeadTag };
-  const leads = leadPlatforms(widgets).map((p) => ({
+  const leads = leadPlatforms(widgets, buildRegistry(metrics)).map((p) => ({
     platform: p,
     text: leadFilterDescription(p, leadFilter),
   }));
@@ -92,6 +97,7 @@ export async function BoardDocument({
       {/* This document's sheets are landscape; the report's stay portrait. */}
       <style>{"@page { size: 11in 8.5in; margin: 0; }"}</style>
       {toolbar}
+      <StatsProvider metrics={[...metrics]}>
       <div className="overflow-x-auto">
         <main
           className="board-doc-pages mx-auto flex w-full flex-col items-center gap-6 px-4 py-6"
@@ -169,6 +175,7 @@ export async function BoardDocument({
           )}
         </main>
       </div>
+      </StatsProvider>
     </div>
   );
 }

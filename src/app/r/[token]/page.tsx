@@ -106,7 +106,7 @@ export default async function SharedReportPage({
       client,
       windowFromKeys(link.rangeStart, link.rangeEnd, client.timezone),
       "document",
-      { snapshot: board.widgets },
+      { snapshot: board.widgets, metrics: board.metrics },
     );
     after(async () => {
       await recordShareView(link.id);
@@ -119,6 +119,7 @@ export default async function SharedReportPage({
         logo={doc.logo}
         widgets={doc.widgets}
         data={doc.data}
+        metrics={doc.metrics}
         rangeStart={link.rangeStart}
         rangeEnd={link.rangeEnd}
         toolbar={

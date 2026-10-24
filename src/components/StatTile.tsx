@@ -8,7 +8,9 @@ import {
   formatNumber,
   formatMultiple,
   DASH,
+  type Polarity,
 } from "@/lib/metrics/compute";
+import type { MetricDefinition } from "@/lib/metrics/definitions";
 import { Icon } from "./Icon";
 import { MetricInfo } from "./MetricInfo";
 
@@ -48,6 +50,13 @@ export interface StatTileProps {
   label: string;
   value: string;
   metricKey: string;
+  /**
+   * Which direction is good, for a stat the shared map does not know — an
+   * agency's own metric. Otherwise looked up by `metricKey`.
+   */
+  polarity?: Polarity;
+  /** Its definition, likewise (`MetricInfo`). */
+  definition?: MetricDefinition | null;
   change: number | null;
   spark?: number[];
   footnote?: string;
@@ -132,6 +141,8 @@ export function StatTile({
   label,
   value,
   metricKey,
+  polarity,
+  definition,
   change,
   spark,
   footnote,
@@ -163,7 +174,7 @@ export function StatTile({
    */
   const unavailable = value === DASH || numeric === null;
 
-  const sentiment = changeSentiment(metricKey, change);
+  const sentiment = changeSentiment(metricKey, change, polarity);
   const color =
     sentiment === "good"
       ? "var(--delta-good)"
@@ -207,7 +218,7 @@ export function StatTile({
         {label}
         {/* The denominator, one tap away. BOOK/SHOW/CLOSE % share a row and
             divide by three different things; nothing else on the tile says so. */}
-        <MetricInfo metricKey={metricKey} label={label} />
+        <MetricInfo metricKey={metricKey} label={label} definition={definition} />
       </span>
 
       {/* Value owns its own line — never truncated by the sparkline. */}
@@ -287,7 +298,8 @@ function Sparkline({ data, idKey }: { data: number[]; idKey: string }) {
   // Not a series token: `--series-1` is spend's identity in the trend chart, and
   // reusing it here would say "this tile is spend" on the leads tile.
   const stroke = "var(--text-secondary)";
-  const gid = `spark-${idKey}`;
+  // An agency metric's key is `custom:<uuid>`; a colon in `url(#…)` breaks the reference.
+  const gid = `spark-${idKey.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const [lastX, lastY] = points[points.length - 1];
 
   return (

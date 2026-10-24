@@ -18,6 +18,7 @@ import { getMetaCampaignOptions } from "@/lib/metrics/board-queries";
 import { AD_PLATFORMS } from "@/lib/platforms";
 import { ClientSideNav } from "@/components/ClientSideNav";
 import { BoardEditor } from "@/components/board/BoardEditor";
+import { StatsProvider } from "@/components/board/StatsContext";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +68,7 @@ export default async function EditBoardPage({
           : null,
         brandName: context.brandName,
       },
+      registry: context.registry,
     },
     board.widgets,
   );
@@ -100,6 +102,7 @@ export default async function EditBoardPage({
       />
 
       <div className="app-frame flex min-w-0 flex-1 flex-col">
+        <StatsProvider metrics={context.metrics}>
         <BoardEditor
           key={board.updatedAt?.toISOString() ?? "starter"}
           slug={slug}
@@ -115,6 +118,7 @@ export default async function EditBoardPage({
           basis={comparisonBasis(window, client.timezone)}
           viewHref={viewHref}
         />
+        </StatsProvider>
       </div>
     </div>
   );

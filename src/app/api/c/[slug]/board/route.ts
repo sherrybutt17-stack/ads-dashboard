@@ -3,7 +3,9 @@ import { getSessionUser, clientAccessGuard } from "@/lib/auth";
 import { getClientForSession } from "@/lib/clients";
 import { record, requestContext } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
+import { checkWidget } from "@/lib/board/catalog";
 import { loadBoardContext } from "@/lib/board/context";
+import { widgetQueryOf } from "@/lib/board/query";
 import { ClientBoardWriteSchema, StaffBoardWriteSchema } from "@/lib/board/schema";
 import { getBoard, resetBoard, saveBoard, type StoredBoard } from "@/lib/board/store";
 import { authorizeBoardWrite } from "@/lib/board/write";
@@ -108,6 +110,20 @@ export async function PUT(
   // Read off the staff shape only: a client payload cannot carry it at all.
   const locked = verdict.staff ? (data as { locked?: boolean }).locked : undefined;
   const widgets = data.widgets as BoardWidget[] | undefined;
+  /*
+   * Agency metrics are checked against THIS client's agency: the schema lets
+   * any `custom:` id through on shape, and an id this agency does not have —
+   * deleted, or another agency's — is refused here, with the widget's reason.
+   */
+  for (const w of widgets ?? []) {
+    const check = checkWidget(widgetQueryOf(w), context.registry);
+    if (!check.ok) {
+      return NextResponse.json(
+        { error: `This board could not be saved: ${check.reason}`, details: { widget: w.id } },
+        { status: 400 },
+      );
+    }
+  }
 
   let outcome;
   try {

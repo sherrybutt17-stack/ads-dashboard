@@ -549,14 +549,18 @@ export const METRIC_POLARITY: Record<string, Polarity> = {
  */
 export const SENTIMENT_DEAD_BAND = 0.05;
 
-/** `good` | `bad` | `neutral` for a change, honouring polarity. */
+/**
+ * `good` | `bad` | `neutral` for a change, honouring polarity — the metric's
+ * own, or `given` for one the map does not know (an agency's own metric).
+ */
 export function changeSentiment(
   metric: string,
   change: number | null,
+  given?: Polarity,
 ): "good" | "bad" | "neutral" {
   if (change === null || !Number.isFinite(change)) return "neutral";
   if (Math.abs(change) < SENTIMENT_DEAD_BAND) return "neutral";
-  const polarity = METRIC_POLARITY[metric] ?? "neutral";
+  const polarity = given ?? METRIC_POLARITY[metric] ?? "neutral";
   if (polarity === "neutral") return "neutral";
   const improving = polarity === "higher-better" ? change > 0 : change < 0;
   return improving ? "good" : "bad";

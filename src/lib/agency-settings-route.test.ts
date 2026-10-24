@@ -127,6 +127,57 @@ describe("agency email domain — the same contract", () => {
   });
 });
 
+describe("agency metrics — the same contract", () => {
+  /*
+   * An agency's metrics are drawn on every board of its clients. Letting one
+   * agency change another's — or read them — would put its formulas on
+   * someone else's reports, so these routes are held to the same rule: the
+   * tenant appears nowhere but the session.
+   */
+  const ROUTES = [
+    ["metrics route", source("src", "app", "api", "agency", "metrics", "route.ts")],
+    ["metric route", source("src", "app", "api", "agency", "metrics", "[id]", "route.ts")],
+  ] as const;
+
+  for (const [label, src] of ROUTES) {
+    it(`${label} takes the agency from the session, and refuses a session without one`, () => {
+      expect(src).toContain("isAgencyOperator");
+      expect(src).toContain("const agencyId = session!.agencyId;");
+      expect(src).toMatch(/if \(!agencyId\) \{\s*return NextResponse\.json\([^)]*\{ status: 409 \}/);
+    });
+
+    it(`${label} never reads an agency id from the request`, () => {
+      expect(src).not.toMatch(/params[^\n]*agencyId/);
+      expect(src).not.toMatch(/body[^\n]*agencyId/);
+      expect(src).not.toMatch(/agencyId:\s*z\./);
+      expect(src).not.toMatch(/searchParams/);
+    });
+
+    it(`${label} stamps any audit entry with the agency`, () => {
+      const entries = src.match(/audit\.record\(\{/g) ?? [];
+      expect(src.match(/agencyId,/g)?.length ?? 0).toBeGreaterThanOrEqual(entries.length);
+    });
+  }
+
+  it("rate-limits every write by agency", () => {
+    const [, list] = ROUTES[0];
+    const [, one] = ROUTES[1];
+    expect(list).toMatch(/rateLimit\(`agency-metrics:\$\{agencyId\}`/);
+    expect(one.match(/rateLimit\(`agency-metrics:\$\{agencyId\}`/g)?.length).toBe(2);
+  });
+
+  it("🔴 looks a metric up inside the session's agency only", () => {
+    const [, one] = ROUTES[1];
+    expect(one).toMatch(/getCustomMetric\(agencyId, id\)/);
+    expect(one).not.toMatch(/getCustomMetric\([^a]/);
+  });
+
+  it("🔴 archives a metric a board still shows instead of deleting it", () => {
+    const [, one] = ROUTES[1];
+    expect(one).toMatch(/customMetricUsage\(agencyId\)[\s\S]*?status: 409[\s\S]*?deleteCustomMetric\(agencyId, id\)/);
+  });
+});
+
 describe("agency settings — the form", () => {
   it("🔴 seeds the name field from the override, not the resolved name", () => {
     /*

@@ -188,8 +188,10 @@ export async function POST(
    * client's name and figures.
    */
   let board: BoardWidget[] | null = null;
+  // The agency's metrics, frozen into the link with the widgets that name them.
+  let context: Awaited<ReturnType<typeof loadBoardContext>> | null = null;
   if (isBoard) {
-    const context = await loadBoardContext(client);
+    context = await loadBoardContext(client);
     board = (await getBoard(client.id, context.starter)).widgets;
     if (board.length === 0) {
       return NextResponse.json({ error: "This board is empty. Add a widget before sharing it." }, { status: 400 });
@@ -211,6 +213,7 @@ export async function POST(
       createdBy: session?.userId ?? null,
       view,
       board,
+      boardMetrics: context?.metrics,
     }));
   } catch (err) {
     /*
@@ -255,7 +258,7 @@ export async function POST(
    * the response: the link is ready the moment it is shown, and by the time
    * someone opens it the figure is usually there.
    */
-  if (board && needsReach(board)) {
+  if (board && needsReach(board, context?.registry)) {
     const window = windowFromKeys(row.rangeStart, row.rangeEnd, client.timezone);
     after(async () => {
       await ensurePeriodReach(client, window);

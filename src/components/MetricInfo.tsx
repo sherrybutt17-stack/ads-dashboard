@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { definitionFor } from "@/lib/metrics/definitions";
+import { definitionFor, type MetricDefinition } from "@/lib/metrics/definitions";
 import { useDismissOnEscape, Portal } from "./Modal";
 import { Icon } from "./Icon";
 
@@ -23,10 +23,16 @@ const GUTTER = 12;
 export function MetricInfo({
   metricKey,
   label,
+  definition,
 }: {
   metricKey: string;
   /** The metric's display name, for the popover heading and the button's label. */
   label: string;
+  /**
+   * The definition itself, for a stat the shared definitions do not know —
+   * an agency's own metric (`registry.ts`). Otherwise looked up by `metricKey`.
+   */
+  definition?: MetricDefinition | null;
 }) {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const open = at !== null;
@@ -57,11 +63,12 @@ export function MetricInfo({
     setAt({ top: r.bottom + 6, left });
   }
 
-  const def = definitionFor(metricKey);
+  const def = definition === undefined ? definitionFor(metricKey) : definition;
   // No definition, no marker. A "?" that explains nothing is worse than none.
   if (!def) return null;
 
-  const panelId = `def-${metricKey}`;
+  // An agency metric's key is `custom:<uuid>`: kept to characters an id can always carry.
+  const panelId = `def-${metricKey.replace(/[^A-Za-z0-9_-]/g, "-")}`;
 
   return (
     <span className="relative inline-flex">

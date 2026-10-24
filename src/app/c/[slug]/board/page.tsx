@@ -29,6 +29,7 @@ import { ShareReport } from "@/components/ShareReport";
 import { DataState, PipeNotice } from "@/components/DataState";
 import { Icon } from "@/components/Icon";
 import { BoardGrid } from "@/components/board/BoardGrid";
+import { StatsProvider } from "@/components/board/StatsContext";
 
 export const dynamic = "force-dynamic";
 
@@ -90,6 +91,7 @@ export default async function ClientBoardPage({
           : null,
         brandName: context.brandName,
       },
+      registry: context.registry,
     },
     board.widgets,
   );
@@ -104,7 +106,7 @@ export default async function ClientBoardPage({
   // The lock binds the client only; staff set it, so staff can always edit.
   const canEdit = staff || !board.locked;
   const editHref = withRange(`/c/${slug}/board/edit`, kept);
-  const leads = leadPlatforms(board.widgets);
+  const leads = leadPlatforms(board.widgets, context.registry);
   const leadFilter = { mode: client.paidLeadFilter, tag: client.paidLeadTag };
 
   return (
@@ -280,7 +282,9 @@ export default async function ClientBoardPage({
               )}
             </div>
           ) : (
-            <BoardGrid widgets={board.widgets} data={data} slug={slug} range={range} basis={basis} />
+            <StatsProvider metrics={context.metrics}>
+              <BoardGrid widgets={board.widgets} data={data} slug={slug} range={range} basis={basis} />
+            </StatsProvider>
           )}
         </main>
       </div>

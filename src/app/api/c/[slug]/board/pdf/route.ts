@@ -87,7 +87,7 @@ export async function GET(
 
   const context = await loadBoardContext(client);
   const board = await getBoard(client.id, context.starter);
-  if (needsReach(board.widgets)) {
+  if (needsReach(board.widgets, context.registry)) {
     // Bounded by its own timeout; a slow Meta leaves the tile "not available"
     // in the PDF rather than holding the download.
     await ensurePeriodReach(client, window);

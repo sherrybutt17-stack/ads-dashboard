@@ -47,7 +47,8 @@ describe("board PDF route", () => {
   });
 
   it("asks Meta for reach before the renderer arrives, never after", () => {
-    inOrder(PDF, ["needsReach(board.widgets)", "ensurePeriodReach(client, window)", "mintRenderToken("]);
+    // With the agency's metrics, so a renamed reach is asked for too.
+    inOrder(PDF, ["needsReach(board.widgets, context.registry)", "ensurePeriodReach(client, window)", "mintRenderToken("]);
   });
 
   it("🔴 signs the board into the token, and renders landscape", () => {
@@ -76,8 +77,15 @@ describe("a shared board", () => {
     inOrder(SHARED, ["const board = boardForLink(link);", "const view = viewForLink(link);"]);
   });
 
-  it("🔴 renders the frozen snapshot, in document mode", () => {
-    expect(SHARED).toMatch(/loadBoardDocument\([\s\S]*?"document",\s*\{ snapshot: board\.widgets \}/);
+  it("🔴 renders the frozen snapshot, in document mode, with the metric definitions frozen with it", () => {
+    expect(SHARED).toMatch(
+      /loadBoardDocument\([\s\S]*?"document",\s*\{ snapshot: board\.widgets, metrics: board\.metrics \}/,
+    );
+  });
+
+  it("🔴 freezes the agency's metric definitions with a board link, never live ones", () => {
+    expect(SHARE_ROUTE).toContain("boardMetrics: context?.metrics");
+    expect(SHARED).not.toMatch(/listCustomMetrics|loadBoardContext/);
   });
 
   it("🔴 freezes the STORED board, never widgets from the request", () => {

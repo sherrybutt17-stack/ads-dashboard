@@ -182,3 +182,30 @@ describe("creative cards", () => {
     expect(r.dropped).toBe(1);
   });
 });
+
+describe("agency metrics", () => {
+  const ID = "custom:00000000-0000-4000-8000-000000000001";
+
+  it("are read by shape alone: the agency's registry decides later", () => {
+    // A pie of a renamed additive stat must survive the read, so the schema
+    // cannot refuse what it cannot resolve.
+    const pie = { id: "w-pie", kind: "category", platform: "meta", metric: ID, dimension: "campaign", form: "pie", topN: 6, x: 0, y: 0, w: 4, h: 7 };
+    expect(BoardWidgetSchema.safeParse(pie).success).toBe(true);
+    expect(WidgetQuerySchema.safeParse({ kind: "kpi", platform: "google", metric: ID }).success).toBe(true);
+    expect(
+      WidgetQuerySchema.safeParse({ kind: "table", platform: "tiktok", dimension: "campaign", metrics: ["spend", ID], sort: ID, topN: 10 }).success,
+    ).toBe(true);
+  });
+
+  it("🔴 take only a uuid after custom:, so nothing else reaches a query or a URL", () => {
+    for (const metric of ["custom:", "custom:abc", "custom:00000000-0000-4000-8000-000000000001;drop", "CUSTOM:00000000-0000-4000-8000-000000000001"]) {
+      expect(WidgetQuerySchema.safeParse({ kind: "kpi", platform: "meta", metric }).success, metric).toBe(false);
+    }
+  });
+
+  it("still refuse a structural mistake beside them", () => {
+    expect(
+      WidgetQuerySchema.safeParse({ kind: "table", platform: "meta", dimension: "ad", metrics: [ID, ID], sort: ID, topN: 10 }).success,
+    ).toBe(false);
+  });
+});

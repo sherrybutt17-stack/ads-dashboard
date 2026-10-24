@@ -63,6 +63,16 @@ describe("board route", () => {
     expect(put).toMatch(/const locked = verdict\.staff \?/);
   });
 
+  it("🔴 checks an agency metric against the client's own agency before saving", () => {
+    // The schema lets any `custom:` id through on shape; this is where another
+    // agency's id — or a deleted one — is refused.
+    inOrder(handler(BOARD, "PUT"), [
+      "ClientBoardWriteSchema.safeParse(body)",
+      "checkWidget(widgetQueryOf(w), context.registry)",
+      "saveBoard(",
+    ]);
+  });
+
   it("answers a conflicting save with 409 and the board as it now is", () => {
     expect(handler(BOARD, "PUT")).toMatch(/board: serialise\(outcome\.current\)[\s\S]*status: 409/);
   });
@@ -98,6 +108,10 @@ describe("board data route", () => {
   it("gives reach its own, smaller limit, and reads the cache past it", () => {
     expect(get).toMatch(/rateLimit\(`board-reach:\$\{client\.id\}`, REACH_LIMIT/);
     expect(get).toMatch(/mode = "document"/);
+  });
+
+  it("🔴 resolves agency metrics from the client's agency, server-side, before loading", () => {
+    inOrder(get, ["loadBoardContext(client)", "context.registry.base(query.metric)", "registry: context.registry"]);
   });
 
   it("only reads: there is no write handler", () => {

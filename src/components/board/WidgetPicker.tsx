@@ -16,21 +16,20 @@ import {
   TOP_N,
   VISUALS,
   WIDGET_KINDS,
-  canBeCircle,
   checkWidget,
   defaultTitle,
   dimensionLabel,
   metricDims,
-  metricLabel,
-  metricSeries,
-  metricStatKey,
   metricSupports,
+  statDims,
+  statSeries,
+  statSupports,
   type CardGrouping,
   type CategoryForm,
   type DimensionId,
-  type MetricId,
   type SeriesForm,
   type Size,
+  type StatId,
   type TableDimension,
 } from "@/lib/board/catalog";
 import { boxHeightPx } from "@/lib/board/grid";
@@ -38,8 +37,9 @@ import { encodeWidgetQuery, widgetQueryKey } from "@/lib/board/query";
 import type { BoardWidget, WidgetData, WidgetQuery } from "@/lib/board/types";
 import { PLATFORM_LABEL, type AdPlatform } from "@/lib/platforms";
 import { resultTypeChoices } from "@/lib/metrics/results";
-import { METRIC_POLARITY } from "@/lib/metrics/compute";
+import type { Registry } from "@/lib/board/registry";
 import { BoardWidget as WidgetCard } from "./BoardWidget";
+import { useStats } from "./StatsContext";
 
 export interface PickerResult {
   query: WidgetQuery;
@@ -54,13 +54,13 @@ export interface PickerResult {
 interface Draft {
   visual: string;
   platform: AdPlatform;
-  metric: MetricId;
+  metric: StatId;
   dimension: DimensionId;
   topN: number;
   compare: boolean;
   tableDimension: TableDimension;
-  columns: MetricId[];
-  sort: MetricId;
+  columns: StatId[];
+  sort: StatId;
   rows: number;
   text: string;
   textSize: "heading" | "body";
@@ -70,8 +70,8 @@ interface Draft {
   /** Creative cards: one per ad or per creative. */
   cardBy: CardGrouping;
   /** The stats on each card, in order. */
-  cardStats: MetricId[];
-  cardSort: MetricId;
+  cardStats: StatId[];
+  cardSort: StatId;
   cards: number;
   cardRankings: boolean;
   /** Meta campaign ids; empty = every campaign. */
@@ -108,7 +108,7 @@ const BLANK: Omit<Draft, "platform"> = {
 };
 
 /** The stats a fresh card set falls back to when the chosen ones no longer fit. */
-const DEFAULT_CARD_STATS: readonly MetricId[] = ["impressions", "clicks", "ctr_all", "spend"];
+const DEFAULT_CARD_STATS: readonly StatId[] = ["impressions", "clicks", "ctr_all", "spend"];
 
 const LOADING: WidgetData = { kind: "pending", reason: "load" };
 
@@ -220,29 +220,32 @@ function queryOf(d: Draft): WidgetQuery {
 const isCircle = (visual: string) => visual === "pie" || visual === "donut";
 
 /** Why a stat cannot fill this visual on this platform, or null when it can. */
-function metricBlock(m: MetricId, d: Draft): string | null {
+function metricBlock(reg: Registry, m: StatId, d: Draft): string | null {
   const kind = VISUALS.find((x) => x.id === d.visual)?.kind;
-  if (!metricSupports(m, d.platform)) return `not on ${PLATFORM_LABEL[d.platform]}`;
-  if (kind === "series" && !metricSeries(m, d.platform)) return "single value only";
+  const def = reg.get(m);
+  if (!def) return "deleted";
+  if (!statSupports(def, d.platform)) return `not on ${PLATFORM_LABEL[d.platform]}`;
+  if (kind === "series" && !statSeries(def, d.platform)) return "single value only";
   if (kind === "category") {
-    if (metricDims(m, d.platform).length === 0) return "cannot be split";
-    if (isCircle(d.visual) && !canBeCircle(m)) return "not parts of a whole";
+    if (statDims(def, d.platform).length === 0) return "cannot be split";
+    if (isCircle(d.visual) && !def.additive) return "not parts of a whole";
   }
   return null;
 }
 
-function columnFits(m: MetricId, d: Draft): boolean {
-  if (!metricSupports(m, d.platform)) return false;
+function columnFits(reg: Registry, m: StatId, d: Draft): boolean {
+  const def = reg.get(m);
+  if (!def || !statSupports(def, d.platform)) return false;
   return d.tableDimension === "date"
-    ? metricSeries(m, d.platform)
-    : metricDims(m, d.platform).includes(d.tableDimension);
+    ? statSeries(def, d.platform)
+    : statDims(def, d.platform).includes(d.tableDimension);
 }
 
 /** Whether a stat can go on a creative card: reported per ad (or creative), and not a CRM figure. */
-function cardStatFits(m: MetricId, by: CardGrouping): boolean {
-  const def = METRICS[m];
-  if (def.needs.includes("crm") || def.needs.includes("revenue")) return false;
-  return metricSupports(m, "meta") && metricDims(m, "meta").includes(by);
+function cardStatFits(reg: Registry, m: StatId, by: CardGrouping): boolean {
+  const def = reg.get(m);
+  if (!def || def.needs.includes("crm") || def.needs.includes("revenue")) return false;
+  return statSupports(def, "meta") && statDims(def, "meta").includes(by);
 }
 
 /** Row choices for a table: every split some stat on this platform supports, and days. */
@@ -259,16 +262,17 @@ function tableDimensions(platform: AdPlatform): TableDimension[] {
  * picks the first one that can. A form that silently reset everything on each
  * click would make the Build tab feel like it was fighting back.
  */
-function fixUp(d: Draft): Draft {
+function fixUp(reg: Registry, d: Draft): Draft {
   const kind = VISUALS.find((x) => x.id === d.visual)?.kind ?? "kpi";
   const next = { ...d };
   if (kind === "kpi" || kind === "series" || kind === "category") {
-    if (metricBlock(next.metric, next)) {
-      next.metric = METRIC_IDS.find((m) => !metricBlock(m, next)) ?? next.metric;
+    if (metricBlock(reg, next.metric, next)) {
+      next.metric = METRIC_IDS.find((m) => !metricBlock(reg, m, next)) ?? next.metric;
     }
   }
   if (kind === "category") {
-    const dims = metricDims(next.metric, next.platform);
+    const def = reg.get(next.metric);
+    const dims = def ? statDims(def, next.platform) : [];
     if (!dims.includes(next.dimension)) next.dimension = dims[0] ?? "campaign";
     const max = isCircle(next.visual) ? TOP_N.circleMax : TOP_N.max;
     next.topN = Math.min(max, Math.max(TOP_N.min, next.topN));
@@ -276,9 +280,9 @@ function fixUp(d: Draft): Draft {
   if (kind === "table") {
     const dims = tableDimensions(next.platform);
     if (!dims.includes(next.tableDimension)) next.tableDimension = dims[0];
-    let cols = next.columns.filter((m) => columnFits(m, next));
+    let cols = next.columns.filter((m) => columnFits(reg, m, next));
     if (cols.length === 0) {
-      cols = (["spend", "impressions", "clicks", "ctr", "leads"] as MetricId[]).filter((m) => columnFits(m, next));
+      cols = (["spend", "impressions", "clicks", "ctr", "leads"] as StatId[]).filter((m) => columnFits(reg, m, next));
     }
     next.columns = cols.slice(0, TABLE_COLUMNS.max);
     if (!next.columns.includes(next.sort)) next.sort = next.columns[0] ?? "spend";
@@ -286,30 +290,50 @@ function fixUp(d: Draft): Draft {
   }
   if (kind === "creatives") {
     next.platform = "meta";
-    let stats = [...new Set(next.cardStats)].filter((m) => cardStatFits(m, next.cardBy));
-    if (stats.length === 0) stats = DEFAULT_CARD_STATS.filter((m) => cardStatFits(m, next.cardBy));
+    let stats = [...new Set(next.cardStats)].filter((m) => cardStatFits(reg, m, next.cardBy));
+    if (stats.length === 0) stats = DEFAULT_CARD_STATS.filter((m) => cardStatFits(reg, m, next.cardBy));
     next.cardStats = stats.slice(0, CARDS.statsMax);
-    if (!cardStatFits(next.cardSort, next.cardBy)) next.cardSort = next.cardStats[0] ?? "spend";
+    if (!cardStatFits(reg, next.cardSort, next.cardBy)) next.cardSort = next.cardStats[0] ?? "spend";
     next.cards = Math.min(CARDS.max, Math.max(CARDS.min, next.cards));
     next.campaigns = [...new Set(next.campaigns)].slice(0, CARDS.campaignsMax);
   }
   // A pinned result type only on a results widget it can apply to.
-  if (!pinsResultType(next) || !resultTypeChoices(next.platform).some((c) => c.key === next.resultType)) {
+  if (!pinsResultType(reg, next) || !resultTypeChoices(next.platform).some((c) => c.key === next.resultType)) {
     next.resultType = "";
   }
   return next;
 }
 
 /** Whether this draft counts results of one type — so a type can be pinned. */
-function pinsResultType(d: Draft): boolean {
+function pinsResultType(reg: Registry, d: Draft): boolean {
   const kind = VISUALS.find((x) => x.id === d.visual)?.kind;
   if (d.platform === "google") return false;
-  const reads = (m: MetricId) => METRICS[m].needs.includes("results");
+  const reads = (m: StatId) => reg.needs(m).includes("results");
   if (kind === "kpi" || kind === "series") return reads(d.metric);
   if (kind === "category") return reads(d.metric) && d.dimension !== "result_type";
   if (kind === "table") return d.tableDimension !== "result_type" && d.columns.some(reads);
   if (kind === "creatives") return [...d.cardStats, d.cardSort].some(reads);
   return false;
+}
+
+/**
+ * The stats a list offers for a platform, under the picker's headings: the
+ * agency's own metrics first (an archived one only where `keep` holds it,
+ * because a widget already shows it), then the built-ins.
+ */
+function statGroups(
+  reg: Registry,
+  platform: AdPlatform,
+  keep: readonly StatId[],
+  fits: (m: StatId) => boolean = () => true,
+): Array<{ group: string; stats: StatId[] }> {
+  return [
+    { group: "Custom metrics", stats: reg.customIds(platform, keep).filter(fits) },
+    ...METRIC_GROUPS.map((g) => ({
+      group: g as string,
+      stats: METRIC_IDS.filter((m) => METRICS[m].group === g && metricSupports(m, platform) && fits(m)),
+    })),
+  ].filter((g) => g.stats.length > 0);
 }
 
 /**
@@ -350,6 +374,7 @@ export function WidgetPicker({
   onClose: () => void;
   onDone: (result: PickerResult) => void;
 }) {
+  const reg = useStats();
   const sources: readonly AdPlatform[] = platforms.length > 0 ? platforms : ["meta"];
   const [tab, setTab] = useState<"prebuilt" | "build">(editing ? "build" : "prebuilt");
   const [draft, setDraft] = useState<Draft>(() =>
@@ -363,11 +388,11 @@ export function WidgetPicker({
   const update = (patch: Partial<Draft>) => {
     setChosenPreset(null);
     setPresetSize(undefined);
-    setDraft((d) => fixUp({ ...d, ...patch }));
+    setDraft((d) => fixUp(reg, { ...d, ...patch }));
   };
 
   const query = queryOf(draft);
-  const check = checkWidget(query);
+  const check = checkWidget(query, reg);
   const blank = query.kind === "text" && query.text.trim() === "";
   const problem = !check.ok ? check.reason : blank ? "Write the text this widget shows." : null;
 
@@ -415,7 +440,7 @@ export function WidgetPicker({
     const preset = PRESETS.find((p) => p.id === id);
     if (!preset) return;
     const q = withPlatform(preset.query, draft.platform);
-    setDraft(fixUp(draftFrom(q, undefined, draft.platform)));
+    setDraft(fixUp(reg, draftFrom(q, undefined, draft.platform)));
     setPresetSize(preset.size);
     setChosenPreset(id);
   }
@@ -480,7 +505,7 @@ export function WidgetPicker({
                   if (chosenPreset) {
                     const preset = PRESETS.find((p) => p.id === chosenPreset);
                     if (preset) {
-                      setDraft(fixUp(draftFrom(withPlatform(preset.query, platform), undefined, platform)));
+                      setDraft(fixUp(reg, draftFrom(withPlatform(preset.query, platform), undefined, platform)));
                       return;
                     }
                   }
@@ -508,7 +533,7 @@ export function WidgetPicker({
                 className="grid max-h-[460px] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2"
               >
                 {PRESETS.map((p) => {
-                  const verdict = checkWidget(withPlatform(p.query, draft.platform));
+                  const verdict = checkWidget(withPlatform(p.query, draft.platform), reg);
                   const selected = chosenPreset === p.id;
                   return (
                     <button
@@ -564,28 +589,22 @@ export function WidgetPicker({
                       id={`${ids}-metric`}
                       className="field w-full"
                       value={draft.metric}
-                      onChange={(e) => update({ metric: e.target.value as MetricId })}
+                      onChange={(e) => update({ metric: e.target.value as StatId })}
                     >
-                      {METRIC_GROUPS.map((g) => {
-                        // The chosen source's own stats only — each platform reports its own set.
-                        const inGroup = METRIC_IDS.filter(
-                          (m) => METRICS[m].group === g && metricSupports(m, draft.platform),
-                        );
-                        if (inGroup.length === 0) return null;
-                        return (
-                          <optgroup key={g} label={g}>
-                            {inGroup.map((m) => {
-                              const block = metricBlock(m, draft);
-                              return (
-                                <option key={m} value={m} disabled={Boolean(block)}>
-                                  {metricLabel(m, draft.platform)}
-                                  {block ? ` — ${block}` : ""}
-                                </option>
-                              );
-                            })}
-                          </optgroup>
-                        );
-                      })}
+                      {/* The chosen source's own stats only — each platform reports its own set. */}
+                      {statGroups(reg, draft.platform, [draft.metric]).map(({ group, stats }) => (
+                        <optgroup key={group} label={group}>
+                          {stats.map((m) => {
+                            const block = metricBlock(reg, m, draft);
+                            return (
+                              <option key={m} value={m} disabled={Boolean(block)}>
+                                {reg.label(m, draft.platform)}
+                                {block ? ` — ${block}` : ""}
+                              </option>
+                            );
+                          })}
+                        </optgroup>
+                      ))}
                     </select>
                   </Field>
                 )}
@@ -599,7 +618,10 @@ export function WidgetPicker({
                         value={draft.dimension}
                         onChange={(e) => update({ dimension: e.target.value as DimensionId })}
                       >
-                        {metricDims(draft.metric, draft.platform).map((d) => (
+                        {(() => {
+                          const def = reg.get(draft.metric);
+                          return def ? statDims(def, draft.platform) : [];
+                        })().map((d) => (
                           <option key={d} value={d}>
                             {dimensionLabel(d)}
                           </option>
@@ -639,7 +661,7 @@ export function WidgetPicker({
                   <CreativeFields draft={draft} update={update} ids={ids} campaigns={campaigns} />
                 )}
 
-                {pinsResultType(draft) && (
+                {pinsResultType(reg, draft) && (
                   <Field label="Result type" htmlFor={`${ids}-rtype`}>
                     <select
                       id={`${ids}-rtype`}
@@ -691,7 +713,7 @@ export function WidgetPicker({
                       id={`${ids}-title`}
                       className="field w-full"
                       maxLength={TITLE_MAX}
-                      placeholder={defaultTitle(query)}
+                      placeholder={defaultTitle(query, reg)}
                       value={draft.title}
                       onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
                     />
@@ -779,17 +801,18 @@ function TableFields({
   update: (patch: Partial<Draft>) => void;
   ids: string;
 }) {
+  const reg = useStats();
   const [filter, setFilter] = useState("");
   const dims = tableDimensions(draft.platform);
   const full = draft.columns.length >= TABLE_COLUMNS.max;
-  const available = METRIC_IDS.filter((m) => metricSupports(m, draft.platform));
+  const available = statGroups(reg, draft.platform, draft.columns).flatMap((g) => g.stats);
   const needle = filter.trim().toLowerCase();
-  const groups = METRIC_GROUPS.map((g) => ({
-    group: g,
-    stats: available.filter(
-      (m) => METRICS[m].group === g && (!needle || metricLabel(m, draft.platform).toLowerCase().includes(needle)),
-    ),
-  })).filter((g) => g.stats.length > 0);
+  const groups = statGroups(
+    reg,
+    draft.platform,
+    draft.columns,
+    (m) => !needle || reg.label(m, draft.platform).toLowerCase().includes(needle),
+  );
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px]">
@@ -812,11 +835,11 @@ function TableFields({
             id={`${ids}-sort`}
             className="field w-full"
             value={draft.sort}
-            onChange={(e) => update({ sort: e.target.value as MetricId })}
+            onChange={(e) => update({ sort: e.target.value as StatId })}
           >
             {draft.columns.map((m) => (
               <option key={m} value={m}>
-                {metricLabel(m, draft.platform)}
+                {reg.label(m, draft.platform)}
               </option>
             ))}
           </select>
@@ -854,7 +877,7 @@ function TableFields({
               </span>
               <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
                 {stats.map((m) => {
-                  const fits = columnFits(m, draft);
+                  const fits = columnFits(reg, m, draft);
                   const on = draft.columns.includes(m);
                   return (
                     <label
@@ -875,7 +898,7 @@ function TableFields({
                           })
                         }
                       />
-                      {metricLabel(m, draft.platform)}
+                      {reg.label(m, draft.platform)}
                     </label>
                   );
                 })}
@@ -894,24 +917,28 @@ function TableFields({
 }
 
 /** Stats a card can carry, grouped as the Stat list is, for the add and rank selects. */
-function CardStatOptions({ by, omit }: { by: CardGrouping; omit?: readonly MetricId[] }) {
+function CardStatOptions({
+  by,
+  omit,
+  keep = [],
+}: {
+  by: CardGrouping;
+  omit?: readonly StatId[];
+  /** Agency metrics already on the cards, shown even if archived. */
+  keep?: readonly StatId[];
+}) {
+  const reg = useStats();
   return (
     <>
-      {METRIC_GROUPS.map((g) => {
-        const inGroup = METRIC_IDS.filter(
-          (m) => METRICS[m].group === g && cardStatFits(m, by) && !omit?.includes(m),
-        );
-        if (inGroup.length === 0) return null;
-        return (
-          <optgroup key={g} label={g}>
-            {inGroup.map((m) => (
-              <option key={m} value={m}>
-                {metricLabel(m, "meta")}
-              </option>
-            ))}
-          </optgroup>
-        );
-      })}
+      {statGroups(reg, "meta", keep, (m) => cardStatFits(reg, m, by) && !omit?.includes(m)).map(({ group, stats }) => (
+        <optgroup key={group} label={group}>
+          {stats.map((m) => (
+            <option key={m} value={m}>
+              {reg.label(m, "meta")}
+            </option>
+          ))}
+        </optgroup>
+      ))}
     </>
   );
 }
@@ -935,7 +962,8 @@ function CreativeFields({
   const [filter, setFilter] = useState("");
   const stats = draft.cardStats;
   const full = stats.length >= CARDS.statsMax;
-  const lowestFirst = METRIC_POLARITY[metricStatKey(draft.cardSort, "meta")] === "lower-better";
+  const reg = useStats();
+  const lowestFirst = reg.polarity(draft.cardSort, "meta") === "lower-better";
   const move = (from: number, to: number) => {
     const next = [...stats];
     const [m] = next.splice(from, 1);
@@ -988,7 +1016,7 @@ function CreativeFields({
         </legend>
         <ol className="flex flex-col gap-1">
           {stats.map((m, i) => {
-            const label = metricLabel(m, "meta");
+            const label = reg.label(m, "meta");
             return (
               <li key={m} className="flex items-center gap-2 text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
                 <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -1029,7 +1057,7 @@ function CreativeFields({
           value=""
           disabled={full}
           onChange={(e) => {
-            const m = e.target.value as MetricId;
+            const m = e.target.value as StatId;
             if (m) update({ cardStats: [...stats, m] });
           }}
         >
@@ -1043,7 +1071,7 @@ function CreativeFields({
           id={`${ids}-card-sort`}
           className="field w-full"
           value={draft.cardSort}
-          onChange={(e) => update({ cardSort: e.target.value as MetricId })}
+          onChange={(e) => update({ cardSort: e.target.value as StatId })}
         >
           <CardStatOptions by={draft.cardBy} />
         </select>

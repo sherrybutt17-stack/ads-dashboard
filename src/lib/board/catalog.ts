@@ -159,6 +159,23 @@ export function isMetricId(v: unknown): v is MetricId {
   return typeof v === "string" && (METRIC_IDS as readonly string[]).includes(v);
 }
 
+/** An agency's own metric (Settings → Metrics), by its row id. */
+export type CustomMetricId = `custom:${string}`;
+
+/** Any stat a widget can name: a built-in, or one of the agency's own. */
+export type StatId = MetricId | CustomMetricId;
+
+/** `custom:` and a row's uuid — nothing else, since the id travels in URLs and share links. */
+export const CUSTOM_METRIC_ID = /^custom:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function isCustomMetricId(v: unknown): v is CustomMetricId {
+  return typeof v === "string" && CUSTOM_METRIC_ID.test(v);
+}
+
+export function isStatId(v: unknown): v is StatId {
+  return isMetricId(v) || isCustomMetricId(v);
+}
+
 export const DIMENSION_IDS = [
   "campaign",
   "adset",
@@ -201,8 +218,12 @@ export type MetricFormat = "currency" | "count" | "percent" | "decimal" | "multi
  */
 export type MetricNeed = "ads" | "extras" | "adlevel" | "crm" | "revenue" | "reach" | "results";
 
-/** The picker's headings — Whatagraph's field groups, plus the CRM's. */
+/**
+ * The picker's headings — Whatagraph's field groups, plus the CRM's, and the
+ * agency's own metrics (which head the list, and are never in `METRIC_GROUPS`).
+ */
 export type MetricGroup =
+  | "Custom metrics"
   | "Performance"
   | "Platform results"
   | "Conversions"
@@ -284,6 +305,55 @@ export interface MetricDef {
   calc?: MetricCalc;
   /** A shorter label where space is tight, such as a creative card. */
   short?: string;
+}
+
+/**
+ * What a widget needs to know about any stat — a built-in `MetricDef`, or an
+ * agency metric derived from one (`registry.ts`).
+ */
+export interface StatDef extends Omit<MetricDef, "id" | "rankBy"> {
+  id: StatId;
+  rankBy?: StatId;
+  /** An agency metric: how it was defined. */
+  custom?: StatCustom;
+}
+
+export interface StatCustom {
+  kind: "rename" | "formula";
+  /** A rename's built-in stat. */
+  base: MetricId | null;
+  description: string | null;
+  /** Hidden from the picker; existing widgets and links still show it. */
+  archived: boolean;
+}
+
+/**
+ * Where checks and titles look a stat up. The built-ins alone by default; a
+ * board passes its agency's registry so its own metrics resolve too, and an
+ * id that resolves to nothing — deleted, or another agency's — is refused.
+ */
+export interface StatLookup {
+  get(id: StatId): StatDef | null;
+}
+
+export const BUILTIN_STATS: StatLookup = {
+  get: (id) => (isMetricId(id) ? METRICS[id] : null),
+};
+
+export function statLabel(d: StatDef, platform: AdPlatform): string {
+  return d.labels?.[platform] ?? d.label;
+}
+
+export function statSupports(d: StatDef, platform: AdPlatform): boolean {
+  return d.platforms.includes(platform);
+}
+
+export function statDims(d: StatDef, platform: AdPlatform): readonly DimensionId[] {
+  return d.dims[platform] ?? [];
+}
+
+export function statSeries(d: StatDef, platform: AdPlatform): boolean {
+  return d.series.includes(platform);
 }
 
 const ALL: readonly AdPlatform[] = ["meta", "google", "tiktok"];
@@ -1392,46 +1462,56 @@ const no = (reason: string): Check => ({ ok: false, reason });
  * Whether a widget asks for something the data can honestly answer.
  *
  * Used three ways: the picker greys out impossible choices (with this reason),
- * the save path refuses them, and the aggregator never has to guess.
+ * the save path refuses them, and the aggregator never has to guess. `stats`
+ * is where its stats are looked up: a board passes its agency's registry, so
+ * the agency's own metrics resolve and anyone else's do not.
  */
-export function checkWidget(q: WidgetQuery): Check {
+export function checkWidget(q: WidgetQuery, stats: StatLookup = BUILTIN_STATS): Check {
+  const defs = new Map<StatId, StatDef>();
+  for (const id of widgetMetrics(q)) {
+    const d = stats.get(id);
+    if (!d) return no("This widget shows a metric that has been deleted from Settings → Metrics.");
+    defs.set(id, d);
+  }
+  const def = (id: StatId): StatDef => defs.get(id)!;
   if ("resultType" in q && q.resultType !== undefined) {
-    const reads = widgetMetrics(q).some((m) => METRICS[m].needs.includes("results"));
+    const reads = [...defs.values()].some((d) => d.needs.includes("results"));
     if (!reads) return no("Only a results widget can be set to one result type.");
   }
   switch (q.kind) {
     case "kpi": {
-      if (!metricSupports(q.metric, q.platform)) {
-        return no(`${METRICS[q.metric].label} is not available for ${platformName(q.platform)}.`);
+      if (!statSupports(def(q.metric), q.platform)) {
+        return no(`${def(q.metric).label} is not available for ${platformName(q.platform)}.`);
       }
       return OK;
     }
     case "series": {
-      if (!metricSupports(q.metric, q.platform)) {
-        return no(`${METRICS[q.metric].label} is not available for ${platformName(q.platform)}.`);
+      const d = def(q.metric);
+      if (!statSupports(d, q.platform)) {
+        return no(`${d.label} is not available for ${platformName(q.platform)}.`);
       }
-      if (!metricSeries(q.metric, q.platform)) {
+      if (!statSeries(d, q.platform)) {
+        const base = d.custom?.base ?? q.metric;
         return no(
-          q.metric === "reach" || q.metric === "frequency"
+          base === "reach" || base === "frequency"
             ? "Reach counts distinct people across the whole range, so it cannot be drawn day by day."
-            : `${METRICS[q.metric].label} is only available as a single value.`,
+            : `${d.label} is only available as a single value.`,
         );
       }
       return OK;
     }
     case "category": {
-      if (!metricSupports(q.metric, q.platform)) {
-        return no(`${METRICS[q.metric].label} is not available for ${platformName(q.platform)}.`);
+      const d = def(q.metric);
+      if (!statSupports(d, q.platform)) {
+        return no(`${d.label} is not available for ${platformName(q.platform)}.`);
       }
-      if (!metricDims(q.metric, q.platform).includes(q.dimension)) {
+      if (!statDims(d, q.platform).includes(q.dimension)) {
         return no(
-          `${METRICS[q.metric].label} cannot be split by ${DIMENSIONS[q.dimension].label.toLowerCase()} for ${platformName(q.platform)}.`,
+          `${d.label} cannot be split by ${DIMENSIONS[q.dimension].label.toLowerCase()} for ${platformName(q.platform)}.`,
         );
       }
-      if ((q.form === "pie" || q.form === "donut") && !canBeCircle(q.metric)) {
-        return no(
-          `${METRICS[q.metric].label} is a rate or a cost, so its parts do not add up to a whole. Use a bar chart.`,
-        );
+      if ((q.form === "pie" || q.form === "donut") && !d.additive) {
+        return no(`${d.label} is a rate or a cost, so its parts do not add up to a whole. Use a bar chart.`);
       }
       if ((q.form === "pie" || q.form === "donut") && q.dimension === "result_type") {
         return no("Different kinds of result do not add up to a whole. Use a bar chart.");
@@ -1448,17 +1528,16 @@ export function checkWidget(q: WidgetQuery): Check {
       if (new Set(q.metrics).size !== q.metrics.length) return no("Each column can appear once.");
       if (!q.metrics.includes(q.sort)) return no("Sort by one of the table's columns.");
       for (const m of q.metrics) {
-        if (!metricSupports(m, q.platform)) {
-          return no(`${METRICS[m].label} is not available for ${platformName(q.platform)}.`);
+        const d = def(m);
+        if (!statSupports(d, q.platform)) {
+          return no(`${d.label} is not available for ${platformName(q.platform)}.`);
         }
         if (q.dimension === "date") {
-          if (!metricSeries(m, q.platform)) {
-            return no(`${METRICS[m].label} has no day-by-day figure.`);
+          if (!statSeries(d, q.platform)) {
+            return no(`${d.label} has no day-by-day figure.`);
           }
-        } else if (!metricDims(m, q.platform).includes(q.dimension)) {
-          return no(
-            `${METRICS[m].label} cannot be split by ${DIMENSIONS[q.dimension].label.toLowerCase()}.`,
-          );
+        } else if (!statDims(d, q.platform).includes(q.dimension)) {
+          return no(`${d.label} cannot be split by ${DIMENSIONS[q.dimension].label.toLowerCase()}.`);
         }
       }
       if (q.topN < TABLE_ROWS.min || q.topN > TABLE_ROWS.max) {
@@ -1475,11 +1554,12 @@ export function checkWidget(q: WidgetQuery): Check {
       }
       if (new Set(q.stats).size !== q.stats.length) return no("Each stat can appear once.");
       for (const m of [...q.stats, q.sort]) {
-        if (METRICS[m].needs.includes("crm") || METRICS[m].needs.includes("revenue")) {
-          return no(`${METRICS[m].label} comes from the CRM, which can't reliably tell which ad a lead came from.`);
+        const d = def(m);
+        if (d.needs.includes("crm") || d.needs.includes("revenue")) {
+          return no(`${d.label} comes from the CRM, which can't reliably tell which ad a lead came from.`);
         }
-        if (!metricSupports(m, "meta") || !metricDims(m, "meta").includes(q.by)) {
-          return no(`${METRICS[m].label} is not reported per ${q.by}.`);
+        if (!statSupports(d, "meta") || !statDims(d, "meta").includes(q.by)) {
+          return no(`${d.label} is not reported per ${q.by}.`);
         }
       }
       if (q.topN < CARDS.min || q.topN > CARDS.max) {
@@ -1505,16 +1585,20 @@ function platformName(p: AdPlatform): string {
 }
 
 /** The title a widget shows when nobody typed one. */
-export function defaultTitle(q: WidgetQuery): string {
+export function defaultTitle(q: WidgetQuery, stats: StatLookup = BUILTIN_STATS): string {
+  const label = (id: StatId, platform: AdPlatform) => {
+    const d = stats.get(id);
+    return d ? statLabel(d, platform) : "Deleted metric";
+  };
   switch (q.kind) {
     case "kpi":
-      return metricLabel(q.metric, q.platform);
+      return label(q.metric, q.platform);
     case "series":
-      return `${metricLabel(q.metric, q.platform)} over time`;
+      return `${label(q.metric, q.platform)} over time`;
     case "category":
       return q.dimension === "result_type"
-        ? `${metricLabel(q.metric, q.platform)} by type`
-        : `${metricLabel(q.metric, q.platform)} by ${DIMENSIONS[q.dimension].label.toLowerCase()}`;
+        ? `${label(q.metric, q.platform)} by type`
+        : `${label(q.metric, q.platform)} by ${DIMENSIONS[q.dimension].label.toLowerCase()}`;
     case "table":
       return q.dimension === "date"
         ? "Day by day"
@@ -1522,7 +1606,7 @@ export function defaultTitle(q: WidgetQuery): string {
           ? `${metricLabel("results", q.platform)} by ${DIMENSIONS[q.dimension].rowNoun}`
           : `Performance by ${DIMENSIONS[q.dimension].rowNoun}`;
     case "creatives":
-      return `${q.by === "ad" ? "Top ads" : "Top creatives"} by ${metricLabel(q.sort, "meta")}`;
+      return `${q.by === "ad" ? "Top ads" : "Top creatives"} by ${label(q.sort, "meta")}`;
     case "funnel":
       return "Pipeline funnel";
     case "text":
@@ -1532,8 +1616,8 @@ export function defaultTitle(q: WidgetQuery): string {
   }
 }
 
-/** Metrics a widget reads, in display order. */
-export function widgetMetrics(q: WidgetQuery): MetricId[] {
+/** Stats a widget reads, in display order. */
+export function widgetMetrics(q: WidgetQuery): StatId[] {
   switch (q.kind) {
     case "kpi":
     case "series":
