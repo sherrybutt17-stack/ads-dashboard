@@ -48,8 +48,10 @@ export const METRIC_IDS = [
   "hook_rate",
   "hold_rate",
   "thruplays",
-  // Meta only, parsed from the stored `actions` array.
+  // Meta, parsed from the stored `actions` array — and TikTok's own likes,
+  // comments and shares beside them, so its engagement reads in that order.
   "post_reactions",
+  "likes",
   "comments",
   "shares",
   "saves",
@@ -80,6 +82,75 @@ export const METRIC_IDS = [
   "revenue",
   "roas",
   "avg_deal",
+  /*
+   * Every other figure each platform reports, computed by `MetricDef.calc`
+   * rather than a case of its own in `metricValue`.
+   */
+  // Meta landing page cost, and clicks that left Facebook.
+  "cp_lpv",
+  "outbound_clicks",
+  "outbound_ctr",
+  "cp_outbound_click",
+  // Meta engagement.
+  "page_engagement",
+  "photo_views",
+  "post_engagement_rate",
+  "cp_engagement",
+  "cp_page_like",
+  // Video views — Google's TrueView views and TikTok's — then TikTok's 2- and 6-second views.
+  "video_views",
+  "view_rate",
+  "cpv",
+  "video_2s",
+  "video_6s",
+  // Meta video, from ad rows; TikTok reports the same quartiles.
+  "video_plays",
+  "video_p25",
+  "video_p50",
+  "video_p75",
+  "video_p95",
+  "video_p100",
+  "cp_thruplay",
+  "cp_3s_play",
+  // Meta conversions, each with its cost.
+  "registrations",
+  "cp_registration",
+  "contacts",
+  "cp_contact",
+  "schedules",
+  "cp_schedule",
+  "applications",
+  "cp_application",
+  "adds_to_cart",
+  "cp_add_to_cart",
+  "checkouts",
+  "cp_checkout",
+  "content_views",
+  "cp_content_view",
+  "calls_placed",
+  "cp_call",
+  "messaging_conversations",
+  "cp_messaging_conversation",
+  // Google.
+  "all_conversions",
+  "cp_all_conversion",
+  "conversion_value",
+  "conv_value_per_cost",
+  "all_conversions_value",
+  "view_through_conversions",
+  "conversion_rate",
+  "interactions",
+  "interaction_rate",
+  "engagements",
+  "engagement_rate",
+  "phone_calls",
+  // TikTok.
+  "conversions",
+  "cp_conversion",
+  "cvr",
+  "follows",
+  "cp_follow",
+  "profile_visits",
 ] as const;
 
 export type MetricId = (typeof METRIC_IDS)[number];
@@ -118,8 +189,10 @@ export type MetricFormat = "currency" | "count" | "percent" | "decimal" | "multi
  * widgets on a board actually need.
  *
  * - `ads`: platform delivery totals (campaign rows; Google/TikTok daily rows).
- * - `extras`: Meta campaign-row columns outside `AdTotals` and the `actions`
- *   array in `raw` (engagement, purchases, landing-page views, 3s plays).
+ * - `extras`: figures outside `AdTotals` — on Meta, campaign-row columns and
+ *   the `actions` array in `raw` (engagement, purchases, landing-page views,
+ *   3s plays); on Google and TikTok, the extra figures their syncs store in
+ *   `raw` and their own conversions column (`metrics/platform-extras.ts`).
  * - `adlevel`: Meta ad rows — the only rows carrying ThruPlays and plays.
  * - `crm`: funnel counts from the stage ledger.
  * - `revenue`: closed-won values.
@@ -128,17 +201,51 @@ export type MetricFormat = "currency" | "count" | "percent" | "decimal" | "multi
  */
 export type MetricNeed = "ads" | "extras" | "adlevel" | "crm" | "revenue" | "reach" | "results";
 
+/** The picker's headings — Whatagraph's field groups, plus the CRM's. */
 export type MetricGroup =
-  | "Spend and delivery"
+  | "Performance"
   | "Platform results"
-  | "Clicks"
+  | "Conversions"
   | "Engagement"
   | "Video"
-  | "Meta conversions"
   | "CRM pipeline"
   | "CRM costs"
   | "CRM rates"
   | "Revenue";
+
+/**
+ * A quantity a stat is computed from: one of the bag's base counts, or an
+ * extra figure by its key in `Bag.x` (`x.video_p25`). Every `x.` key is one a
+ * platform's sync stores — `catalog.test.ts` holds the two in step.
+ */
+export type BagRef =
+  | "spend"
+  | "impressions"
+  | "linkClicks"
+  | "clicksAll"
+  | "landingPageViews"
+  | "video3sViews"
+  | "videoPlays"
+  | "thruPlays"
+  | "postEngagement"
+  | "pageLikes"
+  | `x.${string}`;
+
+/**
+ * How a stat is computed from one row's components. The first set of stats
+ * keep their own cases in `metricValue`; every stat added since is one of:
+ *
+ * - `sum` — the quantity itself;
+ * - `per` — spend ÷ the quantity, with `costPer`'s refusal to call results
+ *   with no spend "free";
+ * - `ratio` — one quantity ÷ another.
+ *
+ * All three read the row's SUMMED components, so a total is never an average.
+ */
+export type MetricCalc =
+  | { sum: BagRef }
+  | { per: BagRef }
+  | { ratio: readonly [BagRef, BagRef] };
 
 export interface MetricDef {
   id: MetricId;
@@ -167,22 +274,32 @@ export interface MetricDef {
   rankBy?: MetricId;
   needs: readonly MetricNeed[];
   /**
-   * On Meta, only ad rows carry it (ThruPlays, plays), so even its totals and
-   * days are read from ad rows — never from campaign rows, which have none.
+   * On Meta, only ad rows carry it (ThruPlays, plays, quartiles), so even its
+   * totals and days are read from ad rows — never from campaign rows, which
+   * have none. Meta's rule alone: another platform reporting the same figure
+   * (TikTok's quartiles) reads its own daily rows.
    */
   adRows?: true;
+  /** How the value is computed, for stats without a case of their own in `metricValue`. */
+  calc?: MetricCalc;
   /** A shorter label where space is tight, such as a creative card. */
   short?: string;
 }
 
 const ALL: readonly AdPlatform[] = ["meta", "google", "tiktok"];
 const META: readonly AdPlatform[] = ["meta"];
+const GOOGLE: readonly AdPlatform[] = ["google"];
+const TIKTOK: readonly AdPlatform[] = ["tiktok"];
+const META_TIKTOK: readonly AdPlatform[] = ["meta", "tiktok"];
+const GOOGLE_TIKTOK: readonly AdPlatform[] = ["google", "tiktok"];
 
 const AUDIENCE: readonly DimensionId[] = ["age", "gender", "region", "placement", "device"];
 const META_EVERY: readonly DimensionId[] = ["campaign", "adset", "ad", "creative", ...AUDIENCE];
 const CAMPAIGN_ONLY: readonly DimensionId[] = ["campaign"];
 /** Campaign rows and ad rows both carry it, so every Meta split but the audience ones. */
 const AD_ROWS: readonly DimensionId[] = ["campaign", "adset", "ad", "creative"];
+/** Only ad rows carry it (`MetricDef.adRows`), so no split by campaign rows either. */
+const AD_ONLY: readonly DimensionId[] = ["adset", "ad", "creative"];
 const DELIVERY_DIMS = { meta: META_EVERY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
 const CRM_DIMS = { meta: CAMPAIGN_ONLY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
 /**
@@ -248,7 +365,7 @@ function metaAction(id: MetricId, label: string, statKey: string): MetricDef {
     id,
     label,
     format: "count",
-    group: id === "purchases" ? "Meta conversions" : "Engagement",
+    group: id === "purchases" ? "Conversions" : "Engagement",
     statKey,
     platforms: META,
     additive: true,
@@ -258,12 +375,146 @@ function metaAction(id: MetricId, label: string, statKey: string): MetricDef {
   };
 }
 
+/**
+ * A count from Meta's `actions` array (`META_ACTION_FAMILIES`): campaign rows
+ * and ad rows both carry it, so it splits every way but by audience.
+ */
+function metaFamily(
+  id: MetricId,
+  label: string,
+  statKey: string,
+  group: MetricGroup,
+  short?: string,
+): MetricDef {
+  return {
+    id,
+    label,
+    format: "count",
+    group,
+    statKey,
+    platforms: META,
+    additive: true,
+    series: META,
+    dims: { meta: AD_ROWS },
+    needs: ["extras", "adlevel"],
+    calc: { sum: `x.${id}` },
+    ...(short ? { short } : {}),
+  };
+}
+
+/** Meta spend ÷ a count that campaign rows and ad rows both carry. */
+function metaCost(
+  id: MetricId,
+  label: string,
+  statKey: string,
+  group: MetricGroup,
+  of: BagRef,
+  short?: string,
+): MetricDef {
+  return {
+    id,
+    label,
+    format: "currency",
+    group,
+    statKey,
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: AD_ROWS },
+    rankBy: "spend",
+    needs: ["ads", "extras", "adlevel"],
+    calc: { per: of },
+    ...(short ? { short } : {}),
+  };
+}
+
+/** A figure only Meta's ad rows carry (`adRows`): every number of it is read from them. */
+function metaAdRow(
+  id: MetricId,
+  label: string,
+  statKey: string,
+  group: MetricGroup,
+  calc: MetricCalc,
+  more: Partial<MetricDef> = {},
+): MetricDef {
+  const additive = "sum" in calc;
+  return {
+    id,
+    label,
+    format: "per" in calc ? "currency" : additive ? "count" : "percent",
+    group,
+    statKey,
+    platforms: META,
+    additive,
+    series: META,
+    dims: { meta: AD_ONLY },
+    needs: ["adlevel"],
+    adRows: true,
+    calc,
+    ...(additive ? {} : { rankBy: "per" in calc ? "spend" : "impressions" }),
+    ...more,
+  };
+}
+
+/** A Google or TikTok figure from its daily rows: split by campaign, drawn day by day. */
+function simple(
+  platforms: readonly AdPlatform[],
+  id: MetricId,
+  label: string,
+  statKey: string,
+  group: MetricGroup,
+  calc: MetricCalc,
+  format: MetricFormat,
+  more: Partial<MetricDef> = {},
+): MetricDef {
+  const additive = "sum" in calc;
+  // Spend or delivery in the formula means the delivery totals are loaded too.
+  const reads = "sum" in calc ? [calc.sum] : "per" in calc ? ["spend", calc.per] : [...calc.ratio];
+  const delivery = reads.some((r) => !r.startsWith("x."));
+  return {
+    id,
+    label,
+    format,
+    group,
+    statKey,
+    platforms,
+    additive,
+    series: platforms,
+    dims: Object.fromEntries(platforms.map((p) => [p, CAMPAIGN_ONLY])),
+    needs: delivery ? ["ads", "extras"] : ["extras"],
+    calc,
+    ...(additive ? {} : { rankBy: "per" in calc ? "spend" : "impressions" }),
+    ...more,
+  };
+}
+
+/** A video quartile: Meta from its ad rows, TikTok from its daily rows. */
+function quartile(id: MetricId, pct: number, statKey: string, tiktokKey: string): MetricDef {
+  return {
+    id,
+    label: `Video plays at ${pct}%`,
+    labels: { tiktok: `Video views at ${pct}%` },
+    short: `Plays at ${pct}%`,
+    format: "count",
+    group: "Video",
+    statKey,
+    statKeys: { tiktok: tiktokKey },
+    platforms: META_TIKTOK,
+    additive: true,
+    series: META_TIKTOK,
+    dims: { meta: AD_ONLY, tiktok: CAMPAIGN_ONLY },
+    needs: ["adlevel", "extras"],
+    adRows: true,
+    calc: { sum: `x.${id}` },
+  };
+}
+
 export const METRICS: Record<MetricId, MetricDef> = {
   spend: {
     id: "spend",
     label: "Ad spend",
     format: "currency",
-    group: "Spend and delivery",
+    group: "Performance",
     statKey: "spend",
     platforms: ALL,
     additive: true,
@@ -275,7 +526,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "impressions",
     label: "Impressions",
     format: "count",
-    group: "Spend and delivery",
+    group: "Performance",
     statKey: "impressions",
     platforms: ALL,
     additive: true,
@@ -288,7 +539,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     label: "Link clicks",
     labels: { google: "Clicks", tiktok: "Clicks" },
     format: "count",
-    group: "Clicks",
+    group: "Performance",
     statKey: "linkClicks",
     statKeys: { google: "clicks", tiktok: "clicks" },
     platforms: ALL,
@@ -301,7 +552,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "ctr",
     label: "CTR",
     format: "percent",
-    group: "Clicks",
+    group: "Performance",
     statKey: "ctr",
     platforms: ALL,
     additive: false,
@@ -315,7 +566,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     label: "Cost per link click",
     labels: { google: "Cost per click", tiktok: "Cost per click" },
     format: "currency",
-    group: "Clicks",
+    group: "Performance",
     statKey: "cpc",
     platforms: ALL,
     additive: false,
@@ -328,7 +579,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "cpm",
     label: "CPM",
     format: "currency",
-    group: "Spend and delivery",
+    group: "Performance",
     statKey: "cpm",
     platforms: ALL,
     additive: false,
@@ -341,7 +592,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "clicks_all",
     label: "Clicks (all)",
     format: "count",
-    group: "Clicks",
+    group: "Performance",
     statKey: "clicksAll",
     platforms: META,
     additive: true,
@@ -353,7 +604,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "ctr_all",
     label: "CTR (all)",
     format: "percent",
-    group: "Clicks",
+    group: "Performance",
     statKey: "ctrAll",
     platforms: META,
     additive: false,
@@ -367,7 +618,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     label: "Cost per click (all)",
     short: "CPC (all)",
     format: "currency",
-    group: "Clicks",
+    group: "Performance",
     statKey: "cpcAll",
     platforms: META,
     additive: false,
@@ -380,7 +631,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "fb_leads",
     label: "Leads (Meta-reported)",
     format: "count",
-    group: "Meta conversions",
+    group: "Conversions",
     statKey: "fbLeads",
     platforms: META,
     additive: true,
@@ -392,7 +643,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "cp_fb_lead",
     label: "Cost per Meta lead",
     format: "currency",
-    group: "Meta conversions",
+    group: "Conversions",
     statKey: "cpFbLead",
     platforms: META,
     additive: false,
@@ -410,7 +661,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "fb_onsite_leads",
     label: "On-Facebook leads",
     format: "count",
-    group: "Meta conversions",
+    group: "Conversions",
     statKey: "fbLeadsOnsite",
     platforms: META,
     additive: true,
@@ -423,7 +674,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     label: "Cost per On-Facebook lead",
     short: "Cost per On-FB lead",
     format: "currency",
-    group: "Meta conversions",
+    group: "Conversions",
     statKey: "cpFbLeadOnsite",
     platforms: META,
     additive: false,
@@ -436,7 +687,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "fb_pixel_leads",
     label: "Website leads",
     format: "count",
-    group: "Meta conversions",
+    group: "Conversions",
     statKey: "fbLeadsPixel",
     platforms: META,
     additive: true,
@@ -448,7 +699,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "cp_pixel_lead",
     label: "Cost per website lead",
     format: "currency",
-    group: "Meta conversions",
+    group: "Conversions",
     statKey: "cpFbLeadPixel",
     platforms: META,
     additive: false,
@@ -497,7 +748,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "reach",
     label: "Reach",
     format: "count",
-    group: "Spend and delivery",
+    group: "Performance",
     statKey: "reach",
     platforms: META,
     additive: false,
@@ -509,7 +760,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "frequency",
     label: "Frequency",
     format: "decimal",
-    group: "Spend and delivery",
+    group: "Performance",
     statKey: "frequency",
     platforms: META,
     additive: false,
@@ -521,7 +772,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "landing_page_views",
     label: "Landing page views",
     format: "count",
-    group: "Clicks",
+    group: "Performance",
     statKey: "landingPageViews",
     platforms: META,
     additive: true,
@@ -534,7 +785,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     label: "Land rate",
     short: "Land",
     format: "percent",
-    group: "Clicks",
+    group: "Performance",
     statKey: "landRate",
     platforms: META,
     additive: false,
@@ -599,8 +850,26 @@ export const METRICS: Record<MetricId, MetricDef> = {
     adRows: true,
   },
   post_reactions: metaAction("post_reactions", "Post reactions", "postReactions"),
-  comments: metaAction("comments", "Post comments", "postComments"),
-  shares: metaAction("shares", "Post shares", "postShares"),
+  /*
+   * TikTok reports comments and shares on its ads too: the same stat, its own
+   * word for it, read from its daily rows (`Bag.comments`, `Bag.shares`).
+   */
+  comments: {
+    ...metaAction("comments", "Post comments", "postComments"),
+    labels: { tiktok: "Comments" },
+    statKeys: { tiktok: "tiktokComments" },
+    platforms: META_TIKTOK,
+    series: META_TIKTOK,
+    dims: { meta: AD_ROWS, tiktok: CAMPAIGN_ONLY },
+  },
+  shares: {
+    ...metaAction("shares", "Post shares", "postShares"),
+    labels: { tiktok: "Shares" },
+    statKeys: { tiktok: "tiktokShares" },
+    platforms: META_TIKTOK,
+    series: META_TIKTOK,
+    dims: { meta: AD_ROWS, tiktok: CAMPAIGN_ONLY },
+  },
   saves: metaAction("saves", "Post saves", "postSaves"),
   page_likes: metaAction("page_likes", "Page likes", "pageLikes"),
   post_engagement: metaAction("post_engagement", "Post engagement", "postEngagement"),
@@ -609,7 +878,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     id: "cp_purchase",
     label: "Cost per purchase",
     format: "currency",
-    group: "Meta conversions",
+    group: "Conversions",
     statKey: "cpPurchase",
     platforms: META,
     additive: false,
@@ -681,15 +950,245 @@ export const METRICS: Record<MetricId, MetricDef> = {
     dims: {},
     needs: ["crm", "revenue"],
   },
+
+  /* ---------------------------------------------------------------- *
+   * Every other figure each platform reports
+   * ---------------------------------------------------------------- */
+
+  /*
+   * Outbound clicks: clicks that left Facebook for the destination — fewer
+   * than link clicks, which also count opening an Instant Form. Meta is asked
+   * for them per ad only, so every number is read from ad rows.
+   */
+  outbound_clicks: metaAdRow("outbound_clicks", "Outbound clicks", "outboundClicks", "Performance", {
+    sum: "x.outbound_clicks",
+  }),
+  outbound_ctr: metaAdRow("outbound_ctr", "Outbound CTR", "outboundCtr", "Performance", {
+    ratio: ["x.outbound_clicks", "impressions"],
+  }),
+  cp_outbound_click: metaAdRow("cp_outbound_click", "Cost per outbound click", "cpOutboundClick", "Performance", {
+    per: "x.outbound_clicks",
+  }),
+  cp_lpv: metaCost("cp_lpv", "Cost per landing page view", "cpLpv", "Performance", "landingPageViews", "Cost per LPV"),
+
+  page_engagement: metaFamily("page_engagement", "Page engagement", "pageEngagement", "Engagement"),
+  photo_views: metaFamily("photo_views", "Photo views", "photoViews", "Engagement"),
+  post_engagement_rate: {
+    id: "post_engagement_rate",
+    label: "Post engagement rate",
+    short: "Engagement rate",
+    format: "percent",
+    group: "Engagement",
+    statKey: "postEngagementRate",
+    platforms: META,
+    additive: false,
+    series: META,
+    dims: { meta: AD_ROWS },
+    rankBy: "impressions",
+    needs: ["ads", "extras", "adlevel"],
+    calc: { ratio: ["postEngagement", "impressions"] },
+  },
+  cp_engagement: metaCost(
+    "cp_engagement",
+    "Cost per post engagement",
+    "cpEngagement",
+    "Engagement",
+    "postEngagement",
+    "Cost per engagement",
+  ),
+  cp_page_like: metaCost("cp_page_like", "Cost per page like", "cpPageLike", "Engagement", "pageLikes"),
+
+  video_plays: metaAdRow("video_plays", "Video plays", "videoPlays", "Video", { sum: "videoPlays" }),
+  video_p25: quartile("video_p25", 25, "videoP25", "tiktokVideoP25"),
+  video_p50: quartile("video_p50", 50, "videoP50", "tiktokVideoP50"),
+  video_p75: quartile("video_p75", 75, "videoP75", "tiktokVideoP75"),
+  // TikTok reports no 95% mark.
+  video_p95: metaAdRow("video_p95", "Video plays at 95%", "videoP95", "Video", { sum: "x.video_p95" }, {
+    short: "Plays at 95%",
+  }),
+  video_p100: quartile("video_p100", 100, "videoP100", "tiktokVideoP100"),
+  cp_thruplay: metaAdRow("cp_thruplay", "Cost per ThruPlay", "cpThruPlay", "Video", { per: "thruPlays" }),
+  cp_3s_play: metaCost(
+    "cp_3s_play",
+    "Cost per 3-second video play",
+    "cp3sPlay",
+    "Video",
+    "video3sViews",
+    "Cost per 3s play",
+  ),
+
+  registrations: metaFamily("registrations", "Registrations completed", "registrations", "Conversions", "Registrations"),
+  cp_registration: metaCost("cp_registration", "Cost per registration", "cpRegistration", "Conversions", "x.registrations"),
+  contacts: metaFamily("contacts", "Contacts", "contacts", "Conversions"),
+  cp_contact: metaCost("cp_contact", "Cost per contact", "cpContact", "Conversions", "x.contacts"),
+  schedules: metaFamily("schedules", "Schedules", "schedules", "Conversions"),
+  cp_schedule: metaCost("cp_schedule", "Cost per schedule", "cpSchedule", "Conversions", "x.schedules"),
+  applications: metaFamily("applications", "Applications submitted", "applications", "Conversions", "Applications"),
+  cp_application: metaCost("cp_application", "Cost per application", "cpApplication", "Conversions", "x.applications"),
+  adds_to_cart: metaFamily("adds_to_cart", "Adds to cart", "addsToCart", "Conversions"),
+  cp_add_to_cart: metaCost("cp_add_to_cart", "Cost per add to cart", "cpAddToCart", "Conversions", "x.adds_to_cart"),
+  checkouts: metaFamily("checkouts", "Checkouts initiated", "checkouts", "Conversions", "Checkouts"),
+  cp_checkout: metaCost(
+    "cp_checkout",
+    "Cost per checkout initiated",
+    "cpCheckout",
+    "Conversions",
+    "x.checkouts",
+    "Cost per checkout",
+  ),
+  content_views: metaFamily("content_views", "Content views", "contentViews", "Conversions"),
+  cp_content_view: metaCost("cp_content_view", "Cost per content view", "cpContentView", "Conversions", "x.content_views"),
+  calls_placed: metaFamily("calls_placed", "Calls placed", "callsPlaced", "Conversions"),
+  cp_call: metaCost("cp_call", "Cost per call placed", "cpCall", "Conversions", "x.calls_placed", "Cost per call"),
+  messaging_conversations: metaFamily(
+    "messaging_conversations",
+    "Messaging conversations started",
+    "messagingConversations",
+    "Conversions",
+    "Conversations",
+  ),
+  cp_messaging_conversation: metaCost(
+    "cp_messaging_conversation",
+    "Cost per messaging conversation",
+    "cpMessagingConversation",
+    "Conversions",
+    "x.messaging_conversations",
+    "Cost per conversation",
+  ),
+
+  /*
+   * Google. Its Conversions are the platform's Results (`results`, above);
+   * these are the columns beside them in Google Ads.
+   */
+  all_conversions: simple(GOOGLE, "all_conversions", "All conversions", "allConversions", "Conversions", { sum: "x.all_conversions" }, "count"),
+  cp_all_conversion: simple(
+    GOOGLE,
+    "cp_all_conversion",
+    "Cost per all conversion",
+    "cpAllConversion",
+    "Conversions",
+    { per: "x.all_conversions" },
+    "currency",
+  ),
+  conversion_value: simple(GOOGLE, "conversion_value", "Conversion value", "conversionValue", "Conversions", { sum: "x.conversions_value" }, "currency"),
+  conv_value_per_cost: simple(
+    GOOGLE,
+    "conv_value_per_cost",
+    "Conv. value / cost",
+    "convValuePerCost",
+    "Conversions",
+    { ratio: ["x.conversions_value", "spend"] },
+    "multiple",
+    { rankBy: "spend" },
+  ),
+  all_conversions_value: simple(
+    GOOGLE,
+    "all_conversions_value",
+    "All conversions value",
+    "allConversionsValue",
+    "Conversions",
+    { sum: "x.all_conversions_value" },
+    "currency",
+  ),
+  view_through_conversions: simple(
+    GOOGLE,
+    "view_through_conversions",
+    "View-through conversions",
+    "viewThroughConversions",
+    "Conversions",
+    { sum: "x.view_through_conversions" },
+    "count",
+  ),
+  conversion_rate: simple(
+    GOOGLE,
+    "conversion_rate",
+    "Conversion rate",
+    "conversionRate",
+    "Conversions",
+    { ratio: ["x.conversions", "x.interactions"] },
+    "percent",
+    { rankBy: "interactions" },
+  ),
+  interactions: simple(GOOGLE, "interactions", "Interactions", "interactions", "Performance", { sum: "x.interactions" }, "count"),
+  interaction_rate: simple(
+    GOOGLE,
+    "interaction_rate",
+    "Interaction rate",
+    "interactionRate",
+    "Performance",
+    { ratio: ["x.interactions", "impressions"] },
+    "percent",
+  ),
+  engagements: simple(GOOGLE, "engagements", "Engagements", "engagements", "Engagement", { sum: "x.engagements" }, "count"),
+  engagement_rate: simple(
+    GOOGLE,
+    "engagement_rate",
+    "Engagement rate",
+    "engagementRate",
+    "Engagement",
+    { ratio: ["x.engagements", "impressions"] },
+    "percent",
+  ),
+  phone_calls: simple(GOOGLE, "phone_calls", "Phone calls", "phoneCalls", "Conversions", { sum: "x.phone_calls" }, "count"),
+
+  // Google's TrueView views and TikTok's video views: each platform's own "Video views".
+  video_views: simple(GOOGLE_TIKTOK, "video_views", "Video views", "videoViews", "Video", { sum: "x.video_views" }, "count", {
+    statKeys: { tiktok: "tiktokVideoViews" },
+  }),
+  view_rate: simple(
+    GOOGLE_TIKTOK,
+    "view_rate",
+    "View rate",
+    "viewRate",
+    "Video",
+    { ratio: ["x.video_views", "impressions"] },
+    "percent",
+    { statKeys: { tiktok: "tiktokViewRate" } },
+  ),
+  cpv: simple(GOOGLE_TIKTOK, "cpv", "Cost per video view", "cpv", "Video", { per: "x.video_views" }, "currency", {
+    labels: { google: "Avg. CPV" },
+    statKeys: { tiktok: "tiktokCpv" },
+  }),
+
+  /*
+   * TikTok. Its Results (`results`, above) count each ad group's optimisation
+   * goal; Conversions are its separate conversion-event column.
+   */
+  conversions: simple(TIKTOK, "conversions", "Conversions", "tiktokConversions", "Conversions", { sum: "x.conversions" }, "count"),
+  cp_conversion: simple(
+    TIKTOK,
+    "cp_conversion",
+    "Cost per conversion",
+    "cpTiktokConversion",
+    "Conversions",
+    { per: "x.conversions" },
+    "currency",
+  ),
+  cvr: simple(
+    TIKTOK,
+    "cvr",
+    "Conversion rate (CVR)",
+    "tiktokCvr",
+    "Conversions",
+    { ratio: ["x.conversions", "linkClicks"] },
+    "percent",
+    { rankBy: "clicks", short: "CVR" },
+  ),
+  likes: simple(TIKTOK, "likes", "Likes", "tiktokLikes", "Engagement", { sum: "x.likes" }, "count"),
+  follows: simple(TIKTOK, "follows", "Follows", "tiktokFollows", "Engagement", { sum: "x.follows" }, "count"),
+  cp_follow: simple(TIKTOK, "cp_follow", "Cost per follow", "cpTiktokFollow", "Engagement", { per: "x.follows" }, "currency"),
+  profile_visits: simple(TIKTOK, "profile_visits", "Profile visits", "tiktokProfileVisits", "Engagement", { sum: "x.profile_visits" }, "count"),
+  video_2s: simple(TIKTOK, "video_2s", "2-second video views", "tiktokVideo2s", "Video", { sum: "x.video_2s" }, "count"),
+  video_6s: simple(TIKTOK, "video_6s", "6-second video views", "tiktokVideo6s", "Video", { sum: "x.video_6s" }, "count"),
 };
 
+/** The picker's group order: delivery first, then what the platforms count, then the CRM's. */
 export const METRIC_GROUPS: readonly MetricGroup[] = [
-  "Spend and delivery",
+  "Performance",
   "Platform results",
-  "Clicks",
+  "Conversions",
   "Engagement",
   "Video",
-  "Meta conversions",
   "CRM pipeline",
   "CRM costs",
   "CRM rates",
@@ -731,6 +1230,22 @@ export function metricsFor(platform: AdPlatform): MetricId[] {
 /** May this stat be drawn as parts of a whole? Only sums that are never negative. */
 export function canBeCircle(id: MetricId): boolean {
   return METRICS[id].additive;
+}
+
+/**
+ * Whether this stat's numbers come from Meta's ad rows alone (`MetricDef.adRows`).
+ * Meta's rule only: TikTok's quartiles, the same stat, come from its daily rows.
+ */
+export function metricFromAdRows(id: MetricId, platform: AdPlatform): boolean {
+  return platform === "meta" && METRICS[id].adRows === true;
+}
+
+/** The extra figures a stat reads — its `x.` keys, which a platform's sync must store. */
+export function metricExtraKeys(id: MetricId): string[] {
+  const c = METRICS[id].calc;
+  if (!c) return [];
+  const refs = "sum" in c ? [c.sum] : "per" in c ? [c.per] : [...c.ratio];
+  return refs.filter((r) => r.startsWith("x.")).map((r) => r.slice(2));
 }
 
 export interface DimensionDef {

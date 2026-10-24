@@ -36,12 +36,14 @@ import {
   getMetaCoverage,
   getPeriodReachRow,
   getPlatformResults,
+  getSimpleExtras,
   type MetaAdIdentity,
   type MetaAdLevelRow,
   type MetaAdPairRow,
   type MetaExtrasRow,
   type PlatformResultsRow,
   type ResultsBy,
+  type SimpleExtrasRow,
 } from "@/lib/metrics/board-queries";
 import {
   mergeByType,
@@ -58,6 +60,8 @@ import {
   TOP_N,
   canBeCircle,
   checkWidget,
+  metricExtraKeys,
+  metricFromAdRows,
   metricLabel,
   metricSeries,
   metricStatKey,
@@ -217,7 +221,19 @@ function fromExtras(e: MetaExtrasRow): Partial<Bag> {
     pageLikes: e.pageLikes,
     postEngagement: e.postEngagement,
     purchases: e.purchases,
+    x: e.x,
   };
+}
+
+/**
+ * Google's or TikTok's extra figures. TikTok's comments and shares are the
+ * same quantities as Meta's, so they fill the same parts of the bag and the
+ * same stats show them.
+ */
+function fromSimpleExtras(platform: AdPlatform, e: SimpleExtrasRow): Partial<Bag> {
+  return platform === "tiktok"
+    ? { x: e.x, xMissing: e.uncollected, comments: e.x.comments ?? 0, shares: e.x.shares ?? 0 }
+    : { x: e.x, xMissing: e.uncollected };
 }
 
 /** One ad-level row — grouped (ad, ad set, day, total) or one (ad, creative) pair. */
@@ -241,6 +257,7 @@ function fromAdLevel(r: MetaAdLevelRow | MetaAdPairRow): Bag {
     pageLikes: r.pageLikes,
     postEngagement: r.postEngagement,
     purchases: r.purchases,
+    x: r.x,
   });
 }
 
@@ -261,9 +278,14 @@ function needs(metrics: readonly MetricId[], need: "extras" | "crm" | "results")
   return metrics.some((m) => METRICS[m].needs.includes(need));
 }
 
-/** Ad-level rows are the only source of ThruPlays and plays (`MetricDef.adRows`). */
-function fromAdRows(metric: MetricId): boolean {
-  return METRICS[metric].adRows === true;
+/** Meta's ad-level rows are the only source of ThruPlays and plays (`MetricDef.adRows`). */
+function fromAdRows(metric: MetricId, platform: AdPlatform): boolean {
+  return metricFromAdRows(metric, platform);
+}
+
+/** The extra figures a widget's stats read on Google or TikTok — whose collection a note owes. */
+function extraKeysOf(metrics: readonly MetricId[]): string[] {
+  return [...new Set(metrics.flatMap(metricExtraKeys))];
 }
 
 function unavailable(
@@ -343,6 +365,25 @@ class BoardLoader {
     return this.once(`extras:${by}:${which}`, () => getMetaCampaignExtras(this.id, this.win(which), by));
   }
 
+  simpleExtras(platform: "google" | "tiktok", by: "total" | "day" | "campaign", which: Which) {
+    return this.once(`simpleExtras:${platform}:${by}:${which}`, () =>
+      getSimpleExtras(platform, this.id, this.win(which), by),
+    );
+  }
+
+  /** Any platform's figures beyond its delivery totals, as bag parts keyed like its rows. */
+  async extraParts(
+    platform: AdPlatform,
+    by: "total" | "day" | "campaign",
+    which: Which,
+  ): Promise<Map<string, Partial<Bag>>> {
+    if (platform === "meta") {
+      return new Map((await this.extras(by, which)).map((e) => [e.key, fromExtras(e)]));
+    }
+    const rows = await this.simpleExtras(platform, by, which);
+    return new Map(rows.map((e) => [e.key, fromSimpleExtras(platform, e)]));
+  }
+
   adLevel(by: "ad" | "adset" | "day" | "total", which: Which) {
     return this.once(`adLevel:${by}:${which}`, () => getMetaAdLevel(this.id, this.win(which), by));
   }
@@ -405,9 +446,9 @@ class BoardLoader {
   ): Promise<Bag> {
     const p = await this.period(platform, which);
     let b = bag({ ...fromAds(p.ads), funnel: p.funnel, revenue: p.revenue });
-    if (platform === "meta" && needs(metrics, "extras")) {
-      const [e] = await this.extras("total", which);
-      if (e) b = { ...b, ...fromExtras(e) };
+    if (needs(metrics, "extras")) {
+      const e = (await this.extraParts(platform, "total", which)).get("");
+      if (e) b = { ...b, ...e };
     }
     if (needs(metrics, "results")) {
       const [r] = await this.results(platform, "total", which);
@@ -440,26 +481,20 @@ class BoardLoader {
       });
     }
     const points = await this.daily(platform, which);
-    const extras =
-      platform === "meta" && needs(metrics, "extras")
-        ? new Map((await this.extras("day", which)).map((e) => [e.key, e]))
-        : null;
+    const extras = needs(metrics, "extras") ? await this.extraParts(platform, "day", which) : null;
     const results = needs(metrics, "results")
       ? new Map((await this.results(platform, "day", which)).map((r) => [r.key, r]))
       : null;
-    return points.map((p) => {
-      const e = extras?.get(p.dateKey);
-      return {
-        key: p.dateKey,
-        label: dayLabel(p.dateKey),
-        bag: bag({
-          ...fromAds(p.ads),
-          funnel: p.funnel,
-          ...(e ? fromExtras(e) : {}),
-          ...(results ? fromResults(results.get(p.dateKey), focus).parts : {}),
-        }),
-      };
-    });
+    return points.map((p) => ({
+      key: p.dateKey,
+      label: dayLabel(p.dateKey),
+      bag: bag({
+        ...fromAds(p.ads),
+        funnel: p.funnel,
+        ...(extras?.get(p.dateKey) ?? {}),
+        ...(results ? fromResults(results.get(p.dateKey), focus).parts : {}),
+      }),
+    }));
   }
 
   /** One bag per campaign, ad set, ad, creative or audience segment. */
@@ -486,15 +521,11 @@ class BoardLoader {
       case "campaign": {
         const rows = await this.campaigns(platform);
         const crm = needs(metrics, "crm") ? await this.funnelByCampaign(platform) : null;
-        const extras =
-          platform === "meta" && needs(metrics, "extras")
-            ? new Map((await this.extras("campaign", "cur")).map((e) => [e.key, e]))
-            : null;
+        const extras = needs(metrics, "extras") ? await this.extraParts(platform, "campaign", "cur") : null;
         const results = needs(metrics, "results")
           ? new Map((await this.results(platform, "campaign", "cur")).map((r) => [r.key, r]))
           : null;
         const out: Row[] = rows.map((c) => {
-          const e = extras?.get(c.campaignId);
           const r = results ? fromResults(results.get(c.campaignId), focus) : null;
           return {
             key: c.campaignId,
@@ -502,7 +533,7 @@ class BoardLoader {
             rtype: r?.type,
             bag: bag({
               ...fromAds(c.ads),
-              ...(e ? fromExtras(e) : {}),
+              ...(extras?.get(c.campaignId) ?? {}),
               ...(r?.parts ?? {}),
               funnel: crm ? funnelFrom(crm.get(c.campaignId)) : null,
             }),
@@ -585,12 +616,31 @@ class BoardLoader {
     }
   }
 
-  /** Coverage notes for a split or a stat that starts later than the range. */
-  async coverageNotes(opts: { adRows: boolean; audience: boolean }): Promise<string[]> {
-    if (!opts.adRows && !opts.audience) return [];
+  /**
+   * Coverage notes for a split or a stat that starts later than the range —
+   * and, on Google and TikTok, for extra figures some days were synced without.
+   */
+  async coverageNotes(opts: {
+    adRows: boolean;
+    audience: boolean;
+    extras?: { platform: AdPlatform; metrics: readonly MetricId[] };
+  }): Promise<string[]> {
+    const out: string[] = [];
+    const ex = opts.extras;
+    if (ex && ex.platform !== "meta") {
+      const keys = extraKeysOf(ex.metrics);
+      if (keys.length > 0) {
+        const [total] = await this.simpleExtras(ex.platform, "total", "cur");
+        if (keys.some((k) => (total?.uncollected[k] ?? 0) > 0)) {
+          out.push(
+            "Some days in this range were synced before these figures were collected — re-pull history on the Connections page to include them.",
+          );
+        }
+      }
+    }
+    if (!opts.adRows && !opts.audience) return out;
     const c = await this.coverage();
     const start = this.input.window.startKey;
-    const out: string[] = [];
     if (opts.adRows && c.firstAdDay && start < c.firstAdDay) {
       out.push(
         `Ad-level figures start ${dayLabel(c.firstAdDay)}; earlier days are not included. Import ad-level history on the Connections page to add them.`,
@@ -810,7 +860,7 @@ async function kpiData(
     };
   }
 
-  const adRows = fromAdRows(metric);
+  const adRows = fromAdRows(metric, platform);
   const [cur, prev] = adRows
     ? await Promise.all([L.adTotals("cur"), L.adTotals("prev")])
     : await Promise.all([L.totals(platform, "cur", [metric]), L.totals(platform, "prev", [metric])]);
@@ -825,7 +875,7 @@ async function kpiData(
       ? values.map((v) => v ?? 0)
       : values.filter((v): v is number => v !== null);
   }
-  const notes = await L.coverageNotes({ adRows, audience: false });
+  const notes = await L.coverageNotes({ adRows, audience: false, extras: { platform, metrics: [metric] } });
   return {
     kind: "value",
     value,
@@ -843,7 +893,7 @@ async function seriesData(
   q: Extract<WidgetQuery, { kind: "series" }>,
 ): Promise<WidgetData> {
   const { platform, metric } = q;
-  const adRows = fromAdRows(metric);
+  const adRows = fromAdRows(metric, platform);
   const f = needs([metric], "results") ? await L.resultFocus(platform, q.resultType) : null;
   if (f && !f.type) return noResults(f);
   const focus: ResultFocus = f?.type?.key ?? null;
@@ -851,7 +901,7 @@ async function seriesData(
     L.currency(platform),
     L.days(platform, "cur", [metric], adRows, focus),
     q.compare ? L.days(platform, "prev", [metric], adRows, focus) : Promise.resolve(null),
-    L.coverageNotes({ adRows, audience: false }),
+    L.coverageNotes({ adRows, audience: false, extras: { platform, metrics: [metric] } }),
   ]);
   const notes = [...resultNotes(f, [metric], currency, { counting: true }), ...coverage];
   return {
@@ -902,7 +952,7 @@ async function categoryData(
   const [currency, rows, coverage, opts] = await Promise.all([
     L.currency(platform),
     L.split(platform, dimension, [metric, rankBy], focus),
-    L.coverageNotes({ adRows: usesAdRows(dimension), audience }),
+    L.coverageNotes({ adRows: usesAdRows(dimension), audience, extras: { platform, metrics: [metric, rankBy] } }),
     dimension === "campaign" ? campaignOptions(L, platform) : Promise.resolve({}),
   ]);
   const notes = [...resultNotes(f, [metric], currency, { counting: !byType }), ...coverage];
@@ -976,8 +1026,8 @@ async function dailyTableData(
   q: Extract<WidgetQuery, { kind: "table" }>,
 ): Promise<WidgetData> {
   const { platform, metrics } = q;
-  const wantAd = metrics.some(fromAdRows);
-  const wantCampaign = metrics.some((m) => !fromAdRows(m));
+  const wantAd = metrics.some((m) => fromAdRows(m, platform));
+  const wantCampaign = metrics.some((m) => !fromAdRows(m, platform));
   // One kind of result per day table, so its column adds up.
   const f = needs(metrics, "results") ? await L.resultFocus(platform, q.resultType) : null;
   const focus: ResultFocus = f?.type?.key ?? null;
@@ -985,11 +1035,11 @@ async function dailyTableData(
     L.currency(platform),
     wantCampaign ? L.days(platform, "cur", metrics, false, focus) : Promise.resolve(null),
     wantAd ? L.days(platform, "cur", metrics, true) : Promise.resolve(null),
-    L.coverageNotes({ adRows: wantAd, audience: false }),
+    L.coverageNotes({ adRows: wantAd, audience: false, extras: { platform, metrics } }),
   ]);
   const notes = [...resultNotes(f, metrics, currency, { counting: true }), ...coverage];
   const base = (campaignDays ?? adDays) as Row[];
-  const source = (m: MetricId): Row[] => ((fromAdRows(m) ? adDays : campaignDays) ?? base);
+  const source = (m: MetricId): Row[] => ((fromAdRows(m, platform) ? adDays : campaignDays) ?? base);
 
   const rows: TableRow[] = base.map((d, i) => ({
     key: d.key,
@@ -1028,7 +1078,7 @@ async function tableData(
   const [currency, splitRows, coverage, opts] = await Promise.all([
     L.currency(platform),
     L.split(platform, dimension, metrics, focus),
-    L.coverageNotes({ adRows: usesAdRows(dimension), audience }),
+    L.coverageNotes({ adRows: usesAdRows(dimension), audience, extras: { platform, metrics } }),
     dimension === "campaign" ? campaignOptions(L, platform) : Promise.resolve({}),
   ]);
   const notes = [...resultNotes(f, metrics, currency), ...coverage];

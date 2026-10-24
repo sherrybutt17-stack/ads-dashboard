@@ -8,7 +8,7 @@ import {
   type FunnelCounts,
   type RevenueTotals,
 } from "@/lib/metrics/compute";
-import type { MetricId } from "./catalog";
+import { METRICS, type BagRef, type MetricCalc, type MetricId } from "./catalog";
 
 /**
  * The raw components every stat is computed from, for one row of anything — a
@@ -55,6 +55,19 @@ export interface Bag {
   resultCount: number;
   resultSpend: number;
   resultPricedCount: number;
+  /**
+   * Every other figure the platform reports, by key (`metrics/platform-extras.ts`)
+   * — Google's all conversions, TikTok's likes, Meta's registrations. Additive,
+   * summed key by key; a key a row lacks counts as zero.
+   */
+  x: Readonly<Record<string, number>>;
+  /**
+   * Per extra figure: delivery days in this row stored before it was
+   * collected (Google's and TikTok's, until history is re-pulled). Its sum
+   * then covers fewer days than spend does, so a cost or rate built on it
+   * would mix two different ranges — `calculate` refuses one.
+   */
+  xMissing: Readonly<Record<string, number>>;
   /** CRM counts, when loaded for this row. */
   funnel: FunnelCounts | null;
   /** Closed-won values, when loaded for this row. */
@@ -86,6 +99,8 @@ export const EMPTY_BAG: Bag = Object.freeze({
   resultCount: 0,
   resultSpend: 0,
   resultPricedCount: 0,
+  x: Object.freeze({}),
+  xMissing: Object.freeze({}),
   funnel: null,
   revenue: null,
   reach: null,
@@ -119,13 +134,22 @@ const ADDITIVE_KEYS = [
 export type AdditiveKey = (typeof ADDITIVE_KEYS)[number];
 
 export function bag(parts: Partial<Bag>): Bag {
-  return { ...EMPTY_BAG, ...parts };
+  // Copies of the extras, never the frozen empty maps shared by every bag.
+  return { ...EMPTY_BAG, ...parts, x: { ...(parts.x ?? {}) }, xMissing: { ...(parts.xMissing ?? {}) } };
+}
+
+function addX(a: Bag["x"], b: Bag["x"]): Record<string, number> {
+  const out: Record<string, number> = { ...a };
+  for (const [k, v] of Object.entries(b)) out[k] = (out[k] ?? 0) + v;
+  return out;
 }
 
 /** Sum two rows. Reach never survives a sum. */
 export function addBags(a: Bag, b: Bag): Bag {
   const out: Bag = { ...EMPTY_BAG };
   for (const k of ADDITIVE_KEYS) out[k] = a[k] + b[k];
+  out.x = addX(a.x, b.x);
+  out.xMissing = addX(a.xMissing, b.xMissing);
   out.funnel =
     a.funnel && b.funnel ? sumFunnels([a.funnel, b.funnel]) : (a.funnel ?? b.funnel);
   out.revenue =
@@ -145,7 +169,37 @@ export function sumBags(rows: readonly Bag[]): Bag {
 export function remainder(whole: Bag, parts: Bag): Bag {
   const out: Bag = { ...EMPTY_BAG };
   for (const k of ADDITIVE_KEYS) out[k] = Math.max(0, whole[k] - parts[k]);
+  out.x = Object.fromEntries(
+    Object.entries(whole.x).map(([k, v]) => [k, Math.max(0, v - (parts.x[k] ?? 0))]),
+  );
   return out;
+}
+
+/** One quantity of a row: a base count, or an extra figure by key (absent = zero). */
+function quantity(b: Bag, ref: BagRef): number {
+  if (ref.startsWith("x.")) return b.x[ref.slice(2)] ?? 0;
+  return b[ref as Exclude<BagRef, `x.${string}`>];
+}
+
+/** An extra figure some of this row's delivery days were stored without. */
+function partial(b: Bag, ref: BagRef): boolean {
+  return ref.startsWith("x.") && (b.xMissing[ref.slice(2)] ?? 0) > 0;
+}
+
+/**
+ * A `MetricDef.calc`, from one row's summed components.
+ *
+ * A sum over partly collected days is still a true count of what was
+ * collected, and the widget's note says days are missing. A cost or a rate is
+ * not: dividing 28 days of interactions by 90 days of impressions prints a
+ * confident number that is a third of the truth. So those have no value until
+ * history is re-pulled.
+ */
+function calculate(c: MetricCalc, b: Bag): number | null {
+  if ("sum" in c) return quantity(b, c.sum);
+  if ("per" in c) return partial(b, c.per) ? null : costPer(b.spend, quantity(b, c.per));
+  if (c.ratio.some((r) => partial(b, r))) return null;
+  return div(quantity(b, c.ratio[0]), quantity(b, c.ratio[1]));
 }
 
 export function adTotalsOf(b: Bag): AdTotals {
@@ -176,6 +230,8 @@ export interface MetricOptions {
 
 /** Any stat, from one row's components. Null means "no honest value". */
 export function metricValue(id: MetricId, b: Bag, opts: MetricOptions = {}): number | null {
+  const calc = METRICS[id].calc;
+  if (calc) return calculate(calc, b);
   switch (id) {
     case "spend":
       return b.spend;

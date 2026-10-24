@@ -567,7 +567,10 @@ export function WidgetPicker({
                       onChange={(e) => update({ metric: e.target.value as MetricId })}
                     >
                       {METRIC_GROUPS.map((g) => {
-                        const inGroup = METRIC_IDS.filter((m) => METRICS[m].group === g);
+                        // The chosen source's own stats only — each platform reports its own set.
+                        const inGroup = METRIC_IDS.filter(
+                          (m) => METRICS[m].group === g && metricSupports(m, draft.platform),
+                        );
                         if (inGroup.length === 0) return null;
                         return (
                           <optgroup key={g} label={g}>
@@ -776,8 +779,17 @@ function TableFields({
   update: (patch: Partial<Draft>) => void;
   ids: string;
 }) {
+  const [filter, setFilter] = useState("");
   const dims = tableDimensions(draft.platform);
   const full = draft.columns.length >= TABLE_COLUMNS.max;
+  const available = METRIC_IDS.filter((m) => metricSupports(m, draft.platform));
+  const needle = filter.trim().toLowerCase();
+  const groups = METRIC_GROUPS.map((g) => ({
+    group: g,
+    stats: available.filter(
+      (m) => METRICS[m].group === g && (!needle || metricLabel(m, draft.platform).toLowerCase().includes(needle)),
+    ),
+  })).filter((g) => g.stats.length > 0);
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_100px]">
@@ -825,33 +837,56 @@ function TableFields({
         <legend className="mb-1.5 text-[11px] font-semibold tracking-[0.06em] uppercase" style={{ color: "var(--text-muted)" }}>
           Columns ({draft.columns.length} of at most {TABLE_COLUMNS.max})
         </legend>
-        <div className="grid max-h-[200px] grid-cols-1 gap-x-4 gap-y-1 overflow-y-auto sm:grid-cols-2">
-          {METRIC_IDS.filter((m) => metricSupports(m, draft.platform)).map((m) => {
-            const fits = columnFits(m, draft);
-            const on = draft.columns.includes(m);
-            return (
-              <label
-                key={m}
-                className="flex items-center gap-2 text-[12.5px]"
-                style={{ color: fits ? "var(--text-secondary)" : "var(--text-muted)" }}
-                title={fits ? undefined : `Not available per ${dimensionLabel(draft.tableDimension).toLowerCase()}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={on}
-                  disabled={!fits || (!on && full) || (on && draft.columns.length <= TABLE_COLUMNS.min)}
-                  onChange={(e) =>
-                    update({
-                      columns: e.target.checked
-                        ? [...draft.columns, m]
-                        : draft.columns.filter((c) => c !== m),
-                    })
-                  }
-                />
-                {metricLabel(m, draft.platform)}
-              </label>
-            );
-          })}
+        {available.length > 12 && (
+          <input
+            className="field mb-1 w-full"
+            placeholder="Find a stat"
+            aria-label="Find a stat"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        )}
+        <div className="flex max-h-[220px] flex-col gap-2.5 overflow-y-auto pr-1">
+          {groups.map(({ group, stats }) => (
+            <div key={group} role="group" aria-label={group} className="flex flex-col gap-1">
+              <span className="text-[10.5px] font-semibold tracking-[0.06em] uppercase" style={{ color: "var(--text-muted)" }}>
+                {group}
+              </span>
+              <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+                {stats.map((m) => {
+                  const fits = columnFits(m, draft);
+                  const on = draft.columns.includes(m);
+                  return (
+                    <label
+                      key={m}
+                      className="flex items-center gap-2 text-[12.5px]"
+                      style={{ color: fits ? "var(--text-secondary)" : "var(--text-muted)" }}
+                      title={fits ? undefined : `Not available per ${dimensionLabel(draft.tableDimension).toLowerCase()}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={!fits || (!on && full) || (on && draft.columns.length <= TABLE_COLUMNS.min)}
+                        onChange={(e) =>
+                          update({
+                            columns: e.target.checked
+                              ? [...draft.columns, m]
+                              : draft.columns.filter((c) => c !== m),
+                          })
+                        }
+                      />
+                      {metricLabel(m, draft.platform)}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {groups.length === 0 && (
+            <p className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
+              No stat matches “{filter.trim()}”.
+            </p>
+          )}
         </div>
       </fieldset>
     </>

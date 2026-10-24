@@ -2,15 +2,22 @@ import { describe, it, expect } from "vitest";
 import { METRIC_POLARITY } from "@/lib/metrics/compute";
 import { METRIC_DEFINITIONS } from "@/lib/metrics/definitions";
 import { AD_PLATFORMS } from "@/lib/platforms";
+import { EXTRA_KEY, extraKeysFor } from "@/lib/metrics/platform-extras";
+import { EMPTY_BAG } from "./bag";
 import {
   METRICS,
+  METRIC_GROUPS,
   METRIC_IDS,
   PRESETS,
   checkWidget,
   canBeCircle,
   defaultTitle,
   metricDims,
+  metricExtraKeys,
+  metricFromAdRows,
+  metricLabel,
   metricSeries,
+  metricsFor,
   starterBoard,
   type MetricId,
 } from "./catalog";
@@ -62,7 +69,7 @@ describe("every stat explains itself", () => {
       "fb_onsite_leads", "cp_onsite_lead", "fb_pixel_leads", "cp_pixel_lead",
       "reach", "frequency",
       "landing_page_views", "land_rate", "video_3s_views", "hook_rate", "hold_rate", "thruplays",
-      "post_reactions", "comments", "shares", "saves", "page_likes", "post_engagement",
+      "post_reactions", "likes", "comments", "shares", "saves", "page_likes", "post_engagement",
       "purchases", "cp_purchase",
       // Each platform's own results: counts and spend, no lead details.
       "results", "cost_per_result",
@@ -70,7 +77,85 @@ describe("every stat explains itself", () => {
       "cp_lead", "cp_appt", "cp_show", "cp_won",
       "book_pct", "show_pct", "close_pct", "optin_pct",
       "qualified_leads", "revenue", "roas", "avg_deal",
+      // Every other figure each platform reports: totals per campaign, ad or
+      // day, and costs and rates of them — none names a person.
+      "cp_lpv", "outbound_clicks", "outbound_ctr", "cp_outbound_click",
+      "page_engagement", "photo_views", "post_engagement_rate", "cp_engagement", "cp_page_like",
+      "video_views", "view_rate", "cpv", "video_2s", "video_6s",
+      "video_plays", "video_p25", "video_p50", "video_p75", "video_p95", "video_p100",
+      "cp_thruplay", "cp_3s_play",
+      "registrations", "cp_registration", "contacts", "cp_contact", "schedules", "cp_schedule",
+      "applications", "cp_application", "adds_to_cart", "cp_add_to_cart", "checkouts", "cp_checkout",
+      "content_views", "cp_content_view", "calls_placed", "cp_call",
+      "messaging_conversations", "cp_messaging_conversation",
+      "all_conversions", "cp_all_conversion", "conversion_value", "conv_value_per_cost",
+      "all_conversions_value", "view_through_conversions", "conversion_rate",
+      "interactions", "interaction_rate", "engagements", "engagement_rate", "phone_calls",
+      "conversions", "cp_conversion", "cvr", "follows", "cp_follow", "profile_visits",
     ]);
+  });
+});
+
+describe("every platform stat reads something its platform stores", () => {
+  it("🔴 reads only extra figures a platform's sync writes", () => {
+    for (const id of METRIC_IDS) {
+      for (const p of METRICS[id].platforms) {
+        const stored = new Set(extraKeysFor(p));
+        for (const key of metricExtraKeys(id)) {
+          expect(stored.has(key), `${id} on ${p} reads x.${key}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("computes from quantities a bag has", () => {
+    for (const id of METRIC_IDS) {
+      const c = METRICS[id].calc;
+      if (!c) continue;
+      const refs = "sum" in c ? [c.sum] : "per" in c ? [c.per] : [...c.ratio];
+      for (const r of refs) {
+        if (r.startsWith("x.")) expect(r.slice(2), `${id}: ${r}`).toMatch(EXTRA_KEY);
+        else expect(typeof EMPTY_BAG[r as keyof typeof EMPTY_BAG], `${id}: ${r}`).toBe("number");
+      }
+    }
+  });
+
+  it("puts every stat under a heading the picker shows", () => {
+    for (const id of METRIC_IDS) expect(METRIC_GROUPS, id).toContain(METRICS[id].group);
+  });
+
+  it("keeps a cost a cost and a count a count", () => {
+    for (const id of METRIC_IDS) {
+      const c = METRICS[id].calc;
+      if (!c) continue;
+      if ("per" in c) {
+        expect(METRICS[id].format, id).toBe("currency");
+        expect(METRICS[id].additive, id).toBe(false);
+      }
+      if ("ratio" in c) expect(METRICS[id].additive, id).toBe(false);
+    }
+  });
+
+  it("gives each platform its own word where it has one", () => {
+    expect(metricLabel("comments", "tiktok")).toBe("Comments");
+    expect(metricLabel("comments", "meta")).toBe("Post comments");
+    expect(metricLabel("video_p25", "tiktok")).toBe("Video views at 25%");
+    expect(metricLabel("cpv", "google")).toBe("Avg. CPV");
+  });
+
+  it("reads Meta's quartiles from its ad rows, and TikTok's from its daily rows", () => {
+    expect(metricFromAdRows("video_p25", "meta")).toBe(true);
+    expect(metricFromAdRows("video_p25", "tiktok")).toBe(false);
+    expect(metricDims("video_p25", "meta")).toEqual(["adset", "ad", "creative"]);
+    expect(metricDims("video_p25", "tiktok")).toEqual(["campaign"]);
+  });
+
+  it("lists each platform's stats apart — no Google figure on Meta", () => {
+    const google = metricsFor("google");
+    expect(google).toEqual(expect.arrayContaining(["all_conversions", "conversion_value", "interactions", "video_views", "phone_calls"]));
+    expect(metricsFor("meta")).not.toContain("all_conversions");
+    expect(metricsFor("tiktok")).toEqual(expect.arrayContaining(["likes", "follows", "comments", "video_p25", "conversions"]));
+    expect(metricsFor("google")).not.toContain("likes");
   });
 });
 

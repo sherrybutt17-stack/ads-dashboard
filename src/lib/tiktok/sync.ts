@@ -10,7 +10,8 @@ import {
 } from "@/db/schema";
 import { decryptNullable } from "@/lib/crypto";
 import { todayKey, trailingWindowInclusive } from "@/lib/dates";
-import { TiktokClient, dayOf, num } from "./client";
+import { TIKTOK_EXTRAS, storedFigure } from "@/lib/metrics/platform-extras";
+import { TiktokClient, dayOf, num, type TiktokInsightRow } from "./client";
 import { activeTiktokAccounts } from "./accounts";
 
 /**
@@ -274,8 +275,56 @@ async function syncAccount(
     );
   }
 
+  /*
+   * Engagement and video figures, from a third best-effort report, stored in
+   * `raw.x` under our own keys (`TIKTOK_EXTRAS`). A field TikTok refused is
+   * left out of every row, so the Board reads it as not collected, not as 0.
+   */
+  let extras: Map<string, Record<string, number>> | null = null;
+  let none: Record<string, number> = {};
+  try {
+    const { rows: list, fields } = await tiktok.getDailyExtras(account.advertiserId, since, until);
+    const accepted = (Object.entries(TIKTOK_EXTRAS) as Array<[string, string]>).filter(([, f]) =>
+      fields.includes(f),
+    );
+    none = Object.fromEntries(accepted.map(([key]) => [key, 0]));
+    extras = new Map();
+    for (const r of list) {
+      const day = dayOf(r.statTimeDay);
+      if (!day) continue;
+      const k = `${r.campaignId}|${day}`;
+      const prev = extras.get(k) ?? none;
+      extras.set(
+        k,
+        Object.fromEntries(accepted.map(([key, f]) => [key, storedFigure((prev[key] ?? 0) + (r.metrics[f] ?? 0))])),
+      );
+    }
+  } catch (err) {
+    extras = null;
+    console.warn(
+      `[tiktok] extra figures report failed for ${account.advertiserId}; spend synced without them:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  /*
+   * A campaign-day with likes or plays and no delivery (a video still being
+   * liked the day after its campaign stopped) is not in the spend report, so
+   * it gets a row of its own with zero delivery — or those figures would be
+   * missing from every total.
+   */
+  const seen = new Set(
+    rows.map((row) => `${row.dimensions.campaign_id ?? ""}|${dayOf(row.dimensions.stat_time_day) ?? ""}`),
+  );
+  const extraOnly: TiktokInsightRow[] = [...(extras ?? [])]
+    .filter(([k, figures]) => !seen.has(k) && Object.values(figures).some((v) => v !== 0))
+    .map(([k]) => {
+      const [campaignId, day] = k.split("|");
+      return { dimensions: { campaign_id: campaignId, stat_time_day: day }, metrics: {} };
+    });
+
   let written = 0;
-  for (const row of rows) {
+  for (const row of [...rows, ...extraOnly]) {
     const date = dayOf(row.dimensions.stat_time_day);
     // A row we cannot date cannot be stored against a day, and guessing today
     // would put yesterday's spend on the wrong side of a month boundary.
@@ -291,9 +340,15 @@ async function syncAccount(
     const objective =
       typeof row.metrics.objective_type === "string" ? row.metrics.objective_type : null;
     const found = results?.get(`${campaignId}|${date}`);
-    const raw = results
-      ? { ...row, results: { value: found?.value ?? 0, objective: found?.objective ?? objective } }
-      : row;
+    // A day with no delivery has no objective of its own to count results under.
+    const delivered = !extraOnly.includes(row);
+    const raw = {
+      ...row,
+      ...(results && (delivered || found)
+        ? { results: { value: found?.value ?? 0, objective: found?.objective ?? objective } }
+        : {}),
+      ...(extras ? { x: extras.get(`${campaignId}|${date}`) ?? none } : {}),
+    };
 
     await db
       .insert(tiktokDailyMetrics)
@@ -321,7 +376,8 @@ async function syncAccount(
         // Upsert, so the trailing re-pull corrects restated figures rather than
         // duplicating them — the same self-healing property the Meta sync has.
         set: {
-          campaignName: typeof name === "string" ? name : null,
+          // A day with extra figures only has no name to give; keep the stored one.
+          campaignName: sql`COALESCE(excluded.campaign_name, ${tiktokDailyMetrics.campaignName})`,
           impressions: num(row.metrics.impressions),
           clicks: num(row.metrics.clicks),
           spend: String(num(row.metrics.spend)),

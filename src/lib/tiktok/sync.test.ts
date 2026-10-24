@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { sql } from "drizzle-orm";
 import type { Client } from "@/db/schema";
 import { createTestDb, type TestDb } from "@/lib/metrics/__testdb__/harness";
+import { TIKTOK_EXTRAS } from "@/lib/metrics/platform-extras";
 
 /**
  * The TikTok ingest run.
@@ -38,6 +39,8 @@ let insightRows: unknown[] = [];
 let insightsError: Error | null = null;
 let adgroupRows: unknown[] = [];
 let adgroupError: Error | null = null;
+/** What `getDailyExtras` answers; null = the method fails. */
+let extrasAnswer: { rows: unknown[]; fields: string[] } | null = null;
 const calls: { advertiser: string; since: string; until: string }[] = [];
 
 vi.mock("./client", async (importOriginal) => {
@@ -55,6 +58,10 @@ vi.mock("./client", async (importOriginal) => {
       async getAdgroupResults() {
         if (adgroupError) throw adgroupError;
         return adgroupRows;
+      }
+      async getDailyExtras() {
+        if (!extrasAnswer) throw new Error("extras report unavailable");
+        return extrasAnswer;
       }
     },
   };
@@ -152,6 +159,7 @@ beforeEach(async () => {
   insightsError = null;
   adgroupRows = [];
   adgroupError = null;
+  extrasAnswer = null;
   await run(
     `TRUNCATE sync_runs, tiktok_daily_metrics, tiktok_ad_accounts, clients RESTART IDENTITY CASCADE`,
   );
@@ -430,6 +438,75 @@ describe("syncClientTiktokMetrics — results", () => {
     const [row] = (await run(`SELECT spend FROM tiktok_daily_metrics`)).rows;
     expect(Number(row.spend)).toBe(200);
     expect(await results()).toEqual({ value: 12, objective: "LEAD_GENERATION" });
+  });
+});
+
+describe("syncClientTiktokMetrics — extra figures", () => {
+  const ALL_FIELDS = Object.values(TIKTOK_EXTRAS);
+  const extraRow = (campaign: string, day: string, metrics: Record<string, number>) => ({
+    campaignId: campaign,
+    statTimeDay: day,
+    metrics,
+  });
+  const stored = async () =>
+    (await run(`SELECT tiktok_campaign_id AS c, date::text AS d, raw->'x' AS x, impressions, campaign_name FROM tiktok_daily_metrics ORDER BY date, tiktok_campaign_id`))
+      .rows as Array<{ c: string; d: string; x: Record<string, number> | null; impressions: number; campaign_name: string | null }>;
+
+  it("stores each campaign-day's figures under our own keys", async () => {
+    extrasAnswer = {
+      fields: ALL_FIELDS,
+      rows: [extraRow("tcamp_1", "2026-07-20 00:00:00", { likes: 12, comments: 3, video_play_actions: 900, video_views_p25: 400 })],
+    };
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+    const [row] = await stored();
+    expect(row.x).toMatchObject({ likes: 12, comments: 3, video_views: 900, video_p25: 400, follows: 0 });
+    expect(Object.keys(row.x!).sort()).toEqual(Object.keys(TIKTOK_EXTRAS).sort());
+  });
+
+  it("🔴 leaves a refused field out of the row, so it reads as not collected rather than zero", async () => {
+    extrasAnswer = {
+      fields: ALL_FIELDS.filter((f) => f !== "profile_visits"),
+      rows: [extraRow("tcamp_1", "2026-07-20 00:00:00", { likes: 5 })],
+    };
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+    const [row] = await stored();
+    expect(row.x).toMatchObject({ likes: 5 });
+    expect(row.x).not.toHaveProperty("profile_visits");
+  });
+
+  it("🔴 a failed extras report still writes spend, and keeps the figures already stored", async () => {
+    extrasAnswer = { fields: ALL_FIELDS, rows: [extraRow("tcamp_1", "2026-07-20 00:00:00", { likes: 7 })] };
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+
+    extrasAnswer = null;
+    insightRows = [insight({ spend: "300.00" })];
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+
+    const [row] = await stored();
+    expect(row.x).toMatchObject({ likes: 7 });
+    expect(Number((await run(`SELECT spend FROM tiktok_daily_metrics`)).rows[0].spend)).toBe(300);
+  });
+
+  it("writes a day with figures and no delivery, and keeps its campaign's name", async () => {
+    // Day one: delivery, so the campaign has a name.
+    extrasAnswer = { fields: ALL_FIELDS, rows: [] };
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+    // A re-pull: no delivery that day now, but the video is still being liked.
+    insightRows = [];
+    extrasAnswer = {
+      fields: ALL_FIELDS,
+      rows: [
+        extraRow("tcamp_1", "2026-07-20 00:00:00", { likes: 4 }),
+        // All zeros: nothing to record, so no row is invented.
+        extraRow("tcamp_9", "2026-07-20 00:00:00", {}),
+      ],
+    };
+    await mod.syncClientTiktokMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+    const rows = await stored();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ c: "tcamp_1", impressions: 0 });
+    expect(rows[0].campaign_name).not.toBeNull();
+    expect(rows[0].x).toMatchObject({ likes: 4 });
   });
 });
 

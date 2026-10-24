@@ -189,6 +189,106 @@ describe("getMetaAdLevel", () => {
   });
 });
 
+describe("Meta's other action families and ad-row figures", () => {
+  it("🔴 counts each family once — the first type present on a row wins", async () => {
+    // One registration, reported three ways; one contact, two ways.
+    await fact({
+      date: "2026-09-01",
+      raw: actions({
+        omni_complete_registration: "2",
+        complete_registration: "2",
+        "offsite_conversion.fb_pixel_complete_registration": "2",
+        contact_website: "1",
+        "offsite_conversion.fb_pixel_contact": "1",
+        "onsite_conversion.messaging_conversation_started_7d": "5",
+      }),
+    });
+    // Only the pixel's type on this row: it is the count.
+    await fact({ date: "2026-09-02", campaign: "c2", raw: actions({ "offsite_conversion.fb_pixel_complete_registration": "3" }) });
+
+    const [total] = await bq.getMetaCampaignExtras(CLIENT_A, SEPT, "total");
+    expect(total.x.registrations).toBe(5);
+    expect(total.x.contacts).toBe(1);
+    expect(total.x.messaging_conversations).toBe(5);
+    expect(total.x.checkouts).toBe(0);
+    const byCampaign = await bq.getMetaCampaignExtras(CLIENT_A, SEPT, "campaign");
+    expect(byCampaign.find((r) => r.key === "c2")?.x.registrations).toBe(3);
+  });
+
+  it("carries outbound clicks and the quartiles from ad rows, beside the action families", async () => {
+    await fact({ date: "2026-09-01", level: "ad", ad: "a1", raw: actions({ schedule_total: "2" }) });
+    await fact({ date: "2026-09-02", level: "ad", ad: "a1" });
+    await harness.db.execute(sql`
+      UPDATE fb_daily_metrics SET outbound_clicks = 9, video_p25 = 40, video_p100 = 4 WHERE meta_ad_id = 'a1'`);
+    const [ad] = await bq.getMetaAdLevel(CLIENT_A, SEPT, "ad");
+    expect(ad.x).toMatchObject({ outbound_clicks: 18, video_p25: 80, video_p100: 8, schedules: 2 });
+    const [pair] = await bq.getMetaAdCreativePairs(CLIENT_A, SEPT);
+    expect(pair.x).toMatchObject({ outbound_clicks: 18, video_p25: 80, schedules: 2 });
+  });
+});
+
+describe("getSimpleExtras", () => {
+  beforeEach(async () => {
+    await harness.db.execute(sql`DELETE FROM google_daily_metrics`);
+    await harness.db.execute(sql`DELETE FROM tiktok_daily_metrics`);
+  });
+
+  async function googleRow(o: {
+    client?: string;
+    date: string;
+    campaign?: string;
+    spend?: number;
+    impressions?: number;
+    conversions?: number;
+    raw?: unknown;
+  }) {
+    await harness.db.execute(sql`
+      INSERT INTO google_daily_metrics (client_id, customer_id, date, google_campaign_id, spend, impressions, conversions, raw)
+      VALUES (${o.client ?? CLIENT_A}, '1', ${o.date}, ${o.campaign ?? "g1"}, ${o.spend ?? 10}, ${o.impressions ?? 100},
+              ${o.conversions ?? 0}, ${o.raw === undefined ? null : JSON.stringify(o.raw)}::jsonb)`);
+  }
+
+  const XC = { all_conversions: 2.5, all_conversions_value: 300, conversions_value: 250, view_through_conversions: 1 };
+  const XE = { interactions: 40, engagements: 0, video_views: 7, phone_calls: 1 };
+
+  it("sums Google's two families and its conversions column, by day and campaign, for this client only", async () => {
+    await googleRow({ date: "2026-09-01", conversions: 2, raw: { xc: XC, xe: XE } });
+    await googleRow({ date: "2026-09-02", campaign: "g2", conversions: 1, raw: { xc: XC, xe: XE } });
+    await googleRow({ client: CLIENT_B, date: "2026-09-01", conversions: 50, raw: { xc: XC, xe: XE } });
+    const [total] = await bq.getSimpleExtras("google", CLIENT_A, SEPT, "total");
+    expect(total.x).toMatchObject({ all_conversions: 5, conversions_value: 500, interactions: 80, video_views: 14, conversions: 3 });
+    expect(total.uncollected.interactions).toBe(0);
+    const days = await bq.getSimpleExtras("google", CLIENT_A, SEPT, "day");
+    expect(days.map((d) => d.key).sort()).toEqual(["2026-09-01", "2026-09-02"]);
+    const campaigns = await bq.getSimpleExtras("google", CLIENT_A, SEPT, "campaign");
+    expect(campaigns.find((c) => c.key === "g2")?.x.phone_calls).toBe(1);
+  });
+
+  it("🔴 counts the delivery days synced before a family was collected, figure by figure", async () => {
+    await googleRow({ date: "2026-09-01", raw: { xc: XC } }); // the engagement family failed that night
+    await googleRow({ date: "2026-09-02", raw: { campaignId: "g1" } }); // synced before either existed
+    await googleRow({ date: "2026-09-03" }); // no raw at all
+    await googleRow({ date: "2026-09-04", spend: 0, impressions: 0 }); // no delivery: nothing missing
+    const [total] = await bq.getSimpleExtras("google", CLIENT_A, SEPT, "total");
+    expect(total.uncollected.all_conversions).toBe(2);
+    expect(total.uncollected.interactions).toBe(3);
+  });
+
+  it("reads TikTok's figures from raw.x, and shrugs off junk", async () => {
+    await harness.db.execute(sql`
+      INSERT INTO tiktok_daily_metrics (client_id, advertiser_id, date, tiktok_campaign_id, spend, impressions, conversions, raw)
+      VALUES (${CLIENT_A}, 'adv', '2026-09-01', 't1', 20, 500, 4, ${JSON.stringify({ x: { likes: 12, comments: "3", follows: "lots" } })}::jsonb),
+             (${CLIENT_A}, 'adv', '2026-09-02', 't1', 20, 500, 1, ${JSON.stringify({ metrics: {} })}::jsonb)`);
+    const [total] = await bq.getSimpleExtras("tiktok", CLIENT_A, SEPT, "total");
+    expect(total.x).toMatchObject({ likes: 12, comments: 3, follows: 0, conversions: 5 });
+    // The second day was synced before the figures existed. "lots" on the first
+    // is collected but unreadable, so it reads as zero and is not missing.
+    expect(total.uncollected.likes).toBe(1);
+    expect(total.uncollected.follows).toBe(1);
+    expect(total.uncollected.profile_visits).toBe(2);
+  });
+});
+
 describe("getMetaCoverage", () => {
   it("reports where each kind of row starts", async () => {
     await fact({ date: "2026-06-01" });

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { TiktokApiError, TiktokClient, normalizeAdvertiserId, num } from "./client";
+import { TiktokApiError, TiktokClient, normalizeAdvertiserId, num, refusedMetrics } from "./client";
+import { TIKTOK_EXTRAS } from "@/lib/metrics/platform-extras";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -352,5 +353,66 @@ describe("results fields", () => {
     expect(rows).toEqual([
       { campaignId: "c1", statTimeDay: "2026-07-01 00:00:00", result: 48, objective: "LEAD_GENERATION" },
     ]);
+  });
+});
+
+describe("extra figures", () => {
+  const ok = (list: unknown[] = []) =>
+    envelope({ code: 0, data: { list, page_info: { total_page: 1 } } });
+  const sentMetrics = (spy: ReturnType<typeof stubFetch>, i = 0) =>
+    JSON.parse(new URL(String(spy.mock.calls[i][0])).searchParams.get("metrics")!) as string[];
+
+  it("asks for every extra figure, campaign by day", async () => {
+    const spy = stubFetch(async () => ok());
+    const { fields } = await client().getDailyExtras("7012345678901234567", "2026-07-01", "2026-07-02");
+    const params = new URL(String(spy.mock.calls[0][0])).searchParams;
+    expect(params.get("data_level")).toBe("AUCTION_CAMPAIGN");
+    expect(JSON.parse(params.get("dimensions")!)).toEqual(["campaign_id", "stat_time_day"]);
+    expect(sentMetrics(spy)).toEqual(Object.values(TIKTOK_EXTRAS));
+    expect(fields).toEqual(Object.values(TIKTOK_EXTRAS));
+  });
+
+  it("returns each campaign-day's figures as numbers", async () => {
+    stubFetch(async () =>
+      ok([
+        {
+          dimensions: { campaign_id: "c1", stat_time_day: "2026-07-01 00:00:00" },
+          metrics: { likes: "12", comments: "3", video_play_actions: "900", follows: null },
+        },
+      ]),
+    );
+    const { rows } = await client().getDailyExtras("7012345678901234567", "2026-07-01", "2026-07-02");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ campaignId: "c1", statTimeDay: "2026-07-01 00:00:00" });
+    expect(rows[0].metrics).toMatchObject({ likes: 12, comments: 3, video_play_actions: 900, follows: 0 });
+  });
+
+  it("🔴 retries without the fields a 40002 names, and says which came back", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const spy = stubFetch(async (url) => {
+      const metrics = new URL(String(url)).searchParams.get("metrics") ?? "";
+      return metrics.includes("profile_visits")
+        ? envelope({ code: 40002, message: "Please correct the information in invalid metric fields and try again. Invalid metric fields: ['profile_visits', 'follows']." })
+        : ok();
+    });
+    const { fields } = await client().getDailyExtras("7012345678901234567", "2026-07-01", "2026-07-02");
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(sentMetrics(spy, 1)).not.toContain("profile_visits");
+    expect(fields).not.toContain("follows");
+    expect(fields).toContain("likes");
+  });
+
+  it("gives up on a refusal it cannot narrow", async () => {
+    const spy = stubFetch(async () => envelope({ code: 40002, message: "max time span is 30 days" }));
+    await expect(
+      client().getDailyExtras("7012345678901234567", "2026-07-01", "2026-07-02"),
+    ).rejects.toBeInstanceOf(TiktokApiError);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the field names out of a 40002", () => {
+    expect(refusedMetrics(new TiktokApiError("Invalid metric fields: ['a_b', \"c\"].", 40002))).toEqual(["a_b", "c"]);
+    expect(refusedMetrics(new TiktokApiError("Invalid metric fields: ['a'].", 40001))).toEqual([]);
+    expect(refusedMetrics(new Error("Invalid metric fields: ['a']"))).toEqual([]);
   });
 });

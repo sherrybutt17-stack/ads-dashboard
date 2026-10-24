@@ -23,6 +23,8 @@
  * crash.
  */
 
+import { TIKTOK_EXTRAS } from "@/lib/metrics/platform-extras";
+
 const BASE = "https://business-api.tiktok.com/open_api";
 const VERSION = "v1.3";
 
@@ -124,6 +126,21 @@ const OBJECTIVE_METRIC = "objective_type";
 export function isOptionalMetricRefusal(err: unknown, fields: readonly string[]): boolean {
   if (!(err instanceof TiktokApiError) || err.code !== 40002) return false;
   return fields.some((f) => err.message.includes(f));
+}
+
+/** The fields a 40002 names ("Invalid metric fields: ['a', 'b']"), or [] if it names none. */
+export function refusedMetrics(err: unknown): string[] {
+  if (!(err instanceof TiktokApiError) || err.code !== 40002) return [];
+  const list = /Invalid metric fields:\s*\[([^\]]*)\]/i.exec(err.message)?.[1] ?? "";
+  return [...list.matchAll(/['"]([a-z0-9_]+)['"]/gi)].map((m) => m[1]);
+}
+
+/** One campaign-day's extra figures, by TikTok's own metric names. */
+export interface TiktokExtrasRow {
+  campaignId: string;
+  /** "YYYY-MM-DD 00:00:00", as the report sends it. */
+  statTimeDay: string;
+  metrics: Record<string, number>;
 }
 
 /** One ad group's results on one day, for summing up to its campaign. */
@@ -436,6 +453,89 @@ export class TiktokClient {
       throw new TiktokApiError(
         `TikTok ad group report for ${advertiser} spans ${totalPages} pages (cap ${MAX_PAGES}); ` +
           `refusing to report partial results`,
+        -1,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Engagement and video figures per campaign-day — likes, comments, shares,
+   * follows, profile visits, plays and quartiles (`TIKTOK_EXTRAS`).
+   *
+   * Best-effort, like the results report: the sync catches any failure and
+   * spend never depends on it. A 40002 naming some of the fields is retried
+   * without them (twice at most), and `fields` says which came back, so a
+   * refused field is stored as missing rather than as zero.
+   */
+  async getDailyExtras(
+    advertiserId: string,
+    startKey: string,
+    endKey: string,
+  ): Promise<{ rows: TiktokExtrasRow[]; fields: string[] }> {
+    let fields: string[] = Object.values(TIKTOK_EXTRAS);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return { rows: await this.extrasReport(advertiserId, startKey, endKey, fields), fields };
+      } catch (err) {
+        const refused = refusedMetrics(err);
+        const left = fields.filter((f) => !refused.includes(f));
+        if (attempt >= 2 || refused.length === 0 || left.length === fields.length || left.length === 0) {
+          throw err;
+        }
+        console.warn("[tiktok] extras report refused", refused.join(", "), "; retrying without them");
+        fields = left;
+      }
+    }
+  }
+
+  private async extrasReport(
+    advertiserId: string,
+    startKey: string,
+    endKey: string,
+    fields: readonly string[],
+  ): Promise<TiktokExtrasRow[]> {
+    const advertiser = normalizeAdvertiserId(advertiserId);
+    const out: TiktokExtrasRow[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const data = await this.request<{
+        list?: TiktokInsightRow[];
+        page_info?: { total_page?: number };
+      }>("/report/integrated/get/", {
+        advertiser_id: advertiser,
+        report_type: "BASIC",
+        service_type: "AUCTION",
+        data_level: "AUCTION_CAMPAIGN",
+        dimensions: JSON.stringify(["campaign_id", "stat_time_day"]),
+        metrics: JSON.stringify(fields),
+        start_date: startKey,
+        end_date: endKey,
+        page,
+        page_size: PAGE_SIZE,
+      });
+
+      for (const row of data.list ?? []) {
+        const campaignId = row.dimensions.campaign_id;
+        const day = row.dimensions.stat_time_day;
+        if (!campaignId || !day) continue;
+        const metrics: Record<string, number> = {};
+        for (const f of fields) {
+          const v = Number(row.metrics[f]);
+          metrics[f] = Number.isFinite(v) ? v : 0;
+        }
+        out.push({ campaignId: String(campaignId), statTimeDay: day, metrics });
+      }
+      totalPages = Number(data.page_info?.total_page) || 1;
+      page++;
+    } while (page <= totalPages && page <= MAX_PAGES);
+
+    if (totalPages > MAX_PAGES) {
+      throw new TiktokApiError(
+        `TikTok extras report for ${advertiser} spans ${totalPages} pages (cap ${MAX_PAGES}); ` +
+          `refusing to report partial figures`,
         -1,
       );
     }

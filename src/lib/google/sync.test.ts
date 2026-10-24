@@ -34,6 +34,9 @@ vi.mock("@/db", () => ({
 let metricRows: Record<string, unknown>[] = [];
 let dailyError: Error | null = null;
 const calls: { customer: string; since: string; until: string }[] = [];
+/** What `getDailyExtras` answers: per family, campaign-day figures, or null for a refused query. */
+type Extras = Record<"xc" | "xe", Map<string, Record<string, number>> | null>;
+let extrasResult: Extras = { xc: null, xe: null };
 
 const ACC_1 = "cccccccc-0000-4000-8000-000000000001";
 const ACC_2 = "cccccccc-0000-4000-8000-000000000002";
@@ -50,6 +53,9 @@ vi.mock("./accounts", () => ({
       calls.push({ customer: customerId, since, until });
       if (dailyError) throw dailyError;
       return metricRows;
+    },
+    async getDailyExtras() {
+      return extrasResult;
     },
   }),
 }));
@@ -104,6 +110,7 @@ beforeEach(async () => {
   calls.length = 0;
   metricRows = [metric()];
   dailyError = null;
+  extrasResult = { xc: null, xe: null };
   activeAccounts = [ACCOUNTS[0]];
   await run(
     `TRUNCATE sync_runs, google_daily_metrics, google_ad_accounts, clients RESTART IDENTITY CASCADE`,
@@ -258,6 +265,61 @@ describe("syncClientGoogleMetrics — accounts and rows", () => {
     await mod.syncClientGoogleMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
     // Spend is only summable within one currency; the account is the authority.
     expect((await run(`SELECT currency FROM google_daily_metrics`)).rows[0].currency).toBe("USD");
+  });
+});
+
+describe("syncClientGoogleMetrics — the extra figures beside Conversions", () => {
+  const XC = { all_conversions: 4.5, all_conversions_value: 300, conversions_value: 250, view_through_conversions: 1 };
+  const XE = { interactions: 60, engagements: 0, video_views: 12, phone_calls: 2 };
+  const raw = async () =>
+    (await run(`SELECT google_campaign_id, date::text AS date, raw, impressions, campaign_name FROM google_daily_metrics ORDER BY date`))
+      .rows as Array<{ google_campaign_id: string; date: string; raw: Record<string, unknown>; impressions: number; campaign_name: string | null }>;
+
+  it("stores each family on every row, zeros where Google had nothing that day", async () => {
+    metricRows = [metric(), metric({ dateKey: "2026-07-21" })];
+    extrasResult = { xc: new Map([["gcamp_1|2026-07-20", XC]]), xe: new Map([["gcamp_1|2026-07-20", XE]]) };
+    await mod.syncClientGoogleMetrics(client(), { since: "2026-07-20", until: "2026-07-21" });
+
+    const [a, b] = await raw();
+    expect(a.raw).toMatchObject({ xc: XC, xe: XE, conversions: 3 });
+    // A day with delivery and no extra figures was collected, as zeros — not "not collected".
+    expect(b.raw.xc).toEqual({ all_conversions: 0, all_conversions_value: 0, conversions_value: 0, view_through_conversions: 0 });
+    expect(b.raw.xe).toEqual({ interactions: 0, engagements: 0, video_views: 0, phone_calls: 0 });
+  });
+
+  it("🔴 a refused family keeps what an earlier run stored, and never stops spend", async () => {
+    extrasResult = { xc: new Map([["gcamp_1|2026-07-20", XC]]), xe: new Map([["gcamp_1|2026-07-20", XE]]) };
+    await mod.syncClientGoogleMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+
+    // The next night Google refuses the engagement family and restates spend.
+    metricRows = [metric({ spend: 91 })];
+    extrasResult = { xc: new Map([["gcamp_1|2026-07-20", { ...XC, all_conversions: 5 }]]), xe: null };
+    await mod.syncClientGoogleMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+
+    const [row] = await raw();
+    expect(row.raw.xe).toEqual(XE);
+    expect(row.raw.xc).toMatchObject({ all_conversions: 5 });
+    expect(Number((await run(`SELECT spend FROM google_daily_metrics`)).rows[0].spend)).toBe(91);
+  });
+
+  it("writes a day that has extra figures and no delivery, and keeps its campaign's name", async () => {
+    extrasResult = { xc: null, xe: null };
+    await mod.syncClientGoogleMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+    metricRows = [];
+    extrasResult = {
+      xc: new Map([
+        ["gcamp_1|2026-07-20", { ...XC, all_conversions: 1 }],
+        // Nothing to say about a day of zeros: no row is invented for it.
+        ["gcamp_9|2026-07-20", { all_conversions: 0, all_conversions_value: 0, conversions_value: 0, view_through_conversions: 0 }],
+      ]),
+      xe: null,
+    };
+    await mod.syncClientGoogleMetrics(client(), { since: "2026-07-20", until: "2026-07-20" });
+
+    const rows = await raw();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ google_campaign_id: "gcamp_1", impressions: 0, campaign_name: "Search — Brand" });
+    expect(rows[0].raw.xc).toMatchObject({ all_conversions: 1 });
   });
 });
 

@@ -10,6 +10,15 @@ import {
   tiktokResultType,
   type TypedResults,
 } from "./results";
+import {
+  EXTRA_KEY,
+  GOOGLE_EXTRA_FAMILIES,
+  META_ACTION_FAMILIES,
+  META_AD_ROW_EXTRAS,
+  SIMPLE_COLUMN_EXTRAS,
+  TIKTOK_EXTRAS,
+  type MetaActionFamily,
+} from "./platform-extras";
 
 /**
  * The three things a board needs that no existing query provides.
@@ -56,6 +65,23 @@ export interface MetaActionSums {
   pageLikes: number;
   postEngagement: number;
   purchases: number;
+  /**
+   * Every action family in `META_ACTION_FAMILIES` (registrations, contacts …)
+   * by key — and, on ad rows, the columns only they carry (`META_AD_ROW_EXTRAS`).
+   */
+  x: Record<string, number>;
+}
+
+const FAMILY_KEYS = Object.keys(META_ACTION_FAMILIES) as MetaActionFamily[];
+
+/**
+ * A column alias or jsonb key spliced into SQL. Only ever a key from the
+ * constant lists in `platform-extras.ts`, and checked anyway: an alias cannot
+ * be a bound parameter.
+ */
+function safeKey(key: string): string {
+  if (!EXTRA_KEY.test(key)) throw new Error(`Not a safe extras key: ${key}`);
+  return key;
 }
 
 /**
@@ -79,9 +105,17 @@ function actionsLateral(): SQL {
     PURCHASE_PRECEDENCE.map((t) => sql`MAX(x.v) FILTER (WHERE x.t = ${t})`),
     sql`, `,
   )}, 0) AS purchases`;
+  // Each family the same way: the first of its types present on the row wins.
+  const families = FAMILY_KEYS.map(
+    (k) =>
+      sql`COALESCE(${sql.join(
+        META_ACTION_FAMILIES[k].map((t) => sql`MAX(x.v) FILTER (WHERE x.t = ${t})`),
+        sql`, `,
+      )}, 0) AS ${sql.raw(`f_${safeKey(k)}`)}`,
+  );
   return sql`
     LEFT JOIN LATERAL (
-      SELECT ${sql.join([...sums, purchase], sql`, `)}
+      SELECT ${sql.join([...sums, purchase, ...families], sql`, `)}
       FROM (
         SELECT e->>'action_type' AS t,
                CASE WHEN (e->>'value') ~ '^-?[0-9]+([.][0-9]+)?$'
@@ -98,14 +132,29 @@ function snake(alias: string): string {
   return alias.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 }
 
-const ACTION_SELECT = sql`
-  COALESCE(SUM(a.post_reactions), 0)::float AS post_reactions,
-  COALESCE(SUM(a.comments), 0)::float AS comments,
-  COALESCE(SUM(a.shares), 0)::float AS shares,
-  COALESCE(SUM(a.saves), 0)::float AS saves,
-  COALESCE(SUM(a.page_likes), 0)::float AS page_likes,
-  COALESCE(SUM(a.post_engagement), 0)::float AS post_engagement,
-  COALESCE(SUM(a.purchases), 0)::float AS purchases`;
+const ACTION_SELECT = sql.join(
+  [
+    sql`COALESCE(SUM(a.post_reactions), 0)::float AS post_reactions`,
+    sql`COALESCE(SUM(a.comments), 0)::float AS comments`,
+    sql`COALESCE(SUM(a.shares), 0)::float AS shares`,
+    sql`COALESCE(SUM(a.saves), 0)::float AS saves`,
+    sql`COALESCE(SUM(a.page_likes), 0)::float AS page_likes`,
+    sql`COALESCE(SUM(a.post_engagement), 0)::float AS post_engagement`,
+    sql`COALESCE(SUM(a.purchases), 0)::float AS purchases`,
+    ...FAMILY_KEYS.map(
+      (k) => sql`COALESCE(SUM(a.${sql.raw(`f_${safeKey(k)}`)}), 0)::float AS ${sql.raw(`x_${k}`)}`,
+    ),
+  ],
+  sql`, `,
+);
+
+/** The typed columns only ad rows fill, summed — for the ad-level queries only. */
+const AD_ROW_SELECT = sql.join(
+  Object.entries(META_AD_ROW_EXTRAS).map(
+    ([k, col]) => sql`COALESCE(SUM(m.${sql.raw(safeKey(col))}), 0)::float AS ${sql.raw(`ar_${safeKey(k)}`)}`,
+  ),
+  sql`, `,
+);
 
 interface ActionColumns {
   post_reactions: number;
@@ -115,9 +164,15 @@ interface ActionColumns {
   page_likes: number;
   post_engagement: number;
   purchases: number;
+  [family: `x_${string}`]: number;
 }
 
-function actionsOf(r: ActionColumns): MetaActionSums {
+type AdRowColumns = { [extra: `ar_${string}`]: number };
+
+function actionsOf(r: ActionColumns, adRow?: AdRowColumns): MetaActionSums {
+  const x: Record<string, number> = {};
+  for (const k of FAMILY_KEYS) x[k] = Number(r[`x_${k}`]) || 0;
+  if (adRow) for (const k of Object.keys(META_AD_ROW_EXTRAS)) x[k] = Number(adRow[`ar_${k}`]) || 0;
   return {
     postReactions: Number(r.post_reactions) || 0,
     comments: Number(r.comments) || 0,
@@ -126,6 +181,7 @@ function actionsOf(r: ActionColumns): MetaActionSums {
     pageLikes: Number(r.page_likes) || 0,
     postEngagement: Number(r.post_engagement) || 0,
     purchases: Number(r.purchases) || 0,
+    x,
   };
 }
 
@@ -203,6 +259,75 @@ export async function getMetaCampaignExtras(
   }));
 }
 
+/** Google's or TikTok's extra figures for one group of daily rows. */
+export interface SimpleExtrasRow {
+  /** Day key, campaign id, or "" for the total. */
+  key: string;
+  /** Every extra figure by key, and the platform's own `conversions` column. */
+  x: Record<string, number>;
+  /**
+   * Per figure: rows with delivery that were stored before it was collected —
+   * synced before the extras existed, or on a run where the platform refused
+   * it. Named in a note; a stat reading it over those days would under-count.
+   */
+  uncollected: Record<string, number>;
+}
+
+/**
+ * Google's and TikTok's figures beyond spend and clicks, from their daily rows
+ * — what their syncs store in `raw` (`metrics/platform-extras.ts`) — for the
+ * whole range, per day, or per campaign.
+ */
+export async function getSimpleExtras(
+  platform: "google" | "tiktok",
+  clientId: string,
+  window: DateWindow,
+  by: "total" | "day" | "campaign",
+): Promise<SimpleExtrasRow[]> {
+  const google = platform === "google";
+  const table = sql.raw(google ? "google_daily_metrics" : "tiktok_daily_metrics");
+  const campaign = sql.raw(google ? "m.google_campaign_id" : "m.tiktok_campaign_id");
+  const key = by === "day" ? DAY_KEY : by === "campaign" ? campaign : sql`''`;
+  const group = by === "total" ? sql`` : sql`GROUP BY 1`;
+  // Where each figure lives: the `raw` key of its family, and its own key in it.
+  const fields: Array<{ family: string; key: string }> = google
+    ? Object.entries(GOOGLE_EXTRA_FAMILIES).flatMap(([family, keys]) =>
+        Object.keys(keys).map((key) => ({ family, key })),
+      )
+    : Object.keys(TIKTOK_EXTRAS).map((key) => ({ family: "x", key }));
+  const at = (f: { family: string; key: string }) =>
+    sql.raw(`m.raw->'${safeKey(f.family)}'->'${safeKey(f.key)}'`);
+  const delivered = sql`(m.spend > 0 OR m.impressions > 0)`;
+
+  const res = await db.execute(sql`
+    SELECT ${key} AS key,
+           ${sql.join(
+             [
+               ...fields.flatMap((f) => [
+                 sql`COALESCE(SUM(${numericText(sql`${at(f)} #>> '{}'`)}), 0)::float AS ${sql.raw(`x_${f.key}`)}`,
+                 sql`COUNT(*) FILTER (WHERE ${delivered} AND ${at(f)} IS NULL)::int AS ${sql.raw(`u_${f.key}`)}`,
+               ]),
+               ...SIMPLE_COLUMN_EXTRAS.map(
+                 (c) => sql`COALESCE(SUM(m.${sql.raw(safeKey(c))}), 0)::float AS ${sql.raw(`x_${c}`)}`,
+               ),
+             ],
+             sql`, `,
+           )}
+    FROM ${table} m
+    WHERE m.client_id = ${clientId}
+      AND m.date >= ${window.startKey}
+      AND m.date <= ${window.endKey}
+    ${group}
+  `);
+
+  const keys = [...fields.map((f) => f.key), ...SIMPLE_COLUMN_EXTRAS];
+  return resultRows<Record<string, unknown> & { key: string | null }>(res).map((r) => ({
+    key: r.key ?? "",
+    x: Object.fromEntries(keys.map((k) => [k, Number(r[`x_${k}`]) || 0])),
+    uncollected: Object.fromEntries(fields.map((f) => [f.key, Number(r[`u_${f.key}`]) || 0])),
+  }));
+}
+
 export interface MetaAdLevelRow extends MetaActionSums {
   key: string;
   label: string | null;
@@ -272,6 +397,7 @@ export async function getMetaAdLevel(
            COALESCE(SUM(m.video_3s_views), 0)::float AS video_3s_views,
            COALESCE(SUM(m.video_plays), 0)::float AS video_plays,
            COALESCE(SUM(m.thru_plays), 0)::float AS thru_plays,
+           ${AD_ROW_SELECT},
            ${ACTION_SELECT}
     FROM fb_daily_metrics m
     ${actionsLateral()}
@@ -283,7 +409,7 @@ export async function getMetaAdLevel(
     ${group}
   `);
 
-  type Row = ActionColumns & {
+  type Row = ActionColumns & AdRowColumns & {
     key: string | null;
     label: string | null;
     parent: string | null;
@@ -314,7 +440,7 @@ export async function getMetaAdLevel(
     video3sViews: Number(r.video_3s_views) || 0,
     videoPlays: Number(r.video_plays) || 0,
     thruPlays: Number(r.thru_plays) || 0,
-    ...actionsOf(r),
+    ...actionsOf(r, r),
   }));
 }
 
@@ -377,6 +503,7 @@ export async function getMetaAdCreativePairs(
            ${ranking("quality_ranking")} AS quality_ranking,
            ${ranking("engagement_rate_ranking")} AS engagement_ranking,
            ${ranking("conversion_rate_ranking")} AS conversion_ranking,
+           ${AD_ROW_SELECT},
            ${ACTION_SELECT}
     FROM fb_daily_metrics m
     ${actionsLateral()}
@@ -388,7 +515,7 @@ export async function getMetaAdCreativePairs(
     GROUP BY COALESCE(m.creative_key, ''), m.meta_ad_id
   `);
 
-  type Row = ActionColumns & {
+  type Row = ActionColumns & AdRowColumns & {
     creative_key: string;
     creative_type: string | null;
     ad_id: string;
@@ -431,7 +558,7 @@ export async function getMetaAdCreativePairs(
     qualityRanking: r.quality_ranking,
     engagementRanking: r.engagement_ranking,
     conversionRanking: r.conversion_ranking,
-    ...actionsOf(r),
+    ...actionsOf(r, r),
   }));
 }
 

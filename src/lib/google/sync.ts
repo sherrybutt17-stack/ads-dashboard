@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import { googleClientForAccount, activeGoogleAccounts } from "./accounts";
 import { todayKey, trailingWindowInclusive } from "@/lib/dates";
+import { GOOGLE_EXTRA_FAMILIES, type GoogleExtraFamily } from "@/lib/metrics/platform-extras";
 
 /**
  * Google Ads sync — the mirror of `meta/sync.ts`.
@@ -129,10 +130,45 @@ async function syncAccountGoogleMetrics(
 ): Promise<number> {
   const google = googleClientForAccount(account, client.agencyId);
   const rows = await google.getDailyMetrics(account.customerId, since, until);
+  // Best-effort by family, inside: a refusal costs those figures, never spend.
+  const extras = await google.getDailyExtras(account.customerId, since, until);
+
+  /*
+   * A campaign-day can carry extra figures and no delivery — all conversions
+   * credited to a day nothing was shown, say. Google leaves such a day out of
+   * the delivery query, so it gets a row of its own with zero delivery, or
+   * those conversions would be missing from every total.
+   */
+  const keyOf = (campaignId: string, dateKey: string) => `${campaignId}|${dateKey}`;
+  const seen = new Set(rows.map((r) => keyOf(r.campaignId, r.dateKey)));
+  const extraOnly = new Set<string>();
+  for (const family of Object.values(extras)) {
+    for (const [k, figures] of family ?? []) {
+      if (!seen.has(k) && Object.values(figures).some((v) => v !== 0)) extraOnly.add(k);
+    }
+  }
+  const all = [
+    ...rows,
+    ...[...extraOnly].map((k) => {
+      const [campaignId, dateKey] = k.split("|");
+      return { dateKey, campaignId, campaignName: null, impressions: 0, clicks: 0, spend: 0, conversions: 0 };
+    }),
+  ];
 
   let written = 0;
-  for (const r of rows) {
+  for (const r of all) {
     if (!r.dateKey) continue;
+    const k = keyOf(r.campaignId, r.dateKey);
+    /*
+     * Each family is written only when its query succeeded, and then for
+     * every row — zeros for a day Google had nothing on — so a row without it
+     * is one synced before (or without) it, and says so on the Board.
+     */
+    const families = Object.fromEntries(
+      (Object.entries(extras) as Array<[GoogleExtraFamily, Map<string, Record<string, number>> | null]>).flatMap(
+        ([family, byDay]) => (byDay ? [[family, byDay.get(k) ?? zeros(family)]] : []),
+      ),
+    );
     const values = {
       clientId: client.id,
       customerId: account.customerId,
@@ -144,7 +180,7 @@ async function syncAccountGoogleMetrics(
       spend: String(r.spend),
       conversions: String(r.conversions),
       currency: account.currency,
-      raw: r as unknown as object,
+      raw: { ...r, ...families } as unknown as object,
       syncedAt: new Date(),
     };
     await db
@@ -161,12 +197,19 @@ async function syncAccountGoogleMetrics(
         // best-effort query survive a run where that query failed.
         set: {
           ...values,
+          // A day with extra figures only has no name to give; keep the stored one.
+          campaignName: sql`COALESCE(excluded.campaign_name, ${googleDailyMetrics.campaignName})`,
           raw: sql`COALESCE(${googleDailyMetrics.raw}, '{}'::jsonb) || excluded.raw`,
         },
       });
     written++;
   }
   return written;
+}
+
+/** A family's figures for a day it had none: every key, at zero. */
+function zeros(family: GoogleExtraFamily): Record<string, number> {
+  return Object.fromEntries(Object.keys(GOOGLE_EXTRA_FAMILIES[family]).map((k) => [k, 0]));
 }
 
 /** Backfill historical daily metrics, chunked by month (mirror of Meta's). */

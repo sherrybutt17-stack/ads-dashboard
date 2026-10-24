@@ -342,6 +342,307 @@ export const METRIC_DEFINITIONS: Record<string, MetricDefinition> = {
     formula: "New leads in the range that have never been moved to Disqualified.",
     caveat: "Only differs from leads when junk leads are being marked as disqualified in the CRM.",
   },
+
+  /*
+   * Every other figure each platform reports (Board stats with a `calc`).
+   */
+  outboundClicks: {
+    what: "Clicks that took people off Facebook or Instagram to the ad's destination.",
+    formula: "Sum of Meta's daily outbound clicks, from ad-level figures.",
+    caveat:
+      "Lower than link clicks, which also count opening an Instant Form. Meta reports these per ad, so they start when ad-level history does.",
+  },
+  outboundCtr: {
+    what: "How often seeing the ad led to a click off Facebook.",
+    formula: "Outbound clicks ÷ impressions, from ad-level figures.",
+  },
+  cpOutboundClick: {
+    what: "What each click off Facebook cost.",
+    formula: "Ad spend ÷ outbound clicks, from ad-level figures.",
+  },
+  cpLpv: {
+    what: "What each landing page view cost — a click where the page actually loaded.",
+    formula: "Ad spend ÷ landing page views.",
+  },
+  pageEngagement: {
+    what: "Everything people did with the Page or its posts because of the ads.",
+    formula: "Sum of Meta's daily 'page engagement' actions.",
+    caveat: "Includes post engagement and page likes, so never add those to it.",
+  },
+  photoViews: {
+    what: "Times someone opened an image in the ads to see it full size.",
+    formula: "Sum of Meta's daily 'photo view' actions.",
+  },
+  postEngagementRate: {
+    what: "How often seeing an ad led to engaging with it.",
+    formula: "Post engagement ÷ impressions.",
+    caveat:
+      "Post engagement includes link clicks and video plays as well as reactions, so video ads read higher than image ads.",
+  },
+  cpEngagement: {
+    what: "What each post engagement cost.",
+    formula: "Ad spend ÷ post engagement.",
+  },
+  cpPageLike: {
+    what: "What each page like from the ads cost.",
+    formula: "Ad spend ÷ page likes.",
+    caveat: "Divides ALL the spend in the row, including campaigns that were never after page likes.",
+  },
+  videoPlays: {
+    what: "Times a video ad started playing, for any length of time.",
+    formula: "Sum of Meta's daily video plays, from ad-level figures.",
+    caveat: "Counts autoplay starts nobody chose to watch; 3-second plays are the better measure of attention.",
+  },
+  videoP25: {
+    what: "Times a video ad was watched to a quarter of its length.",
+    formula: "Sum of Meta's daily 'video plays at 25%', from ad-level figures.",
+  },
+  videoP50: {
+    what: "Times a video ad was watched to half its length.",
+    formula: "Sum of Meta's daily 'video plays at 50%', from ad-level figures.",
+  },
+  videoP75: {
+    what: "Times a video ad was watched to three quarters of its length.",
+    formula: "Sum of Meta's daily 'video plays at 75%', from ad-level figures.",
+  },
+  videoP95: {
+    what: "Times a video ad was watched to 95% of its length — as good as finished.",
+    formula: "Sum of Meta's daily 'video plays at 95%', from ad-level figures.",
+  },
+  videoP100: {
+    what: "Times a video ad was watched to the end.",
+    formula: "Sum of Meta's daily 'video plays at 100%', from ad-level figures.",
+  },
+  cpThruPlay: {
+    what: "What each ThruPlay cost.",
+    formula: "Ad spend ÷ ThruPlays, from ad-level figures.",
+  },
+  cp3sPlay: {
+    what: "What each 3-second video play cost.",
+    formula: "Ad spend ÷ 3-second video plays.",
+  },
+  registrations: {
+    what: "Registrations completed that Meta tracked from the ads.",
+    formula: "Sum of Meta's daily 'complete registration' events, one registration type per day.",
+    caveat:
+      "Only appears if the website or app sends registrations to Meta. Meta reports one registration under several overlapping types; they are never added together.",
+  },
+  cpRegistration: {
+    what: "What each tracked registration cost.",
+    formula: "Ad spend ÷ registrations completed.",
+  },
+  contacts: {
+    what: "Contacts Meta tracked from the ads — someone getting in touch through the website or app.",
+    formula: "Sum of Meta's daily 'contact' events, one contact type per day.",
+    caveat: "Only appears if the website sends contact events to Meta. Overlapping contact types are never added together.",
+  },
+  cpContact: {
+    what: "What each tracked contact cost.",
+    formula: "Ad spend ÷ contacts.",
+  },
+  schedules: {
+    what: "Appointments booked that Meta tracked from the ads.",
+    formula: "Sum of Meta's daily 'schedule' events, one schedule type per day.",
+    caveat:
+      "Meta's own attribution, from the website's booking events — not the CRM's appointments, which is the figure the funnel uses.",
+  },
+  cpSchedule: {
+    what: "What each tracked booking cost.",
+    formula: "Ad spend ÷ schedules.",
+  },
+  applications: {
+    what: "Applications submitted that Meta tracked from the ads.",
+    formula: "Sum of Meta's daily 'submit application' events, one application type per day.",
+  },
+  cpApplication: {
+    what: "What each tracked application cost.",
+    formula: "Ad spend ÷ applications submitted.",
+  },
+  addsToCart: {
+    what: "Times someone added a product to their cart after the ads.",
+    formula: "Sum of Meta's daily 'add to cart' events, one type per day.",
+  },
+  cpAddToCart: {
+    what: "What each add to cart cost.",
+    formula: "Ad spend ÷ adds to cart.",
+  },
+  checkouts: {
+    what: "Checkouts started after the ads.",
+    formula: "Sum of Meta's daily 'initiate checkout' events, one type per day.",
+  },
+  cpCheckout: {
+    what: "What each checkout started cost.",
+    formula: "Ad spend ÷ checkouts initiated.",
+  },
+  contentViews: {
+    what: "Key page views the website reported to Meta, such as a product or service page.",
+    formula: "Sum of Meta's daily 'view content' events, one type per day.",
+  },
+  cpContentView: {
+    what: "What each content view cost.",
+    formula: "Ad spend ÷ content views.",
+  },
+  callsPlaced: {
+    what: "Calls placed from the ads' call button.",
+    formula: "Sum of Meta's daily 'calls placed' actions.",
+    caveat: "A call placed is a tap on the button, not a connected call.",
+  },
+  cpCall: {
+    what: "What each call placed cost.",
+    formula: "Ad spend ÷ calls placed.",
+  },
+  messagingConversations: {
+    what: "Conversations started in Messenger, Instagram or WhatsApp from the ads.",
+    formula: "Sum of Meta's daily 'messaging conversations started' actions.",
+    caveat: "Meta counts a conversation as started once someone messages after seven days of silence.",
+  },
+  cpMessagingConversation: {
+    what: "What each messaging conversation started cost.",
+    formula: "Ad spend ÷ messaging conversations started.",
+  },
+
+  allConversions: {
+    what: "Every conversion Google Ads counts, including the actions not set as primary goals.",
+    formula: "Sum of Google's daily 'All conv.' column.",
+    caveat:
+      "Higher than Conversions: it adds secondary actions, cross-device and store visits. Google can report fractions of a conversion.",
+  },
+  cpAllConversion: {
+    what: "What each of Google's all conversions cost.",
+    formula: "Spend ÷ all conversions.",
+  },
+  conversionValue: {
+    what: "The value of the conversions Google counts, as set on each conversion action.",
+    formula: "Sum of Google's daily 'Conv. value' column.",
+    caveat: "Only as good as the values the account assigns its conversion actions — a default value of 1 counts conversions, not money.",
+  },
+  convValuePerCost: {
+    what: "Conversion value for each unit spent — Google's return on ad spend.",
+    formula: "Conversion value ÷ spend.",
+    caveat: "Google's own conversion values, not the CRM's closed revenue that ROAS uses.",
+  },
+  allConversionsValue: {
+    what: "The value of all the conversions Google counts, primary goals or not.",
+    formula: "Sum of Google's daily 'All conv. value' column.",
+  },
+  viewThroughConversions: {
+    what: "Conversions by people who saw an ad but did not click it.",
+    formula: "Sum of Google's daily view-through conversions.",
+    caveat: "Not included in Conversions; mostly from Display and video campaigns.",
+  },
+  conversionRate: {
+    what: "How often an interaction with an ad led to a conversion.",
+    formula: "Conversions ÷ interactions, as Google Ads shows it.",
+  },
+  interactions: {
+    what: "Every way people engaged with the ads that Google counts — clicks, video views, calls.",
+    formula: "Sum of Google's daily interactions.",
+  },
+  interactionRate: {
+    what: "How often seeing an ad led to an interaction.",
+    formula: "Interactions ÷ impressions.",
+  },
+  engagements: {
+    what: "Engagements Google counts on ads that invite them, such as expanding a Lightbox ad.",
+    formula: "Sum of Google's daily engagements.",
+  },
+  engagementRate: {
+    what: "How often seeing an ad led to an engagement.",
+    formula: "Engagements ÷ impressions.",
+  },
+  phoneCalls: {
+    what: "Calls made from the ads' call buttons and call assets.",
+    formula: "Sum of Google's daily phone calls.",
+  },
+  videoViews: {
+    what: "Times a video ad was viewed, as Google Ads counts a view.",
+    formula: "Sum of Google's daily TrueView video views.",
+    caveat: "Google counts a view at 30 seconds, or the whole video if shorter, or an interaction with it.",
+  },
+  viewRate: {
+    what: "How often showing a video ad led to a view.",
+    formula: "Video views ÷ impressions.",
+  },
+  cpv: {
+    what: "What each video view cost.",
+    formula: "Spend ÷ video views, as Google's Avg. CPV.",
+  },
+
+  tiktokConversions: {
+    what: "Conversions as TikTok counts them — the conversion events set on the ad groups.",
+    formula: "Sum of TikTok's daily Conversions column.",
+    caveat: "TikTok's own attribution, not the CRM. Results count each ad group's goal instead, so the two can differ.",
+  },
+  cpTiktokConversion: {
+    what: "What each TikTok conversion cost.",
+    formula: "Spend ÷ conversions.",
+  },
+  tiktokCvr: {
+    what: "How often a click on a TikTok ad led to a conversion.",
+    formula: "Conversions ÷ clicks, as TikTok's CVR.",
+  },
+  tiktokLikes: {
+    what: "Likes on the TikTok ads.",
+    formula: "Sum of TikTok's daily likes.",
+  },
+  tiktokComments: {
+    what: "Comments on the TikTok ads.",
+    formula: "Sum of TikTok's daily comments.",
+  },
+  tiktokShares: {
+    what: "Times the TikTok ads were shared.",
+    formula: "Sum of TikTok's daily shares.",
+  },
+  tiktokFollows: {
+    what: "New followers of the account from the TikTok ads.",
+    formula: "Sum of TikTok's daily follows.",
+  },
+  cpTiktokFollow: {
+    what: "What each new follower cost.",
+    formula: "Spend ÷ follows.",
+    caveat: "Divides ALL the spend in the row, including campaigns that were never after followers.",
+  },
+  tiktokProfileVisits: {
+    what: "Visits to the account's profile from the TikTok ads.",
+    formula: "Sum of TikTok's daily profile visits.",
+  },
+  tiktokVideoViews: {
+    what: "Times a TikTok video ad started playing.",
+    formula: "Sum of TikTok's daily video views.",
+    caveat: "TikTok counts every play, however short; 2- and 6-second views measure attention better.",
+  },
+  tiktokViewRate: {
+    what: "How often showing a TikTok ad led to a video view.",
+    formula: "Video views ÷ impressions.",
+  },
+  tiktokCpv: {
+    what: "What each TikTok video view cost.",
+    formula: "Spend ÷ video views.",
+  },
+  tiktokVideo2s: {
+    what: "Times a TikTok video ad was watched for at least two seconds.",
+    formula: "Sum of TikTok's daily 2-second video views.",
+  },
+  tiktokVideo6s: {
+    what: "Times a TikTok video ad was watched for at least six seconds.",
+    formula: "Sum of TikTok's daily 6-second video views.",
+  },
+  tiktokVideoP25: {
+    what: "Times a TikTok video ad was watched to a quarter of its length.",
+    formula: "Sum of TikTok's daily 'video views at 25%'.",
+  },
+  tiktokVideoP50: {
+    what: "Times a TikTok video ad was watched to half its length.",
+    formula: "Sum of TikTok's daily 'video views at 50%'.",
+  },
+  tiktokVideoP75: {
+    what: "Times a TikTok video ad was watched to three quarters of its length.",
+    formula: "Sum of TikTok's daily 'video views at 75%'.",
+  },
+  tiktokVideoP100: {
+    what: "Times a TikTok video ad was watched to the end.",
+    formula: "Sum of TikTok's daily 'video views at 100%'.",
+  },
 };
 
 export function definitionFor(key: string): MetricDefinition | null {

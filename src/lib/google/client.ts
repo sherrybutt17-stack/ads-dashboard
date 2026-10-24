@@ -1,3 +1,8 @@
+import {
+  GOOGLE_EXTRA_FAMILIES,
+  storedFigure,
+  type GoogleExtraFamily,
+} from "@/lib/metrics/platform-extras";
 import { getAccessToken } from "./oauth";
 
 /**
@@ -93,6 +98,13 @@ export interface GoogleDailyRow {
   conversions: number;
 }
 
+/**
+ * The extra figures for one family (`GOOGLE_EXTRA_FAMILIES`), per campaign-day
+ * keyed `<campaign id>|<YYYY-MM-DD>` — or null when Google refused that
+ * family's query, so the rows keep whatever an earlier run stored.
+ */
+export type GoogleExtras = Record<GoogleExtraFamily, Map<string, Record<string, number>> | null>;
+
 function num(v: unknown): number {
   if (typeof v === "number") return Number.isFinite(v) ? v : 0;
   if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) {
@@ -108,6 +120,8 @@ interface GaqlRow {
     impressions?: string | number;
     clicks?: string | number;
     conversions?: string | number;
+    /** The extra figures, by the camelCase key Google answers with. */
+    [extra: string]: string | number | undefined;
   };
   segments?: { date?: string };
   customer?: {
@@ -382,5 +396,50 @@ export class GoogleAdsClient {
       spend: num(r.metrics?.costMicros) / 1_000_000,
       conversions: num(r.metrics?.conversions),
     }));
+  }
+
+  /**
+   * The columns beside Conversions in Google Ads — all conversions and their
+   * value, view-through conversions, interactions, engagements, video views,
+   * phone calls — per campaign-day, one query per family.
+   *
+   * Best-effort, family by family: a refused field (Google retired
+   * `video_views` in v25 for `video_trueview_views`) or any other failure
+   * costs that family alone, logged, and never spend — which comes from
+   * `getDailyMetrics` and does not wait on this.
+   */
+  async getDailyExtras(customerId: string, since: string, until: string): Promise<GoogleExtras> {
+    const out = {} as GoogleExtras;
+    for (const [family, fields] of Object.entries(GOOGLE_EXTRA_FAMILIES) as Array<
+      [GoogleExtraFamily, (typeof GOOGLE_EXTRA_FAMILIES)[GoogleExtraFamily]]
+    >) {
+      const list = Object.entries(fields) as Array<[string, { field: string; json: string }]>;
+      try {
+        const rows = await this.search(
+          customerId,
+          `SELECT campaign.id, segments.date, ${list.map(([, f]) => f.field).join(", ")}
+           FROM campaign
+           WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+        );
+        const byDay = new Map<string, Record<string, number>>();
+        for (const r of rows) {
+          const day = r.segments?.date;
+          const campaign = r.campaign?.id;
+          if (!day || !campaign) continue;
+          byDay.set(
+            `${campaign}|${day}`,
+            Object.fromEntries(list.map(([key, f]) => [key, storedFigure(num(r.metrics?.[f.json]))])),
+          );
+        }
+        out[family] = byDay;
+      } catch (err) {
+        out[family] = null;
+        console.warn(
+          `[google] extra figures (${family}) failed for ${normalizeCustomerId(customerId)}; spend synced without them:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    return out;
   }
 }
