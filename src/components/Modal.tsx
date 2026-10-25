@@ -44,9 +44,9 @@ import { createPortal } from "react-dom";
  *
  *   `main > *`        `@keyframes rise` runs with `animation-fill-mode: both`,
  *                     so its final `translate: 0 0` is pinned for the life of
- *                     the page. Every dashboard section, permanently.
- *   `.section-band`   `perspective: 1000px`, for the scroll reveal.
- *   `.section-band > *`  the reveal's own `translate`/`rotate`.
+ *                     the page. Every dashboard section — `.section-band`
+ *                     included — permanently.
+ *   `.section-band > *`  the scroll reveal's own filled `translate`.
  *
  * So **any** fixed-position element rendered from inside a dashboard section
  * hits the identical bug, and there is no configuration of this app in which it
@@ -64,7 +64,7 @@ const FOCUSABLE =
  * dashboard header or a dashboard section.** Both create containing blocks, and
  * both do it permanently — the header via `.glass-bar`'s `backdrop-filter`, a
  * section via the `rise` entrance animation's filled `translate` and the scroll
- * reveal's `perspective` — and a fixed element inside one resolves its
+ * reveal's — and a fixed element inside one resolves its
  * `inset`/`top`/`left` against that box rather than the viewport.
  *
  * The symptom is not a crash. A full-viewport click-away catcher silently

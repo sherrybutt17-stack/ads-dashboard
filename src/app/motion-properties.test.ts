@@ -301,3 +301,39 @@ describe("motion property split", () => {
     ).toBe(false);
   });
 });
+
+describe("the scroll reveal", () => {
+  /*
+   * 🔴 Flat, and over a fixed distance.
+   *
+   * The reveal used to tip each section up out of the page: `rotate: x 4deg`
+   * about the section's centre, 40px of push-back, `perspective: 1000px` on
+   * `.section-band`, over `cover 0% cover 20%`. All four scale with the
+   * section's height. King LASIK's Creatives tab — 89 creative cards, a
+   * section some 16,000px tall — was painted thousands of pixels below its
+   * slot, so the page showed the KPI tiles and then a screen of nothing, and
+   * the cards sat half-faded for 3,400px of scrolling.
+   */
+  const reveal = (() => {
+    const m = BARE.match(/@keyframes tilt-in\s*\{[\s\S]*?\n\}/);
+    expect(m, "@keyframes tilt-in is gone").not.toBeNull();
+    return m![0];
+  })();
+
+  it("never rotates, and never moves in depth", () => {
+    expect(/\brotate\s*:/.test(reveal), "a rotation pivots on the section's centre — 8,000px down on a tall one").toBe(false);
+    for (const [, value] of reveal.matchAll(/\btranslate\s*:\s*([^;]+);/g)) {
+      expect(value.trim().split(/\s+/).length, `translate: ${value} has a depth value`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("puts no perspective on a section", () => {
+    expect(/\.section-band\s*\{[^}]*\bperspective\s*:/.test(BARE)).toBe(false);
+  });
+
+  it("finishes within a fixed distance, not a share of the section's height", () => {
+    const m = BARE.match(/\.section-band > \*\s*\{[^}]*?animation-range\s*:\s*([^;]+);/);
+    expect(m, "the reveal has no animation-range").not.toBeNull();
+    expect(m![1].trim()).toMatch(/^entry 0% entry \d+px$/);
+  });
+});

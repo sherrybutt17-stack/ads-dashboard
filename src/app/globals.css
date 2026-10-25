@@ -2035,9 +2035,8 @@ body[data-range-pending="1"]::after {
 /* ================================================================== *
  * Scroll motion — the section reveal
  *
- * Each section tips up out of the page as it comes into view: a few
- * degrees of rotation about its own centre, a short rise, and a fade that
- * starts already half-visible.
+ * Each section rises a little as it comes into view, with a fade that
+ * starts already half-visible. Flat: no rotation, no depth.
  *
  * ── Driven by position, not by a timer ────────────────────────────────
  *
@@ -2050,17 +2049,20 @@ body[data-range-pending="1"]::after {
  * the clock, so the element is always exactly as revealed as its position
  * says it should be, including on the first paint.
  *
- * ── Why it is on the card and not on `main > *` ───────────────────────
+ * ── 🔴 Why it is flat ─────────────────────────────────────────────────
  *
- * The rotation needs `perspective` on an ancestor, and perspective has a
- * single vanishing point fixed to the element that declares it. On
- * `<main>` — a box several thousand pixels tall — that point sits at the
- * middle of the whole page, so a section near the bottom would be viewed
- * from 1500px off axis and shear rather than tilt. Declaring it on each
- * `.section-band` instead gives every section its own vanishing point at
- * its own centre, which is the only way this reads as depth rather than
- * as a skew. It also leaves `main > *` free to keep the load stagger it
- * already has.
+ * It used to tip up out of the page: `rotate: x 4deg` about the section's
+ * centre, 40px of push-back, under `perspective: 1000px` on each
+ * `.section-band`. Every one of those scales with the section's HEIGHT. A
+ * Creatives tab with 89 creative cards is a section some 16,000px tall,
+ * and 4deg about a centre 8,000px down, seen through that perspective,
+ * painted the whole card thousands of pixels below its slot — the reader
+ * saw the KPI tiles, then a screen of nothing (25 Oct 2026, King LASIK;
+ * about 12,000px of nothing on a phone). A flat rise moves every section
+ * by the same 22px, whatever its size.
+ *
+ * It is on `.section-band > *` rather than `main > *` so that `main > *`
+ * keeps the load stagger it already has.
  *
  * ── Why the fade starts at 0.55 and not at 0 ──────────────────────────
  *
@@ -2072,9 +2074,8 @@ body[data-range-pending="1"]::after {
  * case is a section that looks washed out rather than a section nobody can
  * read. A floor of 0 would be a blank page with no error and no cause.
  *
- * The same reasoning is why the rotation is 4deg and the push-back 40px.
- * Held at the `from` keyframe forever, that is a section that looks
- * slightly odd; at 20deg it is a section lying on its back.
+ * The same reasoning is why the rise is 22px: held at the `from` keyframe
+ * forever, that is a section sitting slightly low, never one out of view.
  *
  * ── Both gates are load-bearing ───────────────────────────────────────
  *
@@ -2086,33 +2087,27 @@ body[data-range-pending="1"]::after {
  *                nothing else, which is a complete experience.
  *
  *   reduced     — this is the exact motion the setting is about: large
- *                blocks moving in depth. Under it the sections simply
+ *                blocks moving as you scroll. Under it the sections simply
  *                appear, with the stagger, as they always did.
  *
- * `translate` and `rotate`, not `transform`, per the split recorded on the
- * interaction block below: entrance motion owns the independent transform
- * properties so that a hover `transform` underneath it still resolves.
- * `motion-properties.test.ts` holds both halves.
+ * `translate`, not `transform`, per the split recorded on the interaction
+ * block below: entrance motion owns the independent transform properties
+ * so that a hover `transform` underneath it still resolves.
+ * `motion-properties.test.ts` holds both halves, and holds the reveal flat.
  * ================================================================== */
 @keyframes tilt-in {
   from {
     opacity: 0.55;
-    translate: 0 22px -40px;
-    rotate: x 4deg;
+    translate: 0 22px;
   }
   to {
     opacity: 1;
-    translate: 0 0 0;
-    rotate: x 0deg;
+    translate: 0 0;
   }
 }
 
 @supports (animation-timeline: view()) {
   @media (prefers-reduced-motion: no-preference) {
-    .section-band {
-      perspective: 1000px;
-    }
-
     .section-band > * {
       /*
        * `linear`, deliberately. An easing curve on a progress timeline is
@@ -2129,13 +2124,14 @@ body[data-range-pending="1"]::after {
        */
       animation-timeline: view();
       /*
-       * `cover`, not `entry`. `entry 100%` is reached when the element's
-       * BOTTOM edge enters the viewport, so a section taller than the
-       * screen would still be revealing itself a full section-height
-       * later. `cover` is measured against the element plus the viewport,
-       * which behaves the same way for a 300px panel and a 2000px table.
+       * A fixed distance: done within 240px of the section's top edge
+       * entering the viewport, for a 300px panel and a 16,000px grid
+       * alike. Not a percentage of either range. `entry 100%` is reached
+       * only when the BOTTOM edge enters, a whole section-height later;
+       * `cover 20%` is a fifth of section plus viewport — about 3,400px of
+       * scrolling on the 89-card grid, all of it spent half-faded.
        */
-      animation-range: cover 0% cover 20%;
+      animation-range: entry 0% entry 240px;
     }
   }
 }
@@ -2495,11 +2491,11 @@ html {
    *
    * Both entrances, not one. `main > *` carries the load stagger;
    * `.section-band > *` carries the scroll reveal, whose `from` keyframe
-   * is a section at 55% opacity pushed 40px into the page — and a
-   * progress timeline holds that state until the reader scrolls, which
-   * they cannot do on paper. `animation: none` is enough on its own:
-   * with no animation applying, `opacity`, `translate` and `rotate` fall
-   * back to values nothing in this stylesheet ever sets. The other two
+   * is a section at 55% opacity sitting 22px low — and a progress
+   * timeline holds that state until the reader scrolls, which they
+   * cannot do on paper. `animation: none` is enough on its own: with no
+   * animation applying, `opacity` and `translate` fall back to values
+   * nothing in this stylesheet ever sets. The other two
    * declarations are belt and braces and pre-date the reveal.
    *
    * 🔴 `main > *` has to stay the LAST selector before the opening brace.

@@ -775,6 +775,9 @@ function Thumb({
       type={c.creativeType}
       videoSeconds={c.videoLengthSeconds}
       stored={Boolean(c.thumbnailUrl)}
+      // Whole, as the Board's cards show it. Most of these are vertical videos,
+      // and `cover` on a 1.91:1 card kept only a strip across their middle.
+      fit="contain"
     />
   );
 }
