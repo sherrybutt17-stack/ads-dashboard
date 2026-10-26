@@ -58,6 +58,8 @@ export interface AdLevelContext {
   deadline: number;
   /** Ads whose identity this run has already asked TikTok for. */
   asked: Set<string>;
+  /** Assets whose info (and picture) this run has already asked for — one that failed waits for the next run. */
+  assetsAsked: Set<string>;
   /** Pictures this run may still fetch. */
   picturesLeft: number;
   /** What went wrong without failing the run — identity, assets, pictures. */
@@ -65,7 +67,7 @@ export interface AdLevelContext {
 }
 
 export function adLevelContext(deadline: number): AdLevelContext {
-  return { deadline, asked: new Set(), picturesLeft: PICTURES_PER_RUN, failures: [] };
+  return { deadline, asked: new Set(), assetsAsked: new Set(), picturesLeft: PICTURES_PER_RUN, failures: [] };
 }
 
 /**
@@ -273,7 +275,10 @@ async function refreshAssets(
       ),
     );
   const pictured = new Set(have.map((h) => h.key));
-  const need = assetKeys.filter((k) => !pictured.has(k)).map((k) => ({ key: k, asset: parseAssetKey(k) }));
+  const need = assetKeys
+    .filter((k) => !pictured.has(k) && !ctx.assetsAsked.has(k))
+    .map((k) => ({ key: k, asset: parseAssetKey(k) }));
+  for (const n of need) ctx.assetsAsked.add(n.key);
 
   const videos = need.filter((n) => n.asset?.kind === "video").map((n) => n.asset!.id);
   const images = need.filter((n) => n.asset?.kind === "image").map((n) => n.asset!.id);
@@ -314,6 +319,51 @@ async function refreshAssets(
     );
   }
   if (missed > 0) ctx.failures.push(`pictures: ${missed} could not be fetched`);
+}
+
+/**
+ * Pictures still missing for this advertiser's ads, the most spent-on first.
+ *
+ * A window refreshes only the assets of the ads in it, so an ad that has
+ * stopped running — or whose picture failed when it last ran — would never get
+ * one, and an import of months already complete reaches no ad at all. Within
+ * the run's picture budget; a post has no cover to fetch. Never fails the run.
+ */
+async function fillMissingPictures(
+  client: Client,
+  account: TiktokAdAccount,
+  tiktok: TiktokClient,
+  ctx: AdLevelContext,
+): Promise<void> {
+  if (ctx.picturesLeft <= 0 || Date.now() > ctx.deadline) return;
+  try {
+    const res = await db.execute(sql`
+      SELECT k.key
+      FROM (
+        SELECT COALESCE(NULLIF(c.thumb_key, ''), c.creative_key) AS key
+        FROM tiktok_ad_creatives c
+        WHERE c.client_id = ${client.id} AND c.advertiser_id = ${account.advertiserId}
+        GROUP BY 1
+      ) k
+      LEFT JOIN tiktok_creative_assets a ON a.client_id = ${client.id} AND a.asset_key = k.key
+      LEFT JOIN (
+        SELECT creative_key, SUM(spend) AS spend FROM tiktok_ad_daily_metrics
+        WHERE client_id = ${client.id}
+        GROUP BY creative_key
+      ) s ON s.creative_key = k.key
+      WHERE (k.key LIKE 'v:%' OR k.key LIKE 'i:%') AND a.thumb IS NULL
+      ORDER BY s.spend DESC NULLS LAST, k.key
+      LIMIT ${ctx.picturesLeft + ctx.assetsAsked.size}
+    `);
+    // Not one this run already tried: its picture just failed, and asking again now fails again.
+    const keys = (res as unknown as { rows: Array<{ key: string }> }).rows
+      .map((r) => r.key)
+      .filter((k) => !ctx.assetsAsked.has(k))
+      .slice(0, ctx.picturesLeft);
+    await refreshAssets(client, account, tiktok, keys, ctx);
+  } catch (err) {
+    ctx.failures.push(`missing pictures: ${(err instanceof Error ? err.message : String(err)).slice(0, 200)}`);
+  }
 }
 
 async function upsertAsset(
@@ -401,7 +451,10 @@ export async function syncClientTiktokAdLevel(
         continue;
       }
       try {
-        written += await pullTiktokAdWindow(client, account, new TiktokClient(token), since, until, ctx);
+        const tiktok = new TiktokClient(token);
+        written += await pullTiktokAdWindow(client, account, tiktok, since, until, ctx);
+        // Then whatever picture budget is left, on ads this window did not reach.
+        await fillMissingPictures(client, account, tiktok, ctx);
       } catch (err) {
         failures.push(err);
       }
@@ -496,6 +549,9 @@ export async function importTiktokAdLevelHistory(
     });
     return result;
   };
+
+  // First the pictures earlier runs left missing: the months below may all be complete and reach no ad.
+  for (const { account, tiktok } of clientsByAccount) await fillMissingPictures(client, account, tiktok, ctx);
 
   for (const m of months) {
     if (Date.now() - started > budget) {

@@ -19,6 +19,7 @@ import {
   metricSeries,
   metricsFor,
   starterBoard,
+  type DimensionId,
   type MetricId,
 } from "./catalog";
 import { BoardWidgetSchema, WidgetQuerySchema } from "./schema";
@@ -147,7 +148,8 @@ describe("every platform stat reads something its platform stores", () => {
     expect(metricFromAdRows("video_p25", "meta")).toBe(true);
     expect(metricFromAdRows("video_p25", "tiktok")).toBe(false);
     expect(metricDims("video_p25", "meta")).toEqual(["adset", "ad", "creative"]);
-    expect(metricDims("video_p25", "tiktok")).toEqual(["campaign"]);
+    // TikTok's ad rows carry every figure its campaign rows do.
+    expect(metricDims("video_p25", "tiktok")).toEqual(["campaign", "ad", "creative"]);
   });
 
   it("lists each platform's stats apart — no Google figure on Meta", () => {
@@ -184,21 +186,22 @@ describe("the rules a chart cannot break", () => {
     }
   });
 
-  it("only splits Google and TikTok by campaign", () => {
+  it("splits Google by campaign alone, and TikTok by campaign, ad and creative — never by audience", () => {
+    const split = (platform: "google" | "tiktok", dimension: DimensionId) =>
+      checkWidget({ kind: "category", platform, metric: "spend", dimension, form: "bar", topN: 6 }).ok;
     for (const platform of ["google", "tiktok"] as const) {
-      const v = checkWidget({
-        kind: "category",
-        platform,
-        metric: "spend",
-        dimension: "age",
-        form: "bar",
-        topN: 6,
-      });
-      expect(v.ok).toBe(false);
-      expect(
-        checkWidget({ kind: "category", platform, metric: "spend", dimension: "campaign", form: "bar", topN: 6 }).ok,
-      ).toBe(true);
+      expect(split(platform, "age")).toBe(false);
+      expect(split(platform, "adset")).toBe(false);
+      expect(split(platform, "campaign")).toBe(true);
     }
+    expect(split("google", "ad")).toBe(false);
+    expect(split("tiktok", "ad")).toBe(true);
+    expect(split("tiktok", "creative")).toBe(true);
+    // Its own figures and results split by ad too; the CRM's never do.
+    expect(metricDims("likes", "tiktok")).toEqual(["campaign", "ad", "creative"]);
+    expect(metricDims("results", "tiktok")).toEqual(["campaign", "ad", "creative", "result_type"]);
+    expect(metricDims("leads", "tiktok")).toEqual(["campaign"]);
+    expect(metricDims("video_views", "google")).toEqual(["campaign"]);
   });
 
   it("refuses Meta-only stats on other platforms", () => {
@@ -340,13 +343,24 @@ describe("creative cards", () => {
     ...over,
   });
 
-  it("are Meta's alone — Google and TikTok report no individual ads", () => {
+  it("are Meta's and TikTok's — Google reports no individual ads here", () => {
     expect(checkWidget(cards()).ok).toBe(true);
-    for (const platform of ["google", "tiktok"] as const) {
-      const v = checkWidget(cards({ platform }));
-      expect(v.ok).toBe(false);
-      if (!v.ok) expect(v.reason).toMatch(/Meta only/);
+    const google = checkWidget(cards({ platform: "google", stats: ["spend"], sort: "spend" }));
+    expect(google.ok).toBe(false);
+    if (!google.ok) expect(google.reason).toMatch(/Meta and TikTok only/);
+    for (const by of ["ad", "creative"] as const) {
+      expect(
+        checkWidget(cards({ platform: "tiktok", by, stats: ["spend", "results", "video_6s", "likes"], sort: "results" })).ok,
+      ).toBe(true);
     }
+  });
+
+  it("🔴 refuse a Meta-only stat on TikTok cards, by its name", () => {
+    const v = checkWidget(cards({ platform: "tiktok" }));
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe("On-Facebook leads is not reported per ad on TikTok.");
+    // Delivery rankings are Meta's judgement; TikTok has none to show.
+    expect(checkWidget(cards({ platform: "tiktok", stats: ["spend"], sort: "spend", rankings: true })).ok).toBe(false);
   });
 
   it("carry 1 to 6 different stats, each reported per ad or per creative", () => {
@@ -397,11 +411,22 @@ describe("creative cards", () => {
     expect(defaultTitle(cards({ by: "creative", sort: "spend" }))).toBe("Top creatives by Ad spend");
   });
 
-  it("offer Whatagraph's two reports and the Overview's cards as presets", () => {
+  it("offer Whatagraph's two reports, the Overview's cards and results cards as presets", () => {
     const ids = PRESETS.filter((p) => p.query.kind === "creatives").map((p) => p.id);
-    expect(ids).toEqual(["creative_cards", "ad_cards_leads", "ad_cards_clicks"]);
+    expect(ids).toEqual(["creative_cards", "ad_cards_leads", "ad_cards_clicks", "ad_cards_results"]);
     for (const p of PRESETS.filter((x) => x.query.kind === "creatives")) {
       expect(WidgetQuerySchema.safeParse(p.query).success, p.id).toBe(true);
     }
+  });
+
+  it("🔴 offer TikTok at least one card preset that works there", () => {
+    const tiktok = PRESETS.filter((p) => p.query.kind === "creatives").filter(
+      (p) => checkWidget({ ...p.query, platform: "tiktok" } as Cards).ok,
+    );
+    expect(tiktok.map((p) => p.id)).toEqual(["ad_cards_results"]);
+  });
+
+  it("are titled in the platform's own words", () => {
+    expect(defaultTitle(cards({ platform: "tiktok", stats: ["clicks"], sort: "clicks" }))).toBe("Top ads by Clicks");
   });
 });

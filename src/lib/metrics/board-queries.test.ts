@@ -416,4 +416,22 @@ describe("creative pairs, ad identity and campaign choices", () => {
       { id: "mid", name: "Middle" },
     ]);
   });
+
+  it("offers TikTok's recent campaigns the same way, this client's only", async () => {
+    await harness.db.execute(sql`
+      INSERT INTO tiktok_daily_metrics (client_id, advertiser_id, date, tiktok_campaign_id, campaign_name, spend)
+      VALUES (${CLIENT_A}, 'adv', CURRENT_DATE - 30, '1781', 'Old name', 5),
+             (${CLIENT_A}, 'adv', CURRENT_DATE - 2, '1781', 'Renamed', 5),
+             (${CLIENT_A}, 'adv', CURRENT_DATE - 10, '1782', 'Middle', 50),
+             (${CLIENT_A}, 'adv', CURRENT_DATE - 900, '1783', 'Ancient', 50),
+             (${CLIENT_A}, 'adv', CURRENT_DATE - 3, '', 'No campaign', 50),
+             (${CLIENT_B}, 'adv', CURRENT_DATE - 1, '1789', 'Theirs', 50)
+    `);
+    // Only this test's campaigns: an earlier test in the file stored TikTok rows too.
+    const got = (await bq.getTiktokCampaignOptions(CLIENT_A)).filter((c) => c.id.startsWith("178") || c.id === "");
+    expect(got).toEqual([
+      { id: "1781", name: "Renamed" },
+      { id: "1782", name: "Middle" },
+    ]);
+  });
 });

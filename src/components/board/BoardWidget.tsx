@@ -10,7 +10,7 @@ import { defaultTitle, dimensionLabel, isMetricId, metricStatKey } from "@/lib/b
 import { formatMetricValue, statTileFormat } from "@/lib/board/format";
 import { encodeWidgetQuery, widgetQueryOf } from "@/lib/board/query";
 import type { BoardWidget as Widget, WidgetData } from "@/lib/board/types";
-import { PLATFORM_LABEL } from "@/lib/platforms";
+import { sourceTag, widgetSources } from "@/lib/board/source";
 import { BoardCategoryChart, BoardSeriesChart, type FixedSize } from "./BoardChart";
 import { BoardCreatives } from "./BoardCreatives";
 import { BoardTable } from "./BoardTable";
@@ -94,7 +94,13 @@ export function BoardWidget({
   }, [pendingUrl]);
 
   const platform = "platform" in query ? query.platform : null;
-  const platformTag = showPlatform && platform ? PLATFORM_LABEL[platform] : null;
+  /*
+   * 🔴 Whose numbers these are. This tag used to name the platform alone, and
+   * only on a board mixing platforms — so the CRM's "Leads" read "LEADS · META",
+   * which says Meta counted them. CRM numbers now always say "CRM" (with the
+   * platform they came from when the board mixes platforms); see `sourceTag`.
+   */
+  const platformTag = sourceTag(widgetSources(query, reg), platform, showPlatform);
   const tagged = platformTag ? `${title} · ${platformTag}` : title;
 
   /* ---------------- headline number: the tile is the card ---------------- */
@@ -344,7 +350,7 @@ export function BoardWidget({
       );
     }
     if (query.kind === "creatives" && live.kind === "creatives") {
-      return <BoardCreatives data={live} slug={slug} fixed={chartBox} />;
+      return <BoardCreatives data={live} slug={slug} platform={query.platform} fixed={chartBox} />;
     }
     // Data of the wrong kind for the widget: a stale cache after an edit.
     return <DataState size="compact" title="Nothing to show yet" />;

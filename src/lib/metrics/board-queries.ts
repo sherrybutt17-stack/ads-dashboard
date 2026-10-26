@@ -658,6 +658,161 @@ export async function getMetaCampaignOptions(clientId: string): Promise<Campaign
   return resultRows<{ id: string; name: string | null }>(res).map((r) => ({ id: r.id, name: r.name }));
 }
 
+/** TikTok's campaigns for the same filter — the most recently active first. */
+export async function getTiktokCampaignOptions(clientId: string): Promise<CampaignOption[]> {
+  const res = await db.execute(sql`
+    SELECT m.tiktok_campaign_id AS id, ${latest(sql`m.campaign_name`)} AS name
+    FROM tiktok_daily_metrics m
+    WHERE m.client_id = ${clientId}
+      AND m.tiktok_campaign_id <> ''
+      AND m.date >= CURRENT_DATE - 400
+    GROUP BY m.tiktok_campaign_id
+    ORDER BY MAX(m.date) DESC, SUM(m.spend) DESC
+    LIMIT 200
+  `);
+  return resultRows<{ id: string; name: string | null }>(res).map((r) => ({ id: r.id, name: r.name }));
+}
+
+/* ------------------------------------------------------------------ *
+ * TikTok ad rows
+ * ------------------------------------------------------------------ */
+
+/**
+ * TikTok's delivery per (ad, asset), from `tiktok_ad_daily_metrics` — the twin
+ * of `MetaAdPairRow`, and the one source for TikTok's creative cards and its
+ * splits by ad and by creative.
+ */
+export interface TiktokAdPairRow {
+  /** `v:` / `i:` / `p:` asset key. "" = no single asset: carousels, ads not yet resolved. */
+  creativeKey: string;
+  creativeType: string | null;
+  adId: string;
+  adName: string | null;
+  campaignId: string;
+  campaignName: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  /** TikTok's other figures by key (`TIKTOK_EXTRAS`, and its conversions column). */
+  x: Record<string, number>;
+  /** Per figure: delivered ad-days stored without it. */
+  uncollected: Record<string, number>;
+}
+
+export async function getTiktokAdPairs(clientId: string, window: DateWindow): Promise<TiktokAdPairRow[]> {
+  const keys = Object.keys(TIKTOK_EXTRAS);
+  const at = (k: string) => sql.raw(`m.raw->'x'->'${safeKey(k)}'`);
+  const delivered = sql`(m.spend > 0 OR m.impressions > 0)`;
+  const res = await db.execute(sql`
+    SELECT m.creative_key,
+           MAX(m.creative_type::text) AS creative_type,
+           m.tiktok_ad_id AS ad_id,
+           ${latest(sql`m.ad_name`)} AS ad_name,
+           ${latest(sql`NULLIF(m.tiktok_campaign_id, '')`)} AS campaign_id,
+           ${latest(sql`m.campaign_name`)} AS campaign_name,
+           COALESCE(SUM(m.spend), 0)::float AS spend,
+           COALESCE(SUM(m.impressions), 0)::float AS impressions,
+           COALESCE(SUM(m.clicks), 0)::float AS clicks,
+           ${sql.join(
+             [
+               ...keys.flatMap((k) => [
+                 sql`COALESCE(SUM(${numericText(sql`${at(k)} #>> '{}'`)}), 0)::float AS ${sql.raw(`x_${k}`)}`,
+                 sql`COUNT(*) FILTER (WHERE ${delivered} AND ${at(k)} IS NULL)::int AS ${sql.raw(`u_${k}`)}`,
+               ]),
+               ...SIMPLE_COLUMN_EXTRAS.map(
+                 (c) => sql`COALESCE(SUM(m.${sql.raw(safeKey(c))}), 0)::float AS ${sql.raw(`x_${c}`)}`,
+               ),
+             ],
+             sql`, `,
+           )}
+    FROM tiktok_ad_daily_metrics m
+    WHERE m.client_id = ${clientId}
+      AND m.date >= ${window.startKey}
+      AND m.date <= ${window.endKey}
+    GROUP BY m.creative_key, m.tiktok_ad_id
+  `);
+  const all = [...keys, ...SIMPLE_COLUMN_EXTRAS];
+  return resultRows<Record<string, unknown> & { creative_key: string; ad_id: string }>(res).map((r) => ({
+    creativeKey: r.creative_key ?? "",
+    creativeType: (r.creative_type as string | null) ?? null,
+    adId: r.ad_id,
+    adName: (r.ad_name as string | null) ?? null,
+    campaignId: (r.campaign_id as string | null) ?? "",
+    campaignName: (r.campaign_name as string | null) ?? null,
+    spend: Number(r.spend) || 0,
+    impressions: Number(r.impressions) || 0,
+    clicks: Number(r.clicks) || 0,
+    x: Object.fromEntries(all.map((k) => [k, Number(r[`x_${k}`]) || 0])),
+    uncollected: Object.fromEntries(keys.map((k) => [k, Number(r[`u_${k}`]) || 0])),
+  }));
+}
+
+/** What a TikTok ad shows, for its card. TikTok ads have no headline; the text is the ad's caption. */
+export interface TiktokAdIdentity {
+  adId: string;
+  adName: string | null;
+  creativeKey: string;
+  creativeType: string | null;
+  body: string | null;
+  /** The asset whose stored picture stands for the ad — its own, or a carousel's first image. Null with none stored. */
+  pictureKey: string | null;
+  videoSeconds: number | null;
+}
+
+export async function getTiktokAdIdentity(
+  clientId: string,
+  adIds: readonly string[],
+): Promise<Map<string, TiktokAdIdentity>> {
+  const out = new Map<string, TiktokAdIdentity>();
+  const ids = [...new Set(adIds.filter(Boolean))];
+  for (let i = 0; i < ids.length; i += IDENTITY_CHUNK) {
+    const chunk = ids.slice(i, i + IDENTITY_CHUNK);
+    // Both assets are this client's own: a picture is never looked up by key alone.
+    const res = await db.execute(sql`
+      SELECT c.tiktok_ad_id, c.ad_name, c.creative_key, c.creative_type::text AS creative_type, c.ad_text,
+             CASE WHEN p.thumb IS NOT NULL THEN p.asset_key END AS picture_key,
+             v.duration_seconds::float AS video_seconds
+      FROM tiktok_ad_creatives c
+      LEFT JOIN tiktok_creative_assets p
+        ON p.client_id = c.client_id AND p.asset_key = COALESCE(NULLIF(c.thumb_key, ''), NULLIF(c.creative_key, ''))
+      LEFT JOIN tiktok_creative_assets v
+        ON v.client_id = c.client_id AND v.asset_key = NULLIF(c.creative_key, '')
+      WHERE c.client_id = ${clientId}
+        AND c.tiktok_ad_id IN (${sql.join(chunk.map((id) => sql`${id}`), sql`, `)})
+    `);
+    for (const r of resultRows<{
+      tiktok_ad_id: string;
+      ad_name: string | null;
+      creative_key: string;
+      creative_type: string | null;
+      ad_text: string | null;
+      picture_key: string | null;
+      video_seconds: number | null;
+    }>(res)) {
+      out.set(r.tiktok_ad_id, {
+        adId: r.tiktok_ad_id,
+        adName: r.ad_name,
+        creativeKey: r.creative_key ?? "",
+        creativeType: r.creative_type,
+        body: r.ad_text,
+        pictureKey: r.picture_key,
+        videoSeconds: r.video_seconds === null ? null : Number(r.video_seconds),
+      });
+    }
+  }
+  return out;
+}
+
+/** The first day TikTok ad rows exist for this client — they start when ad-level detail was first pulled. */
+export async function getTiktokAdCoverage(clientId: string): Promise<{ firstAdDay: string | null }> {
+  const res = await db.execute(sql`
+    SELECT to_char(MIN(date), 'YYYY-MM-DD') AS first_ad_day
+    FROM tiktok_ad_daily_metrics
+    WHERE client_id = ${clientId}
+  `);
+  return { firstAdDay: resultRows<{ first_ad_day: string | null }>(res)[0]?.first_ad_day ?? null };
+}
+
 export interface MetaCoverage {
   firstCampaignDay: string | null;
   firstAdDay: string | null;
@@ -729,7 +884,7 @@ export async function getPeriodReachRow(
 /**
  * `creative` — per asset; `ad_creative` — per (ad, asset) pair, keyed
  * `<ad id>|<creative key>`, which creative cards merge either way. Both read ad
- * rows, so Meta only.
+ * rows, so Meta and TikTok only.
  */
 export type ResultsBy = "total" | "day" | "campaign" | "adset" | "ad" | "creative" | "ad_creative";
 
@@ -760,10 +915,11 @@ function numericText(expr: SQL): SQL {
  *
  * Meta: campaign rows (or ad rows for `ad` / `adset`) — `raw.results`, one
  * entry per optimisation type. Google: the stored Conversions column. TikTok:
- * `raw.results`, summed from the ad group report by the sync.
+ * `raw.results` — campaign rows summed from the ad group report by the sync,
+ * or its own ad rows by ad and asset.
  *
- * Splits a platform cannot answer (ads or ad sets on Google or TikTok) return
- * nothing rather than a different grouping under the same name.
+ * Splits a platform cannot answer (ads on Google, ad sets on Google or TikTok)
+ * return nothing rather than a different grouping under the same name.
  */
 export async function getPlatformResults(
   platform: AdPlatform,
@@ -772,10 +928,10 @@ export async function getPlatformResults(
   by: ResultsBy,
 ): Promise<PlatformResultsRow[]> {
   if (platform === "meta") return metaResults(clientId, window, by);
-  if (by === "ad" || by === "adset" || by === "creative" || by === "ad_creative") return [];
-  return platform === "google"
-    ? googleResults(clientId, window, by)
-    : tiktokResults(clientId, window, by);
+  if (by === "adset") return [];
+  if (platform === "tiktok") return tiktokResults(clientId, window, by);
+  if (by === "ad" || by === "creative" || by === "ad_creative") return [];
+  return googleResults(clientId, window, by);
 }
 
 const DAY_KEY = sql`to_char(m.date, 'YYYY-MM-DD')`;
@@ -948,13 +1104,32 @@ async function googleResults(
   );
 }
 
+/**
+ * TikTok's results — from campaign rows, or from ad rows (`tiktok_ad_daily_metrics`)
+ * per ad, per asset or per (ad, asset) pair, keyed as Meta's are.
+ */
 async function tiktokResults(
   clientId: string,
   window: DateWindow,
-  by: Exclude<ResultsBy, "ad" | "adset" | "creative" | "ad_creative">,
+  by: Exclude<ResultsBy, "adset">,
 ): Promise<PlatformResultsRow[]> {
-  const key = by === "day" ? DAY_KEY : by === "campaign" ? sql`m.tiktok_campaign_id` : sql`''`;
-  const label = by === "campaign" ? latest(sql`m.campaign_name`) : sql`NULL::text`;
+  const adLevel = by === "ad" || by === "creative" || by === "ad_creative";
+  const table = sql.raw(adLevel ? "tiktok_ad_daily_metrics" : "tiktok_daily_metrics");
+  const key =
+    by === "day"
+      ? DAY_KEY
+      : by === "campaign"
+        ? sql`m.tiktok_campaign_id`
+        : by === "ad"
+          ? sql`m.tiktok_ad_id`
+          : by === "creative"
+            ? sql`m.creative_key`
+            : by === "ad_creative"
+              ? sql`m.tiktok_ad_id || '|' || m.creative_key`
+              : sql`''`;
+  const label =
+    by === "campaign" ? latest(sql`m.campaign_name`) : by === "ad" ? latest(sql`m.ad_name`) : sql`NULL::text`;
+  const parent = adLevel ? latest(sql`m.campaign_name`) : sql`NULL::text`;
   const group = by === "total" ? sql`` : sql`GROUP BY 1`;
   const where = sql`
     WHERE m.client_id = ${clientId}
@@ -964,21 +1139,21 @@ async function tiktokResults(
   const totalsRes = await db.execute(sql`
     SELECT ${key} AS key,
            ${label} AS label,
-           NULL::text AS parent,
+           ${parent} AS parent,
            COALESCE(SUM(m.spend), 0)::float AS spend,
            0::float AS mixed_spend,
            COUNT(*) FILTER (WHERE NOT COALESCE(${has}, false))::int AS rows_without_results
-    FROM tiktok_daily_metrics m
+    FROM ${table} m
     ${where}
     ${group}
   `);
-  // One objective per campaign, so a TikTok row is never mixed.
+  // One objective per campaign (and so per ad), so a TikTok row is never mixed.
   const typedRes = await db.execute(sql`
     SELECT ${key} AS key,
            COALESCE(m.raw->'results'->>'objective', m.raw->'metrics'->>'objective_type') AS objective,
            COALESCE(SUM(${numericText(sql`m.raw->'results'->>'value'`)}), 0)::float AS count,
            COALESCE(SUM(m.spend), 0)::float AS spend
-    FROM tiktok_daily_metrics m
+    FROM ${table} m
     ${where}
       AND ${has}
     GROUP BY 1, 2

@@ -3,6 +3,7 @@ import type { ClientBranding } from "@/lib/branding";
 import { getAgencySettings, getClientLogoDataUri, type AgencySettings } from "@/lib/branding-store";
 import type { DateWindow } from "@/lib/dates";
 import { inlineThumbs } from "@/lib/meta/thumbs";
+import { inlineTiktokPictures, parseTiktokPictureRef } from "@/lib/tiktok/thumbs";
 import { loadBoardData, type BoardMode } from "./aggregate";
 import { loadBoardContext } from "./context";
 import { BUILTIN, buildRegistry, type CustomMetric, type Registry } from "./registry";
@@ -82,7 +83,8 @@ const THUMBS_PER_DOCUMENT = 36;
  * Creative cards' thumbnails, as data URIs. The thumb route needs a session,
  * which a share link's reader and the PDF renderer do not have — the same
  * reason the logo is inlined. Never asks Meta for fresh URLs: a public view
- * must not spend the account's Graph quota (`inlineThumbs`).
+ * must not spend the account's Graph quota (`inlineThumbs`). TikTok's pictures
+ * are stored, so they are read, never fetched (`inlineTiktokPictures`).
  */
 export async function inlineCreativeThumbs(
   client: Pick<Client, "id" | "agencyId">,
@@ -104,7 +106,13 @@ export async function inlineCreativeThumbs(
   if (refs.length === 0) return;
 
   const included = new Set(refs);
-  const srcs = await inlineThumbs(client, refs, { max: THUMBS_PER_DOCUMENT });
+  const tiktok = refs.filter((r) => parseTiktokPictureRef(r) !== null);
+  const meta = refs.filter((r) => parseTiktokPictureRef(r) === null);
+  const [metaSrcs, tiktokSrcs] = await Promise.all([
+    meta.length > 0 ? inlineThumbs(client, meta, { max: THUMBS_PER_DOCUMENT }) : Promise.resolve(new Map<string, string | null>()),
+    tiktok.length > 0 ? inlineTiktokPictures(client.id, tiktok) : Promise.resolve(new Map<string, string | null>()),
+  ]);
+  const srcs = new Map([...metaSrcs, ...tiktokSrcs]);
   for (const w of widgets) {
     const d = data[w.id];
     if (d?.kind !== "creatives") continue;

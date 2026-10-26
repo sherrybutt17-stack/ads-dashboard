@@ -305,3 +305,59 @@ describe("importTiktokAdLevelHistory", () => {
     expect(asked.filter((a) => a.method === "ads").map((a) => a.ids)).toEqual([["1801"]]);
   });
 });
+
+describe("pictures an earlier run left missing", () => {
+  const COVER = "http://p16-common-sign.tiktokcdn.com/v0.jpeg?x-expires=1";
+
+  /** An ad identified on an earlier run whose asset was stored without its picture. */
+  async function earlierAd(ad: string, video: string, spend = 0) {
+    await run(`INSERT INTO tiktok_ad_creatives (client_id, advertiser_id, tiktok_ad_id, ad_name, creative_key, creative_type, thumb_key, video_id)
+               VALUES ('${CLIENT_ID}', '${ADV}', '${ad}', 'Ad ${ad}', 'v:${video}', 'video', 'v:${video}', '${video}')`);
+    await run(`INSERT INTO tiktok_creative_assets (client_id, advertiser_id, asset_key, kind, video_id, duration_seconds)
+               VALUES ('${CLIENT_ID}', '${ADV}', 'v:${video}', 'video', '${video}', 12)`);
+    if (spend > 0) {
+      await run(`INSERT INTO tiktok_ad_daily_metrics (client_id, advertiser_id, date, tiktok_ad_id, creative_key, creative_type, spend)
+                 VALUES ('${CLIENT_ID}', '${ADV}', '2026-01-10', '${ad}', 'v:${video}', 'video', ${spend})`);
+    }
+  }
+  const pictured = async (key: string) =>
+    (await run(`SELECT (thumb IS NOT NULL) AS p FROM tiktok_creative_assets WHERE asset_key = '${key}'`)).rows[0]?.p;
+
+  it("🔴 the nightly pass fetches them for ads that no longer run", async () => {
+    await earlierAd("1790", "v0");
+    videos.v0 = { duration: 12, width: 720, height: 1280, video_cover_url: COVER };
+    await pass();
+    expect(await pictured("v:v0")).toBe(true);
+    expect(fetched).toContain(COVER);
+  });
+
+  it("🔴 the import fetches them first — before any month, which may all be complete", async () => {
+    await earlierAd("1790", "v0", 25);
+    videos.v0 = { duration: 12, width: 720, height: 1280, video_cover_url: COVER };
+    report = { rows: [], fields: ALL_FIELDS };
+    await mod.importTiktokAdLevelHistory(client, { days: 20 });
+    expect(asked[0]).toEqual({ method: "videos", ids: ["v0"] });
+    expect(fetched[0]).toBe(COVER);
+    expect(await pictured("v:v0")).toBe(true);
+  });
+
+  it("asks only for those still missing, and posts never", async () => {
+    await earlierAd("1790", "v0");
+    await run(`UPDATE tiktok_creative_assets SET thumb = '\\xffd8'::bytea, thumb_content_type = 'image/jpeg' WHERE asset_key = 'v:v0'`);
+    await run(`INSERT INTO tiktok_ad_creatives (client_id, advertiser_id, tiktok_ad_id, creative_key, creative_type, thumb_key)
+               VALUES ('${CLIENT_ID}', '${ADV}', '1791', 'p:7290000000000000001', 'video', 'p:7290000000000000001')`);
+    report = { rows: [], fields: ALL_FIELDS };
+    await mod.importTiktokAdLevelHistory(client, { days: 20 });
+    expect(asked.filter((a) => a.method === "videos" || a.method === "images")).toEqual([]);
+  });
+
+  it("never fails the run when the picture cannot be fetched", async () => {
+    await earlierAd("1790", "v0");
+    videos.v0 = { duration: 12, video_cover_url: COVER };
+    picture = () => null;
+    await pass();
+    const [r] = await runs();
+    expect(r).toMatchObject({ kind: "tiktok_adlevel", status: "success" });
+    expect(await pictured("v:v0")).toBe(false);
+  });
+});

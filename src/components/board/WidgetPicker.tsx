@@ -4,6 +4,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { Modal } from "@/components/Modal";
 import {
   CARDS,
+  CARD_PLATFORMS,
   DIMENSION_IDS,
   METRICS,
   METRIC_GROUPS,
@@ -38,6 +39,18 @@ import type { BoardWidget, WidgetData, WidgetQuery } from "@/lib/board/types";
 import { PLATFORM_LABEL, type AdPlatform } from "@/lib/platforms";
 import { resultTypeChoices } from "@/lib/metrics/results";
 import type { Registry } from "@/lib/board/registry";
+import {
+  matchesSource,
+  pickerGroup,
+  pickerLabel,
+  sourceBadge,
+  sourceChoices,
+  sourceNote,
+  statSource,
+  widgetSources,
+  type SourceFilter,
+  type StatSource,
+} from "@/lib/board/source";
 import { BoardWidget as WidgetCard } from "./BoardWidget";
 import { useStats } from "./StatsContext";
 
@@ -74,11 +87,11 @@ interface Draft {
   cardSort: StatId;
   cards: number;
   cardRankings: boolean;
-  /** Meta campaign ids; empty = every campaign. */
+  /** Campaign ids on the cards' platform; empty = every campaign. */
   campaigns: string[];
 }
 
-/** A Meta campaign the cards can be narrowed to. */
+/** A campaign the cards can be narrowed to. */
 export interface CampaignChoice {
   id: string;
   name: string | null;
@@ -107,8 +120,12 @@ const BLANK: Omit<Draft, "platform"> = {
   campaigns: [],
 };
 
-/** The stats a fresh card set falls back to when the chosen ones no longer fit. */
-const DEFAULT_CARD_STATS: readonly StatId[] = ["impressions", "clicks", "ctr_all", "spend"];
+/** The stats a fresh card set falls back to when the chosen ones no longer fit, per platform. */
+const DEFAULT_CARD_STATS: Record<AdPlatform, readonly StatId[]> = {
+  meta: ["impressions", "clicks", "ctr_all", "spend"],
+  google: [],
+  tiktok: ["impressions", "clicks", "ctr", "spend"],
+};
 
 const LOADING: WidgetData = { kind: "pending", reason: "load" };
 
@@ -198,8 +215,7 @@ function queryOf(d: Draft): WidgetQuery {
     case "creatives":
       return {
         kind: "creatives",
-        // Ad-level data exists for Meta only.
-        platform: "meta",
+        platform: d.platform,
         by: d.cardBy,
         stats: d.cardStats,
         sort: d.cardSort,
@@ -241,11 +257,11 @@ function columnFits(reg: Registry, m: StatId, d: Draft): boolean {
     : statDims(def, d.platform).includes(d.tableDimension);
 }
 
-/** Whether a stat can go on a creative card: reported per ad (or creative), and not a CRM figure. */
-function cardStatFits(reg: Registry, m: StatId, by: CardGrouping): boolean {
+/** Whether a stat can go on a creative card: reported per ad (or creative) on its platform, and not a CRM figure. */
+function cardStatFits(reg: Registry, m: StatId, by: CardGrouping, platform: AdPlatform): boolean {
   const def = reg.get(m);
   if (!def || def.needs.includes("crm") || def.needs.includes("revenue")) return false;
-  return statSupports(def, "meta") && statDims(def, "meta").includes(by);
+  return statSupports(def, platform) && statDims(def, platform).includes(by);
 }
 
 /** Row choices for a table: every split some stat on this platform supports, and days. */
@@ -289,13 +305,15 @@ function fixUp(reg: Registry, d: Draft): Draft {
     next.rows = Math.min(TABLE_ROWS.max, Math.max(TABLE_ROWS.min, next.rows));
   }
   if (kind === "creatives") {
-    next.platform = "meta";
-    let stats = [...new Set(next.cardStats)].filter((m) => cardStatFits(reg, m, next.cardBy));
-    if (stats.length === 0) stats = DEFAULT_CARD_STATS.filter((m) => cardStatFits(reg, m, next.cardBy));
+    const fits = (m: StatId) => cardStatFits(reg, m, next.cardBy, next.platform);
+    let stats = [...new Set(next.cardStats)].filter(fits);
+    if (stats.length === 0) stats = DEFAULT_CARD_STATS[next.platform].filter(fits);
     next.cardStats = stats.slice(0, CARDS.statsMax);
-    if (!cardStatFits(reg, next.cardSort, next.cardBy)) next.cardSort = next.cardStats[0] ?? "spend";
+    if (!fits(next.cardSort)) next.cardSort = next.cardStats[0] ?? "spend";
     next.cards = Math.min(CARDS.max, Math.max(CARDS.min, next.cards));
     next.campaigns = [...new Set(next.campaigns)].slice(0, CARDS.campaignsMax);
+    // Delivery rankings are Meta's judgement; TikTok has none.
+    if (next.platform !== "meta") next.cardRankings = false;
   }
   // A pinned result type only on a results widget it can apply to.
   if (!pinsResultType(reg, next) || !resultTypeChoices(next.platform).some((c) => c.key === next.resultType)) {
@@ -336,6 +354,17 @@ function statGroups(
   ].filter((g) => g.stats.length > 0);
 }
 
+/** Who counts a stat — the platform or the CRM — for the picker's filter and names. */
+function sourceOf(reg: Registry, m: StatId): StatSource {
+  const def = reg.get(m);
+  return def ? statSource(def) : "platform";
+}
+
+/** A stat as the picker names it: with its counter, so a closed select still says whose it is. */
+function statName(reg: Registry, m: StatId, platform: AdPlatform): string {
+  return pickerLabel(reg.label(m, platform), sourceOf(reg, m), platform);
+}
+
 /**
  * Add a widget, or change one: ready-made presets, or built step by step —
  * visual, source, stat, split, options — with a live preview of the real
@@ -354,7 +383,7 @@ export function WidgetPicker({
   open,
   editing,
   platforms,
-  campaigns = [],
+  campaigns = {},
   slug,
   range,
   basis,
@@ -366,8 +395,8 @@ export function WidgetPicker({
   editing: BoardWidget | null;
   /** Ad platforms this client has connected; the first is the default source. */
   platforms: readonly AdPlatform[];
-  /** Meta campaigns the creative cards can be narrowed to. */
-  campaigns?: readonly CampaignChoice[];
+  /** Each platform's campaigns the creative cards can be narrowed to. */
+  campaigns?: Partial<Record<AdPlatform, readonly CampaignChoice[]>>;
   slug: string;
   range: { start: string; end: string };
   basis: string;
@@ -383,6 +412,12 @@ export function WidgetPicker({
   const [presetSize, setPresetSize] = useState<Size | undefined>(undefined);
   const [chosenPreset, setChosenPreset] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ key: string; data: WidgetData } | null>(null);
+  /*
+   * "Counted by": the platform's own numbers, the CRM's, or both. The question
+   * the picker most needs to answer — Meta's "Leads" and the CRM's "Leads" are
+   * different numbers, and a long list of both reads as one.
+   */
+  const [counted, setCounted] = useState<SourceFilter>("all");
 
   const ids = useId();
   const update = (patch: Partial<Draft>) => {
@@ -456,8 +491,45 @@ export function WidgetPicker({
   }
 
   const kind = VISUALS.find((x) => x.id === draft.visual)?.kind ?? "kpi";
-  // Creative cards are Meta's alone, so there is no source to choose.
-  const hasSource = kind !== "text" && kind !== "logo" && kind !== "creatives";
+  const bySource = (m: StatId) => counted === "all" || sourceOf(reg, m) === counted;
+
+  /*
+   * Narrowing the list must not leave the form on a stat the list no longer
+   * shows: the closed select would display one stat and save another. The
+   * first one that can draw takes its place.
+   */
+  function chooseCounted(next: SourceFilter) {
+    setCounted(next);
+    if (tab !== "build" || !(kind === "kpi" || kind === "series" || kind === "category")) return;
+    if (next === "all" || sourceOf(reg, draft.metric) === next) return;
+    const first = statGroups(reg, draft.platform, [], (m) => sourceOf(reg, m) === next)
+      .flatMap((g) => g.stats)
+      .find((m) => !metricBlock(reg, m, draft));
+    if (first) update({ metric: first });
+  }
+  const hasSource = kind !== "text" && kind !== "logo";
+  // Cards show the platform's own figures only — a CRM count can't be traced to an ad.
+  const hasCounted = hasSource && kind !== "creatives";
+  /*
+   * Cards come from Meta's and TikTok's ads alone, so building them offers only
+   * those (and the current source, so the select never shows one value and
+   * holds another). The Prebuilt tab offers every source: it lists every kind.
+   */
+  const choosable =
+    tab === "build" && kind === "creatives"
+      ? sources.filter((p) => CARD_PLATFORMS.includes(p) || p === draft.platform)
+      : sources;
+
+  /** Picking cards moves a Google source to Meta or TikTok, when one is connected. */
+  function chooseVisual(id: string) {
+    const cardKind = VISUALS.find((x) => x.id === id)?.kind === "creatives";
+    const to = sources.find((p) => CARD_PLATFORMS.includes(p));
+    update(
+      cardKind && to && !CARD_PLATFORMS.includes(draft.platform)
+        ? { visual: id, platform: to, campaigns: [] }
+        : { visual: id },
+    );
+  }
 
   return (
     <Modal
@@ -493,7 +565,7 @@ export function WidgetPicker({
           ) : (
             <span />
           )}
-          {sources.length > 1 && (tab === "prebuilt" || hasSource) && (
+          {choosable.length > 1 && (tab === "prebuilt" || hasSource) && (
             <label className="flex items-center gap-2 text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
               Source
               <span className="w-36">
@@ -509,10 +581,11 @@ export function WidgetPicker({
                       return;
                     }
                   }
-                  update({ platform });
+                  // Another platform's campaign ids mean nothing here.
+                  update({ platform, campaigns: [] });
                 }}
               >
-                {sources.map((p) => (
+                {choosable.map((p) => (
                   <option key={p} value={p}>
                     {PLATFORM_LABEL[p]}
                   </option>
@@ -523,6 +596,27 @@ export function WidgetPicker({
           )}
         </div>
 
+        {(tab === "prebuilt" || hasCounted) && (
+          <div className="flex flex-wrap items-center gap-2 text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
+            <span id={`${ids}-counted`}>Counted by</span>
+            <div role="radiogroup" aria-labelledby={`${ids}-counted`} className="flex flex-wrap gap-1.5">
+              {sourceChoices(draft.platform).map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={counted === c.value}
+                  title={c.hint}
+                  onClick={() => chooseCounted(c.value)}
+                  className="chip"
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
           <div className="min-w-0">
             {tab === "prebuilt" && !editing ? (
@@ -532,9 +626,12 @@ export function WidgetPicker({
                 aria-labelledby={`${ids}-tab-prebuilt`}
                 className="grid max-h-[460px] grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2"
               >
-                {PRESETS.map((p) => {
+                {PRESETS.map((p) => ({ p, sources: widgetSources(withPlatform(p.query, draft.platform), reg) }))
+                  .filter(({ sources }) => matchesSource(sources, counted))
+                  .map(({ p, sources }) => {
                   const verdict = checkWidget(withPlatform(p.query, draft.platform), reg);
                   const selected = chosenPreset === p.id;
+                  const badge = sourceBadge(sources, draft.platform);
                   return (
                     <button
                       key={p.id}
@@ -549,8 +646,18 @@ export function WidgetPicker({
                         boxShadow: selected ? "0 0 0 1px var(--accent)" : undefined,
                       }}
                     >
-                      <span className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>
-                        {p.label}
+                      <span className="flex w-full items-start justify-between gap-2">
+                        <span className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>
+                          {p.label}
+                        </span>
+                        {badge && (
+                          <span
+                            className="shrink-0 rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-[10.5px] font-medium"
+                            style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+                          >
+                            {badge}
+                          </span>
+                        )}
                       </span>
                       <span className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
                         {verdict.ok ? p.description : verdict.reason}
@@ -574,7 +681,7 @@ export function WidgetPicker({
                         type="button"
                         role="radio"
                         aria-checked={draft.visual === v.id}
-                        onClick={() => update({ visual: v.id })}
+                        onClick={() => chooseVisual(v.id)}
                         className="chip"
                       >
                         {v.label}
@@ -591,21 +698,29 @@ export function WidgetPicker({
                       value={draft.metric}
                       onChange={(e) => update({ metric: e.target.value as StatId })}
                     >
-                      {/* The chosen source's own stats only — each platform reports its own set. */}
-                      {statGroups(reg, draft.platform, [draft.metric]).map(({ group, stats }) => (
-                        <optgroup key={group} label={group}>
-                          {stats.map((m) => {
-                            const block = metricBlock(reg, m, draft);
-                            return (
-                              <option key={m} value={m} disabled={Boolean(block)}>
-                                {reg.label(m, draft.platform)}
-                                {block ? ` — ${block}` : ""}
-                              </option>
-                            );
-                          })}
-                        </optgroup>
-                      ))}
+                      {/*
+                        The chosen source's own stats only — each platform reports its own set
+                        — narrowed by "Counted by", and each named with its counter.
+                      */}
+                      {statGroups(reg, draft.platform, [draft.metric], (m) => m === draft.metric || bySource(m)).map(
+                        ({ group, stats }) => (
+                          <optgroup key={group} label={pickerGroup(group, stats, reg, draft.platform)}>
+                            {stats.map((m) => {
+                              const block = metricBlock(reg, m, draft);
+                              return (
+                                <option key={m} value={m} disabled={Boolean(block)}>
+                                  {statName(reg, m, draft.platform)}
+                                  {block ? ` — ${block}` : ""}
+                                </option>
+                              );
+                            })}
+                          </optgroup>
+                        ),
+                      )}
                     </select>
+                    <p className="mt-1.5 text-[11.5px] leading-snug" style={{ color: "var(--text-muted)" }}>
+                      {sourceNote(sourceOf(reg, draft.metric), draft.platform)}
+                    </p>
                   </Field>
                 )}
 
@@ -654,11 +769,11 @@ export function WidgetPicker({
                 )}
 
                 {kind === "table" && (
-                  <TableFields draft={draft} update={update} ids={ids} />
+                  <TableFields draft={draft} update={update} ids={ids} counted={counted} />
                 )}
 
                 {kind === "creatives" && (
-                  <CreativeFields draft={draft} update={update} ids={ids} campaigns={campaigns} />
+                  <CreativeFields draft={draft} update={update} ids={ids} campaigns={campaigns[draft.platform] ?? []} />
                 )}
 
                 {pinsResultType(reg, draft) && (
@@ -796,10 +911,13 @@ function TableFields({
   draft,
   update,
   ids,
+  counted,
 }: {
   draft: Draft;
   update: (patch: Partial<Draft>) => void;
   ids: string;
+  /** The picker's "Counted by" filter: which counter's stats the list offers. */
+  counted: SourceFilter;
 }) {
   const reg = useStats();
   const [filter, setFilter] = useState("");
@@ -807,11 +925,14 @@ function TableFields({
   const full = draft.columns.length >= TABLE_COLUMNS.max;
   const available = statGroups(reg, draft.platform, draft.columns).flatMap((g) => g.stats);
   const needle = filter.trim().toLowerCase();
+  // Searched by the name as shown, counter included — "crm" finds the CRM's stats.
   const groups = statGroups(
     reg,
     draft.platform,
     draft.columns,
-    (m) => !needle || reg.label(m, draft.platform).toLowerCase().includes(needle),
+    (m) =>
+      (counted === "all" || sourceOf(reg, m) === counted) &&
+      (!needle || statName(reg, m, draft.platform).toLowerCase().includes(needle)),
   );
   return (
     <>
@@ -839,7 +960,7 @@ function TableFields({
           >
             {draft.columns.map((m) => (
               <option key={m} value={m}>
-                {reg.label(m, draft.platform)}
+                {statName(reg, m, draft.platform)}
               </option>
             ))}
           </select>
@@ -871,9 +992,9 @@ function TableFields({
         )}
         <div className="flex max-h-[220px] flex-col gap-2.5 overflow-y-auto pr-1">
           {groups.map(({ group, stats }) => (
-            <div key={group} role="group" aria-label={group} className="flex flex-col gap-1">
+            <div key={group} role="group" aria-label={pickerGroup(group, stats, reg, draft.platform)} className="flex flex-col gap-1">
               <span className="text-[10.5px] font-semibold tracking-[0.06em] uppercase" style={{ color: "var(--text-muted)" }}>
-                {group}
+                {pickerGroup(group, stats, reg, draft.platform)}
               </span>
               <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
                 {stats.map((m) => {
@@ -898,7 +1019,7 @@ function TableFields({
                           })
                         }
                       />
-                      {reg.label(m, draft.platform)}
+                      {statName(reg, m, draft.platform)}
                     </label>
                   );
                 })}
@@ -907,7 +1028,7 @@ function TableFields({
           ))}
           {groups.length === 0 && (
             <p className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
-              No stat matches “{filter.trim()}”.
+              {needle ? <>No stat matches “{filter.trim()}”.</> : "No stat is counted that way."}
             </p>
           )}
         </div>
@@ -919,10 +1040,12 @@ function TableFields({
 /** Stats a card can carry, grouped as the Stat list is, for the add and rank selects. */
 function CardStatOptions({
   by,
+  platform,
   omit,
   keep = [],
 }: {
   by: CardGrouping;
+  platform: AdPlatform;
   omit?: readonly StatId[];
   /** Agency metrics already on the cards, shown even if archived. */
   keep?: readonly StatId[];
@@ -930,15 +1053,17 @@ function CardStatOptions({
   const reg = useStats();
   return (
     <>
-      {statGroups(reg, "meta", keep, (m) => cardStatFits(reg, m, by) && !omit?.includes(m)).map(({ group, stats }) => (
-        <optgroup key={group} label={group}>
-          {stats.map((m) => (
-            <option key={m} value={m}>
-              {reg.label(m, "meta")}
-            </option>
-          ))}
-        </optgroup>
-      ))}
+      {statGroups(reg, platform, keep, (m) => cardStatFits(reg, m, by, platform) && !omit?.includes(m)).map(
+        ({ group, stats }) => (
+          <optgroup key={group} label={group}>
+            {stats.map((m) => (
+              <option key={m} value={m}>
+                {reg.label(m, platform)}
+              </option>
+            ))}
+          </optgroup>
+        ),
+      )}
     </>
   );
 }
@@ -963,7 +1088,7 @@ function CreativeFields({
   const stats = draft.cardStats;
   const full = stats.length >= CARDS.statsMax;
   const reg = useStats();
-  const lowestFirst = reg.polarity(draft.cardSort, "meta") === "lower-better";
+  const lowestFirst = reg.polarity(draft.cardSort, draft.platform) === "lower-better";
   const move = (from: number, to: number) => {
     const next = [...stats];
     const [m] = next.splice(from, 1);
@@ -1016,7 +1141,7 @@ function CreativeFields({
         </legend>
         <ol className="flex flex-col gap-1">
           {stats.map((m, i) => {
-            const label = reg.label(m, "meta");
+            const label = reg.label(m, draft.platform);
             return (
               <li key={m} className="flex items-center gap-2 text-[12.5px]" style={{ color: "var(--text-secondary)" }}>
                 <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -1062,7 +1187,7 @@ function CreativeFields({
           }}
         >
           <option value="">{full ? `${CARDS.statsMax} stats is the most a card holds` : "Add a stat…"}</option>
-          <CardStatOptions by={draft.cardBy} omit={stats} />
+          <CardStatOptions by={draft.cardBy} platform={draft.platform} omit={stats} />
         </select>
       </fieldset>
 
@@ -1073,7 +1198,7 @@ function CreativeFields({
           value={draft.cardSort}
           onChange={(e) => update({ cardSort: e.target.value as StatId })}
         >
-          <CardStatOptions by={draft.cardBy} />
+          <CardStatOptions by={draft.cardBy} platform={draft.platform} />
         </select>
         <span className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
           {lowestFirst ? "Lowest first — the cheapest at the top." : "Highest first."}
@@ -1095,7 +1220,7 @@ function CreativeFields({
         </label>
         {listed.length === 0 ? (
           <p className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
-            No Meta campaigns in the last 400 days to choose from.
+            No {PLATFORM_LABEL[draft.platform]} campaigns in the last 400 days to choose from.
           </p>
         ) : (
           <>
@@ -1143,14 +1268,16 @@ function CreativeFields({
         )}
       </fieldset>
 
-      <label className="flex items-center gap-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
-        <input
-          type="checkbox"
-          checked={draft.cardRankings}
-          onChange={(e) => update({ cardRankings: e.target.checked })}
-        />
-        Show Meta&apos;s delivery rankings under each card
-      </label>
+      {draft.platform === "meta" && (
+        <label className="flex items-center gap-2 text-[13px]" style={{ color: "var(--text-secondary)" }}>
+          <input
+            type="checkbox"
+            checked={draft.cardRankings}
+            onChange={(e) => update({ cardRankings: e.target.checked })}
+          />
+          Show Meta&apos;s delivery rankings under each card
+        </label>
+      )}
     </>
   );
 }

@@ -51,10 +51,28 @@ describe("fetchTiktokPicture", () => {
   it("🔴 never fetches from anywhere else", async () => {
     const spy = vi.fn(async () => answer());
     vi.stubGlobal("fetch", spy);
-    for (const url of ["https://evil.example.com/x.jpeg", "http://p16-sign.tiktokcdn.com/x.jpeg", "https://tiktokcdn.com.evil.io/x.jpeg", "not a url"]) {
+    for (const url of [
+      "https://evil.example.com/x.jpeg",
+      "http://evil.example.com/x.jpeg",
+      "ftp://p16-sign.tiktokcdn.com/x.jpeg",
+      "https://tiktokcdn.com.evil.io/x.jpeg",
+      "not a url",
+    ]) {
       expect(await fetchTiktokPicture(url), url).toBeNull();
     }
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("🔴 takes TikTok's covers as it hands them out — http:// links, fetched over https", async () => {
+    const spy = vi.fn(async () => answer());
+    vi.stubGlobal("fetch", spy);
+    const got = await fetchTiktokPicture("http://p16-common-sign.tiktokcdn.com/tos-alisg-p-0051c001-sg/cover.image?x-expires=1");
+    expect(got?.contentType).toBe("image/jpeg");
+    expect(spy).toHaveBeenCalledTimes(1);
+    const asked = (spy.mock.calls[0] as unknown[])[0] as URL;
+    expect(asked.protocol).toBe("https:");
+    expect(asked.hostname).toBe("p16-common-sign.tiktokcdn.com");
+    expect(asked.search).toBe("?x-expires=1");
   });
 
   it("refuses a redirect off the CDN, and anything that is not an image", async () => {

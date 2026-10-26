@@ -7,6 +7,8 @@ import { join } from "node:path";
  */
 
 const CARDS = readFileSync(join(__dirname, "BoardCreatives.tsx"), "utf8");
+const TILE = readFileSync(join(__dirname, "BoardWidget.tsx"), "utf8");
+const PICKER = readFileSync(join(__dirname, "WidgetPicker.tsx"), "utf8");
 const DOC = readFileSync(join(__dirname, "..", "..", "lib", "board", "document.ts"), "utf8");
 
 describe("creative cards", () => {
@@ -25,5 +27,19 @@ describe("creative cards", () => {
 
   it("🔴 get their pictures inline in every document, which has no session for the thumb route", () => {
     expect(DOC).toMatch(/await inlineCreativeThumbs\(client, widgets, data\)/);
+    // TikTok's are stored, not linked: read from our rows, never fetched.
+    expect(DOC).toContain("inlineTiktokPictures(client.id, tiktok)");
+  });
+
+  it("🔴 name each stat in its own platform's words — TikTok's \"Clicks\", not Meta's \"Link clicks\"", () => {
+    expect(CARDS).toContain("reg.shortLabel(m, platform)");
+    expect(CARDS).not.toMatch(/reg\.(shortLabel|label)\(m, "meta"\)/);
+    expect(TILE).toContain("<BoardCreatives data={live} slug={slug} platform={query.platform}");
+  });
+
+  it("🔴 are built for the source chosen in the picker, not always Meta", () => {
+    expect(PICKER).toMatch(/kind: "creatives",\s*platform: d\.platform,/);
+    expect(PICKER).toContain("statDims(def, platform).includes(by)");
+    expect(PICKER).not.toMatch(/reg\.(polarity|label)\([^)]*, "meta"\)/);
   });
 });

@@ -103,7 +103,7 @@ const tableShape = {
   topN: z.number().int().min(TABLE_ROWS.min).max(TABLE_ROWS.max),
   resultType: ResultType,
 };
-/** A Meta campaign id: digits only, so it can never smuggle anything into a query. */
+/** A Meta or TikTok campaign id: digits only, so it can never smuggle anything into a query. */
 const CampaignId = z.string().regex(/^\d{1,30}$/);
 const creativesShape = {
   kind: z.literal("creatives"),

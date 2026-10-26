@@ -36,14 +36,18 @@ import {
   getPeriodReachRow,
   getPlatformResults,
   getSimpleExtras,
-  type MetaAdIdentity,
+  getTiktokAdCoverage,
+  getTiktokAdIdentity,
+  getTiktokAdPairs,
   type MetaAdLevelRow,
   type MetaAdPairRow,
   type MetaExtrasRow,
   type PlatformResultsRow,
   type ResultsBy,
   type SimpleExtrasRow,
+  type TiktokAdPairRow,
 } from "@/lib/metrics/board-queries";
+import { tiktokPictureRef } from "@/lib/tiktok/thumbs";
 import {
   mergeByType,
   othersFootnote,
@@ -235,6 +239,24 @@ function fromSimpleExtras(platform: AdPlatform, e: SimpleExtrasRow): Partial<Bag
     : { x: e.x, xMissing: e.uncollected };
 }
 
+/**
+ * One TikTok (ad, asset) pair — filling the same parts its campaign rows do
+ * (`fromAds`, `fromSimpleExtras`), so every TikTok stat reads an ad as it
+ * reads a campaign.
+ */
+function fromTiktokAd(r: TiktokAdPairRow): Bag {
+  return bag({
+    spend: r.spend,
+    impressions: r.impressions,
+    linkClicks: r.clicks,
+    clicksAll: r.clicks,
+    x: r.x,
+    xMissing: r.uncollected,
+    comments: r.x.comments ?? 0,
+    shares: r.x.shares ?? 0,
+  });
+}
+
 /** One ad-level row — grouped (ad, ad set, day, total) or one (ad, creative) pair. */
 function fromAdLevel(r: MetaAdLevelRow | MetaAdPairRow): Bag {
   return bag({
@@ -400,6 +422,20 @@ class BoardLoader {
     return this.once("coverage", () => getMetaCoverage(this.id));
   }
 
+  /** TikTok's ad rows per (ad, asset) — the one source for its cards and its splits by ad and creative. */
+  tiktokPairs() {
+    return this.once("tiktokPairs", () => getTiktokAdPairs(this.id, this.input.window));
+  }
+
+  /** What each TikTok ad shows. Keyed once per loader, as `adIdentity` is. */
+  tiktokIdentity(adIds: readonly string[]) {
+    return this.once("tiktokIdentity", () => getTiktokAdIdentity(this.id, adIds));
+  }
+
+  tiktokCoverage() {
+    return this.once("tiktokCoverage", () => getTiktokAdCoverage(this.id));
+  }
+
   reach() {
     return this.once("reach", () => getPeriodReachRow(this.id, this.input.window));
   }
@@ -547,6 +583,10 @@ class BoardLoader {
       }
       case "adset":
       case "ad": {
+        // TikTok's ad rows have no ad sets the Board names; Google has no ad rows.
+        if (platform !== "meta") {
+          return platform === "tiktok" && dimension === "ad" ? this.tiktokSplit("ad", metrics, focus) : [];
+        }
         const rows = await this.adLevel(dimension, "cur");
         const results = needs(this.reg, metrics, "results")
           ? new Map((await this.results(platform, dimension, "cur")).map((x) => [x.key, x]))
@@ -569,6 +609,7 @@ class BoardLoader {
          * The no-single-asset bucket stays a row of its own, so a table by
          * creative still adds up to the ad-level total.
          */
+        if (platform !== "meta") return platform === "tiktok" ? this.tiktokSplit("creative", metrics, focus) : [];
         const [pairs, results] = await Promise.all([
           this.creativePairs(),
           needs(this.reg, metrics, "results") ? this.results(platform, "creative", "cur") : Promise.resolve(null),
@@ -608,26 +649,79 @@ class BoardLoader {
   }
 
   /**
+   * TikTok's ad rows by ad or by asset, from the (ad, asset) pairs — each row
+   * its delivery, its figures and its own results, as a campaign row has.
+   */
+  private async tiktokSplit(by: "ad" | "creative", metrics: readonly StatId[], focus: ResultFocus): Promise<Row[]> {
+    const [pairs, results] = await Promise.all([
+      this.tiktokPairs(),
+      needs(this.reg, metrics, "results") ? this.results("tiktok", by, "cur") : Promise.resolve(null),
+    ]);
+    const identity = by === "creative" ? await this.tiktokIdentity(pairs.map((p) => p.adId)) : null;
+    const byKey = results ? new Map(results.map((r) => [r.key, r])) : null;
+    return [...groupBy(pairs, (p) => (by === "ad" ? p.adId : p.creativeKey))].map(([key, list], i) => {
+      const rep = biggest(list);
+      const res = byKey ? fromResults(byKey.get(key), focus) : null;
+      const b = sumBags(list.map(fromTiktokAd));
+      return {
+        key,
+        label:
+          by === "ad"
+            ? (rep.adName ?? `Ad ${key}`)
+            : key === ""
+              ? "Not attributable to one asset"
+              : (identity?.get(rep.adId)?.adName ?? rep.adName ?? `Creative ${i + 1}`),
+        sub: rep.campaignName ?? undefined,
+        rtype: res?.type,
+        bag: res ? { ...b, ...res.parts } : b,
+      };
+    });
+  }
+
+  /**
    * Coverage notes for a split or a stat that starts later than the range —
    * and, on Google and TikTok, for extra figures some days were synced without.
+   *
+   * `platform` is whose ad rows `adRows` means — Meta's, unless it (or the
+   * extras') says TikTok: TikTok's start with its own ad-level import.
    */
   async coverageNotes(opts: {
     adRows: boolean;
     audience: boolean;
     extras?: { platform: AdPlatform; metrics: readonly StatId[] };
+    platform?: AdPlatform;
   }): Promise<string[]> {
     const out: string[] = [];
     const ex = opts.extras;
+    const tiktokAds = opts.adRows && (opts.platform ?? ex?.platform) === "tiktok";
     if (ex && ex.platform !== "meta") {
       const keys = [...new Set(ex.metrics.flatMap((m) => this.reg.extraKeys(m)))];
       if (keys.length > 0) {
-        const [total] = await this.simpleExtras(ex.platform, "total", "cur");
-        if (keys.some((k) => (total?.uncollected[k] ?? 0) > 0)) {
+        // Ad rows count their own missing days, not the campaign rows'.
+        const missing = tiktokAds
+          ? (await this.tiktokPairs()).some((p) => keys.some((k) => (p.uncollected[k] ?? 0) > 0))
+          : await this.simpleExtras(ex.platform, "total", "cur").then(([total]) =>
+              keys.some((k) => (total?.uncollected[k] ?? 0) > 0),
+            );
+        if (missing) {
           out.push(
-            "Some days in this range were synced before these figures were collected — re-pull history on the Connections page to include them.",
+            tiktokAds
+              ? "Some ad-level days were synced before these figures were collected — import TikTok ad-level detail on the Connections page again to include them."
+              : "Some days in this range were synced before these figures were collected — re-pull history on the Connections page to include them.",
           );
         }
       }
+    }
+    if (tiktokAds) {
+      const { firstAdDay } = await this.tiktokCoverage();
+      if (!firstAdDay) {
+        out.push("TikTok's ad-level detail has not been collected yet. Import it on the Connections page to fill this widget.");
+      } else if (this.input.window.startKey < firstAdDay) {
+        out.push(
+          `TikTok ad-level figures start ${dayLabel(firstAdDay)}; earlier days are not included. Import TikTok ad-level detail on the Connections page to add them.`,
+        );
+      }
+      return out;
     }
     if (!opts.adRows && !opts.audience) return out;
     const c = await this.coverage();
@@ -1162,7 +1256,7 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
 }
 
 /** The pair that speaks for a group: the one most money went to. */
-function biggest(list: readonly MetaAdPairRow[]): MetaAdPairRow {
+function biggest<T extends { spend: number }>(list: readonly T[]): T {
   return list.reduce((a, b) => (b.spend > a.spend ? b : a));
 }
 
@@ -1185,9 +1279,114 @@ const RANKING_FIELDS = [
   ["Conversion", "conversionRanking"],
 ] as const;
 
+/** One (ad, asset) pair as the cards read it, whichever platform ran the ad. */
+interface CardPair {
+  adId: string;
+  /** "" = no single asset: Dynamic Creative, carousels. */
+  creativeKey: string;
+  creativeType: string | null;
+  adName: string | null;
+  campaignId: string;
+  campaignName: string | null;
+  spend: number;
+  impressions: number;
+  bag: Bag;
+  /** Meta's delivery rankings for the pair; TikTok reports none. */
+  rankings: Pick<MetaAdPairRow, "qualityRanking" | "engagementRanking" | "conversionRanking"> | null;
+}
+
+/** What one ad shows on its card, whichever platform ran it. */
+interface CardIdentity {
+  adName: string | null;
+  /** Meta's headline; TikTok ads have none. */
+  title: string | null;
+  body: string | null;
+  creativeType: string | null;
+  videoSeconds: number | null;
+  /** Meta: a thumbnail is stored for the ad, found by the card's key. */
+  hasThumbnail: boolean;
+  /** TikTok: its stored picture's own ref (`tiktokPictureRef`). */
+  pictureRef: string | null;
+  previewLink: string | null;
+  learningStage: string | null;
+}
+
+/** The cards' (ad, asset) pairs and what each ad shows — from Meta's ad rows or TikTok's. */
+async function cardSource(
+  L: BoardLoader,
+  platform: AdPlatform,
+): Promise<{ pairs: CardPair[]; identity: Map<string, CardIdentity> }> {
+  if (platform === "tiktok") {
+    const rows = await L.tiktokPairs();
+    const ads = await L.tiktokIdentity(rows.map((p) => p.adId));
+    return {
+      pairs: rows.map((p) => ({ ...pairBasics(p), bag: fromTiktokAd(p), rankings: null })),
+      identity: new Map(
+        [...ads].map(([id, x]) => [
+          id,
+          {
+            adName: x.adName,
+            title: null,
+            body: x.body,
+            creativeType: x.creativeType,
+            videoSeconds: x.videoSeconds,
+            hasThumbnail: x.pictureKey !== null,
+            pictureRef: x.pictureKey ? tiktokPictureRef(x.pictureKey) : null,
+            previewLink: null,
+            learningStage: null,
+          },
+        ]),
+      ),
+    };
+  }
+  const rows = await L.creativePairs();
+  const ads = await L.adIdentity(rows.map((p) => p.adId));
+  return {
+    pairs: rows.map((p) => ({
+      ...pairBasics(p),
+      bag: fromAdLevel(p),
+      rankings: {
+        qualityRanking: p.qualityRanking,
+        engagementRanking: p.engagementRanking,
+        conversionRanking: p.conversionRanking,
+      },
+    })),
+    identity: new Map(
+      [...ads].map(([id, x]) => [
+        id,
+        {
+          adName: x.adName,
+          title: x.title,
+          body: x.body,
+          creativeType: x.creativeType,
+          videoSeconds: x.videoLengthSeconds,
+          hasThumbnail: x.hasThumbnail,
+          pictureRef: null,
+          previewLink: x.previewLink,
+          learningStage: x.learningStage,
+        },
+      ]),
+    ),
+  };
+}
+
+function pairBasics(p: MetaAdPairRow | TiktokAdPairRow): Omit<CardPair, "bag" | "rankings"> {
+  return {
+    adId: p.adId,
+    creativeKey: p.creativeKey,
+    creativeType: p.creativeType,
+    adName: p.adName,
+    campaignId: p.campaignId,
+    campaignName: p.campaignName,
+    spend: p.spend,
+    impressions: p.impressions,
+  };
+}
+
 /**
  * Ads (or creatives) as cards, ranked by one stat — Whatagraph's "Creatives
- * performance", built from the same ad rows as every other ad-level widget.
+ * performance", built from the same ad rows as every other ad-level widget:
+ * Meta's, or TikTok's own (`tiktok_ad_daily_metrics`).
  *
  * Grouping by creative merges the ads that share an image or video, as the
  * Overview's leaderboard does; by ad keeps each ad on its own card, as
@@ -1199,19 +1398,19 @@ async function creativesData(
   L: BoardLoader,
   q: Extract<WidgetQuery, { kind: "creatives" }>,
 ): Promise<WidgetData> {
+  const platform = q.platform;
   const reads = widgetMetrics(q);
   const wantsResults = needs(L.reg, reads, "results");
-  const f = wantsResults ? await L.resultFocus("meta", q.resultType) : null;
+  const f = wantsResults ? await L.resultFocus(platform, q.resultType) : null;
   // Each card counts its own kind of result, as each Ads Manager row does — unless one is pinned.
   const focus: ResultFocus = !wantsResults ? null : q.resultType ? (f?.type?.key ?? q.resultType) : "own";
 
-  const [currency, pairs, coverage, results] = await Promise.all([
-    L.currency("meta"),
-    L.creativePairs(),
-    L.coverageNotes({ adRows: true, audience: false }),
-    wantsResults ? L.results("meta", "ad_creative", "cur") : Promise.resolve(null),
+  const [currency, { pairs, identity }, coverage, results] = await Promise.all([
+    L.currency(platform),
+    cardSource(L, platform),
+    L.coverageNotes({ adRows: true, audience: false, platform, extras: { platform, metrics: reads } }),
+    wantsResults ? L.results(platform, "ad_creative", "cur") : Promise.resolve(null),
   ]);
-  const identity = await L.adIdentity(pairs.map((p) => p.adId));
   const chosen = q.campaigns ? new Set(q.campaigns) : null;
   const scoped = chosen ? pairs.filter((p) => chosen.has(p.campaignId)) : pairs;
   const totalSpend = scoped.reduce((s, p) => s + p.spend, 0);
@@ -1222,7 +1421,7 @@ async function creativesData(
   if (q.by === "creative") groups.delete("");
 
   const built = [...groups].map(([key, list]) => {
-    let b = sumBags(list.map(fromAdLevel));
+    let b = sumBags(list.map((p) => p.bag));
     let rtype: ResultType | null = null;
     if (resultsByPair) {
       const typed = mergeByType(
@@ -1238,7 +1437,7 @@ async function creativesData(
     return { key, list, bag: b, rtype };
   });
 
-  const ascending = L.reg.polarity(q.sort, "meta") === "lower-better";
+  const ascending = L.reg.polarity(q.sort, platform) === "lower-better";
   const ordered = orderByStat(
     built.filter((c) => c.bag.spend > 0 || c.bag.impressions > 0),
     (c) => L.reg.value(q.sort, c.bag),
@@ -1252,7 +1451,7 @@ async function creativesData(
     // The biggest ad first, then the others, for any field it leaves blank.
     const idents = [rep, ...c.list.filter((p) => p !== rep)]
       .map((p) => identity.get(p.adId))
-      .filter((x): x is MetaAdIdentity => Boolean(x));
+      .filter((x): x is CardIdentity => Boolean(x));
     const name =
       firstOf([idents[0]?.adName, rep.adName, ...idents.map((x) => x.adName)]) ??
       (q.by === "ad" ? `Ad ${c.key}` : "Untitled creative");
@@ -1263,17 +1462,27 @@ async function creativesData(
       q.by === "creative"
         ? [`${adCount} ${adCount === 1 ? "ad" : "ads"}`, share].filter(Boolean).join(" · ")
         : [rep.campaignName, share].filter(Boolean).join(" · ");
-    // The asset's own thumbnail; an ad with no single asset is looked up by ad.
-    const thumbKey = q.by === "creative" ? c.key : rep.creativeKey || `ad.${rep.adId}`;
-    const thumbRef = idents.some((x) => x.hasThumbnail) ? thumbKey : null;
+    /*
+     * The asset's own picture. Meta's is found by the card's key (an ad with
+     * no single asset by its ad id); TikTok's by the ref its stored picture
+     * carries — a carousel's first image included.
+     */
+    const thumbRef =
+      platform === "tiktok"
+        ? firstOf(idents.map((x) => x.pictureRef))
+        : idents.some((x) => x.hasThumbnail)
+          ? q.by === "creative"
+            ? c.key
+            : rep.creativeKey || `ad.${rep.adId}`
+          : null;
 
     // Rankings: the most-delivered pair that has any, judged on the card's volume.
     let rankings: CreativeCardData["rankings"] = [];
     let rankingNote: string | null = null;
     if (q.rankings) {
       const source = [...c.list]
-        .filter((p) => p.qualityRanking || p.engagementRanking || p.conversionRanking)
-        .sort((a, b) => b.impressions - a.impressions)[0];
+        .filter((p) => p.rankings && (p.rankings.qualityRanking || p.rankings.engagementRanking || p.rankings.conversionRanking))
+        .sort((a, b) => b.impressions - a.impressions)[0]?.rankings;
       if (source) {
         rankings = RANKING_FIELDS.flatMap(([label, field]) => {
           const value = asRanking(source[field]);
@@ -1296,7 +1505,7 @@ async function creativesData(
       body: firstOf(idents.map((x) => x.body)),
       type: asCreativeType(firstOf([...idents.map((x) => x.creativeType), rep.creativeType])),
       videoSeconds: idents.reduce<number | null>(
-        (m, x) => (x.videoLengthSeconds !== null && (m === null || x.videoLengthSeconds > m) ? x.videoLengthSeconds : m),
+        (m, x) => (x.videoSeconds !== null && (m === null || x.videoSeconds > m) ? x.videoSeconds : m),
         null,
       ),
       thumb: thumbRef ? { ref: thumbRef } : null,
@@ -1321,12 +1530,20 @@ async function creativesData(
   const unresolvedSpend = unresolved.reduce((s, p) => s + p.spend, 0);
   if (unresolvedSpend > 0) {
     notes.push(
-      `${formatCurrency(unresolvedSpend, currency)} went to ads with no single image or video (Dynamic Creative, carousels), so it is on no card.`,
+      `${formatCurrency(unresolvedSpend, currency)} went to ads with no single image or video (${platform === "tiktok" ? "carousels" : "Dynamic Creative, carousels"}), so it is on no card.`,
     );
   }
-  if (ascending && cards.length > 1) notes.push(`Ranked by ${L.reg.label(q.sort, "meta").toLowerCase()}, lowest first.`);
+  if (ascending && cards.length > 1) notes.push(`Ranked by ${L.reg.label(q.sort, platform).toLowerCase()}, lowest first.`);
 
   if (cards.length === 0) {
+    // TikTok's ad rows start with its own import: "nothing ran" would be the wrong reason.
+    if (platform === "tiktok" && pairs.length === 0 && !(await L.tiktokCoverage()).firstAdDay) {
+      return unavailable(
+        "empty",
+        "TikTok's ad-level detail isn't collected yet",
+        "Import TikTok ad-level detail on the Connections page — or wait for tonight's sync — to fill these cards.",
+      );
+    }
     return unavailable(
       "empty",
       chosen ? "No ads from the chosen campaigns ran in this range" : "No ads ran in this range",

@@ -21,7 +21,7 @@ import type { BoardData, BoardWidget, WidgetBox, WidgetData, WidgetQuery } from 
 import type { AdPlatform } from "@/lib/platforms";
 import { BoardWidget as WidgetCard } from "./BoardWidget";
 import { WidgetMenu, type WidgetAction } from "./WidgetMenu";
-import { WidgetPicker, type PickerResult } from "./WidgetPicker";
+import { WidgetPicker, type CampaignChoice, type PickerResult } from "./WidgetPicker";
 import { useStats } from "./StatsContext";
 
 // The grid library measures the DOM, so it never renders on the server — and it
@@ -86,7 +86,7 @@ export function BoardEditor({
   initialLocked,
   updatedAt,
   platforms,
-  metaCampaigns,
+  campaigns,
   range,
   rangeText,
   basis,
@@ -101,8 +101,8 @@ export function BoardEditor({
   updatedAt: string | null;
   /** Connected ad platforms, offered as widget sources. */
   platforms: AdPlatform[];
-  /** Meta campaigns a creative-cards widget can be narrowed to. */
-  metaCampaigns: Array<{ id: string; name: string | null }>;
+  /** Each platform's campaigns a creative-cards widget can be narrowed to. */
+  campaigns: Partial<Record<AdPlatform, readonly CampaignChoice[]>>;
   range: { start: string; end: string };
   rangeText: string;
   basis: string;
@@ -556,7 +556,7 @@ export function BoardEditor({
           open
           editing={picker.editing}
           platforms={platforms}
-          campaigns={metaCampaigns}
+          campaigns={campaigns}
           slug={slug}
           range={range}
           basis={basis}

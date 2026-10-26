@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { tiktokCreativeAssets } from "@/db/schema";
 import { parseAssetKey } from "./creative";
@@ -46,6 +46,12 @@ export async function fetchTiktokPicture(url: string, timeoutMs = 4000): Promise
   } catch {
     return null;
   }
+  /*
+   * 🔴 TikTok hands its covers out as http:// links (all 15 of Parfaire's, 26
+   * Oct 2026), and its CDN serves the same path over https. So a link is
+   * upgraded, never fetched as given — refusing them stored no picture at all.
+   */
+  if (u.protocol === "http:") u.protocol = "https:";
   if (!onCdn(u)) return null;
   try {
     const res = await fetch(u, { cache: "no-store", redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
@@ -87,6 +93,48 @@ export async function loadTiktokPicture(clientId: string, assetKey: string): Pro
     .where(and(eq(tiktokCreativeAssets.clientId, clientId), eq(tiktokCreativeAssets.assetKey, assetKey)))
     .limit(1);
   return row?.thumb ? { bytes: row.thumb, contentType: row.contentType ?? "image/jpeg" } : null;
+}
+
+/**
+ * Stored pictures as data URIs, for board documents — a PDF or a share link
+ * has no session for the thumb route. One query, scoped to the client; the
+ * bytes are already the small JPEG a document carries (`shrink`), so nothing
+ * is fetched or resized. Null for a ref with no picture stored.
+ */
+export async function inlineTiktokPictures(
+  clientId: string,
+  refs: readonly string[],
+): Promise<Map<string, string | null>> {
+  const keys = new Map<string, string>();
+  for (const ref of new Set(refs)) {
+    const key = parseTiktokPictureRef(ref);
+    if (key) keys.set(ref, key);
+  }
+  const out = new Map<string, string | null>();
+  if (keys.size === 0) return out;
+  const rows = await db
+    .select({
+      key: tiktokCreativeAssets.assetKey,
+      thumb: tiktokCreativeAssets.thumb,
+      contentType: tiktokCreativeAssets.thumbContentType,
+    })
+    .from(tiktokCreativeAssets)
+    .where(
+      and(eq(tiktokCreativeAssets.clientId, clientId), inArray(tiktokCreativeAssets.assetKey, [...new Set(keys.values())])),
+    );
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  for (const [ref, key] of keys) {
+    const row = byKey.get(key);
+    const type = (row?.contentType ?? "image/jpeg").split(";")[0].trim().toLowerCase();
+    const bytes = row?.thumb ? Buffer.from(row.thumb) : null;
+    out.set(
+      ref,
+      bytes && bytes.length > 0 && bytes.length <= MAX_THUMB_BYTES && RAW_TYPES.has(type)
+        ? `data:${type};base64,${bytes.toString("base64")}`
+        : null,
+    );
+  }
+  return out;
 }
 
 /**

@@ -370,17 +370,23 @@ const CAMPAIGN_ONLY: readonly DimensionId[] = ["campaign"];
 const AD_ROWS: readonly DimensionId[] = ["campaign", "adset", "ad", "creative"];
 /** Only ad rows carry it (`MetricDef.adRows`), so no split by campaign rows either. */
 const AD_ONLY: readonly DimensionId[] = ["adset", "ad", "creative"];
-const DELIVERY_DIMS = { meta: META_EVERY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
+/**
+ * TikTok's campaign rows, and its ad rows (`tiktok_ad_daily_metrics`) by ad and
+ * by asset. Its ad rows carry every figure its campaign rows do, so each TikTok
+ * stat splits all three ways. No ad groups: nothing on the Board names them.
+ */
+const TIKTOK_AD_ROWS: readonly DimensionId[] = ["campaign", "ad", "creative"];
+const DELIVERY_DIMS = { meta: META_EVERY, google: CAMPAIGN_ONLY, tiktok: TIKTOK_AD_ROWS } as const;
 const CRM_DIMS = { meta: CAMPAIGN_ONLY, google: CAMPAIGN_ONLY, tiktok: CAMPAIGN_ONLY } as const;
 /**
- * Meta reports results per campaign and per ad (and so per creative, from the
- * ad rows); Google's are one type, so a split by type would be a single bar. No
- * audience split: results are not stored that way.
+ * Meta and TikTok report results per campaign and per ad (and so per creative,
+ * from the ad rows); Google's are one type, so a split by type would be a
+ * single bar. No audience split: results are not stored that way.
  */
 const RESULT_DIMS = {
   meta: ["campaign", "adset", "ad", "creative", "result_type"],
   google: CAMPAIGN_ONLY,
-  tiktok: ["campaign", "result_type"],
+  tiktok: ["campaign", "ad", "creative", "result_type"],
 } as const satisfies Partial<Record<AdPlatform, readonly DimensionId[]>>;
 
 function crmCount(id: MetricId, label: string, statKey: string): MetricDef {
@@ -550,7 +556,7 @@ function simple(
     platforms,
     additive,
     series: platforms,
-    dims: Object.fromEntries(platforms.map((p) => [p, CAMPAIGN_ONLY])),
+    dims: Object.fromEntries(platforms.map((p) => [p, p === "tiktok" ? TIKTOK_AD_ROWS : CAMPAIGN_ONLY])),
     needs: delivery ? ["ads", "extras"] : ["extras"],
     calc,
     ...(additive ? {} : { rankBy: "per" in calc ? "spend" : "impressions" }),
@@ -572,7 +578,7 @@ function quartile(id: MetricId, pct: number, statKey: string, tiktokKey: string)
     platforms: META_TIKTOK,
     additive: true,
     series: META_TIKTOK,
-    dims: { meta: AD_ONLY, tiktok: CAMPAIGN_ONLY },
+    dims: { meta: AD_ONLY, tiktok: TIKTOK_AD_ROWS },
     needs: ["adlevel", "extras"],
     adRows: true,
     calc: { sum: `x.${id}` },
@@ -930,7 +936,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     statKeys: { tiktok: "tiktokComments" },
     platforms: META_TIKTOK,
     series: META_TIKTOK,
-    dims: { meta: AD_ROWS, tiktok: CAMPAIGN_ONLY },
+    dims: { meta: AD_ROWS, tiktok: TIKTOK_AD_ROWS },
   },
   shares: {
     ...metaAction("shares", "Post shares", "postShares"),
@@ -938,7 +944,7 @@ export const METRICS: Record<MetricId, MetricDef> = {
     statKeys: { tiktok: "tiktokShares" },
     platforms: META_TIKTOK,
     series: META_TIKTOK,
-    dims: { meta: AD_ROWS, tiktok: CAMPAIGN_ONLY },
+    dims: { meta: AD_ROWS, tiktok: TIKTOK_AD_ROWS },
   },
   saves: metaAction("saves", "Post saves", "postSaves"),
   page_likes: metaAction("page_likes", "Page likes", "pageLikes"),
@@ -1370,6 +1376,9 @@ export type WidgetKind = (typeof WIDGET_KIND_IDS)[number];
 export const CARD_GROUPINGS = ["ad", "creative"] as const;
 export type CardGrouping = (typeof CARD_GROUPINGS)[number];
 
+/** The platforms whose ads are stored one by one, so they can be cards. */
+export const CARD_PLATFORMS: readonly AdPlatform[] = ["meta", "tiktok"];
+
 export const SERIES_FORMS = ["line", "area", "column"] as const;
 export type SeriesForm = (typeof SERIES_FORMS)[number];
 
@@ -1546,8 +1555,8 @@ export function checkWidget(q: WidgetQuery, stats: StatLookup = BUILTIN_STATS): 
       return OK;
     }
     case "creatives": {
-      if (q.platform !== "meta") {
-        return no("Creative cards are Meta only. Google and TikTok don't report individual ads here.");
+      if (!CARD_PLATFORMS.includes(q.platform)) {
+        return no("Creative cards are Meta and TikTok only. Google doesn't report individual ads here.");
       }
       if (q.stats.length < 1 || q.stats.length > CARDS.statsMax) {
         return no(`Show between 1 and ${CARDS.statsMax} stats on each card.`);
@@ -1558,9 +1567,12 @@ export function checkWidget(q: WidgetQuery, stats: StatLookup = BUILTIN_STATS): 
         if (d.needs.includes("crm") || d.needs.includes("revenue")) {
           return no(`${d.label} comes from the CRM, which can't reliably tell which ad a lead came from.`);
         }
-        if (!statSupports(d, "meta") || !statDims(d, "meta").includes(q.by)) {
-          return no(`${d.label} is not reported per ${q.by}.`);
+        if (!statSupports(d, q.platform) || !statDims(d, q.platform).includes(q.by)) {
+          return no(`${statLabel(d, q.platform)} is not reported per ${q.by} on ${platformName(q.platform)}.`);
         }
+      }
+      if (q.rankings && q.platform !== "meta") {
+        return no("Delivery rankings are Meta's. TikTok doesn't report them.");
       }
       if (q.topN < CARDS.min || q.topN > CARDS.max) {
         return no(`Show between ${CARDS.min} and ${CARDS.max} cards.`);
@@ -1606,7 +1618,7 @@ export function defaultTitle(q: WidgetQuery, stats: StatLookup = BUILTIN_STATS):
           ? `${metricLabel("results", q.platform)} by ${DIMENSIONS[q.dimension].rowNoun}`
           : `Performance by ${DIMENSIONS[q.dimension].rowNoun}`;
     case "creatives":
-      return `${q.by === "ad" ? "Top ads" : "Top creatives"} by ${label(q.sort, "meta")}`;
+      return `${q.by === "ad" ? "Top ads" : "Top creatives"} by ${label(q.sort, q.platform)}`;
     case "funnel":
       return "Pipeline funnel";
     case "text":
@@ -1802,6 +1814,22 @@ export const PRESETS: readonly Preset[] = [
       by: "ad",
       stats: ["impressions", "clicks", "ctr_all"],
       sort: "clicks",
+      topN: 6,
+    },
+    size: { w: 12, h: 12 },
+  },
+  {
+    // Every stat here is reported per ad on Meta and TikTok alike, so the
+    // same preset makes TikTok's cards.
+    id: "ad_cards_results",
+    label: "Ads by results",
+    description: "Ad cards ranked by each ad's own results, with their cost",
+    query: {
+      kind: "creatives",
+      platform: "meta",
+      by: "ad",
+      stats: ["spend", "results", "cost_per_result", "impressions", "clicks", "ctr"],
+      sort: "results",
       topN: 6,
     },
     size: { w: 12, h: 12 },

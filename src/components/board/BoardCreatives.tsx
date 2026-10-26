@@ -7,6 +7,7 @@ import { formatMetricValue } from "@/lib/board/format";
 import { formatNumber } from "@/lib/metrics/compute";
 import { RANKING_LABEL, rankingColor } from "@/lib/metrics/creative";
 import type { CreativeCardData, WidgetData } from "@/lib/board/types";
+import type { AdPlatform } from "@/lib/platforms";
 import { useStats } from "./StatsContext";
 
 type CreativesData = Extract<WidgetData, { kind: "creatives" }>;
@@ -21,10 +22,13 @@ type CreativesData = Extract<WidgetData, { kind: "creatives" }>;
 export function BoardCreatives({
   data,
   slug,
+  platform,
   fixed,
 }: {
   data: CreativesData;
   slug: string;
+  /** Whose ads: each stat is named in that platform's own words ("Clicks" on TikTok). */
+  platform: AdPlatform;
   fixed?: { width: number; height: number };
 }) {
   const rankings = data.cards.some((c) => c.rankings.length > 0 || c.rankingNote !== null);
@@ -51,6 +55,7 @@ export function BoardCreatives({
               card={c}
               data={data}
               slug={slug}
+              platform={platform}
               thumbH={layout?.thumbH}
               compact={layout?.compact ?? false}
               printed={fixed !== undefined}
@@ -74,6 +79,7 @@ function Card({
   card: c,
   data,
   slug,
+  platform,
   thumbH,
   compact,
   printed,
@@ -81,6 +87,7 @@ function Card({
   card: CreativeCardData;
   data: CreativesData;
   slug: string;
+  platform: AdPlatform;
   /** Fixed thumbnail height in a document; 0 = no room for one. */
   thumbH?: number;
   /** A tight page: one line of body, no context line (`cardGrid`). */
@@ -150,9 +157,9 @@ function Card({
               <dt
                 className="line-clamp-2 min-h-[26px] text-[10px] font-semibold uppercase leading-[13px] tracking-[0.06em] [overflow-wrap:anywhere]"
                 style={{ color: "var(--text-muted)" }}
-                title={reg.label(m, "meta")}
+                title={reg.label(m, platform)}
               >
-                {reg.shortLabel(m, "meta")}
+                {reg.shortLabel(m, platform)}
               </dt>
               <dd className="tnum text-[15px] font-semibold leading-5" style={{ color: "var(--text-primary)" }}>
                 {formatMetricValue(reg.format(m), c.values[i], data.currency)}
