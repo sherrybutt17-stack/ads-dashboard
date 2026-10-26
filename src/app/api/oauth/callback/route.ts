@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { safeFailureMessage } from "@/lib/api-failure";
-import { claimInstallation, exchangeCode } from "@/lib/ghl/oauth";
+import { claimInstallation, exchangeCode, installFor } from "@/lib/ghl/oauth";
 import { importPipelineStages } from "@/lib/clients";
 import { getClientUnscoped } from "@/lib/clients";
 
@@ -50,13 +50,17 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // One per sub-account the install covers — several when GHL's install
-    // screen had more than one ticked (an agency install).
-    const installations = await exchangeCode(code, clientId);
-    const installation = installations.length === 1 ? installations[0] : null;
+    // One per sub-account the install covers — several for an agency install,
+    // whose token lists every sub-account the app is approved on.
+    const subs = await exchangeCode(code, clientId);
+    const installation = clientId
+      ? installFor(clientId, subs)
+      : subs.length === 1
+        ? subs[0].installation
+        : null;
 
     let slug: string | null = null;
-    // Only a single sub-account can be this client's; several stay unclaimed.
+    // The one that is this client's, when that can be told; else all stay unclaimed.
     if (clientId && installation) {
       /*
        * Unscoped on purpose, and named so. The authorization for this lookup is
@@ -101,7 +105,7 @@ export async function GET(req: NextRequest) {
       "location",
       installation
         ? (installation.locationName ?? installation.locationId)
-        : `${installations.length} sub-accounts`,
+        : `${subs.length} sub-accounts`,
     );
     url.search = `?${params.toString()}`;
 

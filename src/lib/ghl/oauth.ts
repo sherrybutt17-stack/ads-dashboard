@@ -122,6 +122,13 @@ async function postForm(
   return parsed as TokenResponse;
 }
 
+/** One sub-account an install covers. */
+export interface InstalledSubAccount {
+  installation: GhlInstallation;
+  /** No row held it before this install: the sub-account just ticked, most likely. */
+  isNew: boolean;
+}
+
 /**
  * Exchange the authorization code from the OAuth callback: every sub-account
  * the install covers, one installation each.
@@ -129,7 +136,7 @@ async function postForm(
 export async function exchangeCode(
   code: string,
   intendedClientId: string | null,
-): Promise<GhlInstallation[]> {
+): Promise<InstalledSubAccount[]> {
   const token = await postToken({
     client_id: process.env.GHL_CLIENT_ID!,
     client_secret: process.env.GHL_CLIENT_SECRET!,
@@ -164,14 +171,16 @@ export async function exchangeCode(
  * downstream stays per sub-account, exactly as for a direct install. Needs the
  * app's `oauth.write` (and `oauth.readonly` for the fallback list).
  *
- * Only an install of ONE sub-account takes the client it was started for.
- * Several at once leave every row unclaimed rather than guess which is whose —
- * and never strip another client's binding on the way (`upsertInstallation`).
+ * 🔴 The token lists every sub-account the app is approved on in that
+ * agency, not only the ones just ticked (King LASIK, linked since 22 Oct,
+ * came back with Aloha Laser Vision). Which of them is the client the install
+ * was started for is `installFor`'s question; nothing here strips another
+ * client's binding on the way (`upsertInstallation`).
  */
 async function installFromAgencyToken(
   token: TokenResponse,
   intendedClientId: string | null,
-): Promise<GhlInstallation[]> {
+): Promise<InstalledSubAccount[]> {
   const companyId = token.companyId;
   if (!companyId) {
     throw new Error("GHL returned neither a sub-account nor an agency for this install.");
@@ -185,7 +194,7 @@ async function installFromAgencyToken(
   }
 
   const target = locations.length === 1 ? intendedClientId : null;
-  const out: GhlInstallation[] = [];
+  const out: InstalledSubAccount[] = [];
   let firstError: unknown = null;
   for (const locationId of locations.slice(0, AGENCY_INSTALL_MAX_LOCATIONS)) {
     try {
@@ -251,7 +260,7 @@ async function upsertInstallation(
    * state — null for an agency-level install with no target.
    */
   intendedClientId: string | null,
-): Promise<GhlInstallation> {
+): Promise<InstalledSubAccount> {
   // Refresh a minute early so a request in flight cannot land on a dead token.
   const expiresAt = new Date(Date.now() + (token.expires_in - 60) * 1000);
 
@@ -309,7 +318,7 @@ async function upsertInstallation(
     })
     .returning();
 
-  return row;
+  return { installation: row, isNew: existing === null };
 }
 
 /**
@@ -372,6 +381,33 @@ export async function getInstallationForClient(
     .where(eq(ghlInstallations.clientId, clientId))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Which sub-account of an install is the client it was started for — or null.
+ *
+ * One sub-account is simply that one. Several happen because GHL's agency
+ * token lists every sub-account the app is approved on in the agency, not only
+ * the one just ticked (26 Oct 2026: King LASIK, linked since the 22nd, came
+ * back alongside Aloha Laser Vision, ticked for its new client). In order:
+ *
+ * 1. the one sub-account this install is the first we have heard of — the one
+ *    just ticked;
+ * 2. else the one already this client's — a reconnect;
+ * 3. else the one no client holds yet.
+ *
+ * Anything else would be a guess, and an install bound to the wrong client
+ * reads another business's CRM: null, and every sub-account stays unclaimed.
+ * Never one another client holds — `claimInstallation` still checks tenancy.
+ */
+export function installFor(clientId: string, subs: readonly InstalledSubAccount[]): GhlInstallation | null {
+  if (subs.length === 1) return subs[0].installation;
+  const one = (list: readonly InstalledSubAccount[]) => (list.length === 1 ? list[0].installation : null);
+  return (
+    one(subs.filter((s) => s.isNew && s.installation.clientId === null)) ??
+    one(subs.filter((s) => s.installation.clientId === clientId)) ??
+    one(subs.filter((s) => s.installation.clientId === null))
+  );
 }
 
 /**

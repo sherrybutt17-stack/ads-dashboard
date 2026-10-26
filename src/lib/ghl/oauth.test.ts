@@ -288,7 +288,7 @@ describe("exchangeCode", () => {
 
     const [row] = await mod.exchangeCode("code-1", null);
 
-    const stored = await installRow(row.id);
+    const stored = await installRow(row.installation.id);
     expect(stored!.access_token_encrypted).not.toContain("access-1");
     expect(stored!.refresh_token_encrypted).not.toContain("refresh-1");
     // Still readable by us — an encrypted column that cannot be decrypted is
@@ -367,7 +367,7 @@ describe("exchangeCode", () => {
 
     const rows = await mod.exchangeCode("code-1", CLIENT_A1);
 
-    expect(rows.map((r) => r.locationId)).toEqual(["loc-1"]);
+    expect(rows.map((r) => r.installation.locationId)).toEqual(["loc-1"]);
     // GHL's documented exchange: the agency's bearer token, form-encoded ids, the pinned version.
     const call = fetchMock.mock.calls.find(([u]) => String(u).includes("/oauth/locationToken"))!;
     const init = call[1] as Required<Init>;
@@ -375,7 +375,7 @@ describe("exchangeCode", () => {
     expect(init.headers.Authorization).toBe("Bearer agency-access");
     expect(init.headers.Version).toBe("2021-07-28");
     // The sub-account's own pair is what is stored — never the agency's.
-    const stored = await installRow(rows[0].id);
+    const stored = await installRow(rows[0].installation.id);
     const { decrypt } = await import("@/lib/crypto");
     expect(decrypt(stored!.access_token_encrypted as string)).toBe("access-loc-1");
     expect(decrypt(stored!.refresh_token_encrypted as string)).toBe("refresh-loc-1");
@@ -391,7 +391,7 @@ describe("exchangeCode", () => {
     // Started from another client's page: with two sub-accounts there is no telling which is its.
     const rows = await mod.exchangeCode("code-1", CLIENT_B1);
 
-    expect(rows.map((r) => r.locationId).sort()).toEqual(["loc-1", "loc-2"]);
+    expect(rows.map((r) => r.installation.locationId).sort()).toEqual(["loc-1", "loc-2"]);
     const bound = (await run(
       `SELECT location_id, client_id::text AS client_id FROM ghl_installations ORDER BY location_id`,
     )).rows;
@@ -406,7 +406,7 @@ describe("exchangeCode", () => {
 
     const rows = await mod.exchangeCode("code-1", null);
 
-    expect(rows.map((r) => r.locationId)).toEqual(["loc-3"]);
+    expect(rows.map((r) => r.installation.locationId)).toEqual(["loc-3"]);
     const listed = new URL(String(fetchMock.mock.calls.find(([u]) => String(u).includes("/oauth/installedLocations"))![0]));
     // The parent app id: the client id's part before the dash.
     expect(Object.fromEntries(listed.searchParams)).toMatchObject({ companyId: "comp-1", appId: "test", isInstalled: "true" });
@@ -420,7 +420,22 @@ describe("exchangeCode", () => {
 
     const rows = await mod.exchangeCode("code-1", null);
 
-    expect(rows.map((r) => r.locationId)).toEqual(["loc-2"]);
+    expect(rows.map((r) => r.installation.locationId)).toEqual(["loc-2"]);
+  });
+
+  it("says which sub-accounts it is the first to hear of", async () => {
+    await seedInstall({ clientId: CLIENT_A1 });
+    mockAgency({
+      token: agencyToken({ approvedLocations: ["loc-1", "loc-2"] }),
+      locations: { "loc-1": locToken("loc-1"), "loc-2": locToken("loc-2") },
+    });
+
+    const subs = await mod.exchangeCode("code-1", null);
+
+    expect(subs.map((s) => [s.installation.locationId, s.isNew]).sort()).toEqual([
+      ["loc-1", false],
+      ["loc-2", true],
+    ]);
   });
 
   it("surfaces an agency install no sub-account of which could be connected, storing nothing", async () => {
@@ -590,5 +605,42 @@ describe("buildAuthorizeUrl", () => {
     expect(url.searchParams.get("state")).toBe("client.nonce.sig");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("redirect_uri")).toBe(mod.redirectUri());
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * installFor — which sub-account of an install is the client's
+ * ------------------------------------------------------------------ */
+
+describe("installFor", () => {
+  const sub = (locationId: string, clientId: string | null, isNew = false) => ({
+    installation: { id: `inst-${locationId}`, locationId, clientId } as never,
+    isNew,
+  });
+  const pick = (subs: Array<ReturnType<typeof sub>>, clientId = CLIENT_A2) =>
+    (mod.installFor(clientId, subs) as { locationId: string } | null)?.locationId ?? null;
+
+  it("🔴 takes the sub-account just ticked over the agency's others — Aloha alongside King LASIK", () => {
+    expect(pick([sub("king-lasik", CLIENT_A1), sub("aloha", null, true)])).toBe("aloha");
+    // Even beside another sub-account no client holds, from an earlier install.
+    expect(pick([sub("king-lasik", CLIENT_A1), sub("older", null), sub("aloha", null, true)])).toBe("aloha");
+  });
+
+  it("takes the client's own sub-account on a reconnect", () => {
+    expect(pick([sub("king-lasik", CLIENT_A1), sub("aloha", CLIENT_A2)])).toBe("aloha");
+  });
+
+  it("takes the one no client holds, when nothing is new", () => {
+    expect(pick([sub("king-lasik", CLIENT_A1), sub("aloha", null)])).toBe("aloha");
+  });
+
+  it("🔴 never guesses: two new, two free, or only other clients' sub-accounts leave it to a person", () => {
+    expect(pick([sub("a", null, true), sub("b", null, true)])).toBeNull();
+    expect(pick([sub("a", null), sub("b", null)])).toBeNull();
+    expect(pick([sub("a", CLIENT_A1), sub("b", CLIENT_B1)])).toBeNull();
+  });
+
+  it("takes a lone sub-account as before — claiming it still checks who holds it", () => {
+    expect(pick([sub("a", CLIENT_B1)])).toBe("a");
   });
 });
