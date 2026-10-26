@@ -14,6 +14,7 @@ function stubFetch(impl: (url: string, init: RequestInit) => Promise<Response>) 
 }
 
 const client = () => new TiktokClient("tok");
+const ADV = "7012345678901234567";
 
 describe("normalizeAdvertiserId", () => {
   it("accepts a numeric id", () => {
@@ -414,5 +415,136 @@ describe("extra figures", () => {
     expect(refusedMetrics(new TiktokApiError("Invalid metric fields: ['a_b', \"c\"].", 40002))).toEqual(["a_b", "c"]);
     expect(refusedMetrics(new TiktokApiError("Invalid metric fields: ['a'].", 40001))).toEqual([]);
     expect(refusedMetrics(new Error("Invalid metric fields: ['a']"))).toEqual([]);
+  });
+});
+
+describe("🔴 deleted campaigns, ad groups and ads", () => {
+  /*
+   * TikTok leaves deleted entities out of every report unless asked. Measured
+   * 26 Oct 2026: November 2023 read $5,677.27 by default and $15,671.28 with
+   * them — at every level alike. Each level takes its own field: the ad report
+   * refuses `adgroup_status`.
+   */
+  const ok = () => envelope({ code: 0, data: { list: [], page_info: { total_page: 1 } } });
+  const filtering = (spy: ReturnType<typeof stubFetch>) =>
+    JSON.parse(new URL(String(spy.mock.calls[0][0])).searchParams.get("filtering")!);
+
+  it.each([
+    ["spend", (c: TiktokClient) => c.getDailyInsights(ADV, "2026-07-01", "2026-07-02"), "campaign_status"],
+    ["results", (c: TiktokClient) => c.getAdgroupResults(ADV, "2026-07-01", "2026-07-02"), "adgroup_status"],
+    ["extras", (c: TiktokClient) => c.getDailyExtras(ADV, "2026-07-01", "2026-07-02"), "campaign_status"],
+    ["ad rows", (c: TiktokClient) => c.getAdDailyReport(ADV, "2026-07-01", "2026-07-02"), "ad_status"],
+  ] as const)("asks for them on the %s report, by its own level's field", async (_name, call, field) => {
+    const spy = stubFetch(async () => ok());
+    await call(client());
+    expect(filtering(spy)).toEqual([{ field_name: field, filter_type: "IN", filter_value: '["STATUS_ALL"]' }]);
+  });
+});
+
+
+describe("the ad report", () => {
+  const ok = (list: unknown[] = []) => envelope({ code: 0, data: { list, page_info: { total_page: 1 } } });
+  const sent = (spy: ReturnType<typeof stubFetch>, i = 0) => new URL(String(spy.mock.calls[i][0])).searchParams;
+
+  it("asks for each ad's day: delivery, names, Results and every extra", async () => {
+    const spy = stubFetch(async () => ok());
+    const { fields } = await client().getAdDailyReport(ADV, "2026-07-01", "2026-07-28");
+    const params = sent(spy);
+    expect(params.get("data_level")).toBe("AUCTION_AD");
+    expect(JSON.parse(params.get("dimensions")!)).toEqual(["ad_id", "stat_time_day"]);
+    const metrics = JSON.parse(params.get("metrics")!) as string[];
+    for (const f of ["spend", "impressions", "clicks", "ad_name", "adgroup_id", "campaign_id", "result", "objective_type"]) {
+      expect(metrics).toContain(f);
+    }
+    expect(metrics).toEqual(expect.arrayContaining(Object.values(TIKTOK_EXTRAS)));
+    expect(fields).toEqual(metrics);
+  });
+
+  it("retries without an optional field TikTok refuses, and says which came back", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const spy = stubFetch(async (url) =>
+      (new URL(String(url)).searchParams.get("metrics") ?? "").includes("profile_visits")
+        ? envelope({ code: 40002, message: "Invalid metric fields: ['profile_visits']." })
+        : ok(),
+    );
+    const { fields } = await client().getAdDailyReport(ADV, "2026-07-01", "2026-07-02");
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(fields).not.toContain("profile_visits");
+    expect(fields).toContain("spend");
+  });
+
+  it("🔴 fails rather than store zeros when delivery itself is refused", async () => {
+    const spy = stubFetch(async () => envelope({ code: 40002, message: "Invalid metric fields: ['spend', 'likes']." }));
+    await expect(client().getAdDailyReport(ADV, "2026-07-01", "2026-07-02")).rejects.toBeInstanceOf(TiktokApiError);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what each ad shows", () => {
+  const ads = (list: unknown[]) => envelope({ code: 0, data: { list } });
+  const sent = (spy: ReturnType<typeof stubFetch>, i = 0) => new URL(String(spy.mock.calls[i][0])).searchParams;
+
+  it("🔴 asks by id, deleted ads included, 100 to a call", async () => {
+    const spy = stubFetch(async () => ads([]));
+    const ids = Array.from({ length: 150 }, (_, i) => String(1800000000000000 + i));
+    await client().getAdsByIds(ADV, [...ids, ids[0]]);
+    expect(spy).toHaveBeenCalledTimes(2);
+    const filters = spy.mock.calls.map((_, i) => JSON.parse(sent(spy, i).get("filtering")!));
+    expect(filters.map((f) => [f.ad_ids.length, f.primary_status])).toEqual([
+      [100, "STATUS_ALL"],
+      [50, "STATUS_ALL"],
+    ]);
+    expect(filters.flatMap((f) => f.ad_ids)).toEqual(ids);
+  });
+
+  it("asks nothing for no ads, and refuses an id that is not a number", async () => {
+    const spy = stubFetch(async () => ads([]));
+    expect(await client().getAdsByIds(ADV, [])).toEqual([]);
+    expect(spy).not.toHaveBeenCalled();
+    await expect(client().getAdsByIds(ADV, ["18000", "1&x=1"])).rejects.toThrow(/Invalid TikTok ad id/);
+  });
+
+  it("drops a field ad/get refuses and asks again, but never the ad id", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const spy = stubFetch(async (url) =>
+      (new URL(String(url)).searchParams.get("fields") ?? "").includes("call_to_action")
+        ? envelope({ code: 40002, message: "fields: ['call_to_action'] is not a valid field" })
+        : ads([{ ad_id: 1800000000000001, video_id: "v10" }]),
+    );
+    const got = await client().getAdsByIds(ADV, ["1800000000000001"]);
+    expect(got).toEqual([{ ad_id: "1800000000000001", video_id: "v10" }]);
+    expect(JSON.parse(sent(spy, 1).get("fields")!)).not.toContain("call_to_action");
+    expect(JSON.parse(sent(spy, 1).get("fields")!)).toContain("ad_id");
+  });
+});
+
+describe("videos and images", () => {
+  const list = (ids: string[], key: "video_id" | "image_id") =>
+    envelope({ code: 0, data: { list: ids.map((id) => ({ [key]: id, duration: 12.5 })) } });
+  const asked = (url: string, param: string) => JSON.parse(new URL(url).searchParams.get(param)!) as string[];
+
+  it("asks 60 videos to a call", async () => {
+    const spy = stubFetch(async (url) => list(asked(url, "video_ids"), "video_id"));
+    const ids = Array.from({ length: 70 }, (_, i) => `v${i}`);
+    const got = await client().getVideoInfo(ADV, ids);
+    expect(spy.mock.calls.map(([url]) => asked(String(url), "video_ids").length)).toEqual([60, 10]);
+    expect(got).toHaveLength(70);
+  });
+
+  it("🔴 isolates the one video TikTok will not describe, and keeps the rest", async () => {
+    stubFetch(async (url) => {
+      const ids = asked(url, "video_ids");
+      return ids.includes("gone")
+        ? envelope({ code: 40001, message: "Insufficient permissions for some videos" })
+        : list(ids, "video_id");
+    });
+    const got = await client().getVideoInfo(ADV, ["v1", "v2", "gone", "v3", "v4"]);
+    expect(got.map((v) => v.video_id).sort()).toEqual(["v1", "v2", "v3", "v4"]);
+  });
+
+  it("does not split around a dead token", async () => {
+    const spy = stubFetch(async () => envelope({ code: 40105, message: "Access token is invalid" }));
+    await expect(client().getImageInfo(ADV, ["i1", "i2", "i3"])).rejects.toBeInstanceOf(TiktokApiError);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

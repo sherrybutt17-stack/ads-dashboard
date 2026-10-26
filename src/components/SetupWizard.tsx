@@ -3091,8 +3091,9 @@ function BackfillStep({
    * keeps what was imported; pressing again carries on, because months that
    * are already complete are skipped on the server.
    */
-  async function importAdLevel() {
-    setBusy("meta_adlevel_backfill");
+  async function importAdLevel(action: "meta_adlevel_backfill" | "tiktok_adlevel_backfill") {
+    const tiktok = action === "tiktok_adlevel_backfill";
+    setBusy(action);
     setMsg(null);
     setProgress(null);
     stopRef.current = false;
@@ -3104,7 +3105,7 @@ function BackfillStep({
         const res = await fetch(`/api/clients/${clientId}/sync`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "meta_adlevel_backfill", days, ...(before ? { before } : {}) }),
+          body: JSON.stringify({ action, days, ...(before ? { before } : {}) }),
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -3118,8 +3119,8 @@ function BackfillStep({
             ok: true,
             msg:
               rows === 0
-                ? `Ad-level detail for the last ${windowLabel(days)} was already complete.`
-                : `Imported ${rows} ad-level rows across ${months.length} months. Creative cards and ad tables now reach back ${windowLabel(days)}.`,
+                ? `${tiktok ? "TikTok ad-level" : "Ad-level"} detail for the last ${windowLabel(days)} was already complete.`
+                : `Imported ${rows} ${tiktok ? "TikTok " : ""}ad-level rows across ${months.length} months. ${tiktok ? "TikTok creative" : "Creative"} cards and ad tables now reach back ${windowLabel(days)}.`,
           });
           return;
         }
@@ -3210,7 +3211,7 @@ function BackfillStep({
             : `Import ${windowLabel(days)} of Meta data`}
         </button>
         <button
-          onClick={importAdLevel}
+          onClick={() => importAdLevel("meta_adlevel_backfill")}
           disabled={busy !== null}
           className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
           style={{
@@ -3220,7 +3221,7 @@ function BackfillStep({
         >
           {busy === "meta_adlevel_backfill" ? "Importing ad-level detail…" : "Import ad-level detail (creative cards)"}
         </button>
-        {busy === "meta_adlevel_backfill" && (
+        {(busy === "meta_adlevel_backfill" || busy === "tiktok_adlevel_backfill") && (
           <button
             onClick={() => {
               stopRef.current = true;
@@ -3259,6 +3260,21 @@ function BackfillStep({
             {busy === "tiktok_backfill"
               ? "Importing…"
               : `Import ${windowLabel(days)} of TikTok data`}
+          </button>
+        )}
+        {hasTiktok && (
+          <button
+            onClick={() => importAdLevel("tiktok_adlevel_backfill")}
+            disabled={busy !== null}
+            className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
+            style={{
+              borderColor: "var(--border-strong)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {busy === "tiktok_adlevel_backfill"
+              ? "Importing TikTok ad-level detail…"
+              : "Import TikTok ad-level detail (creative cards)"}
           </button>
         )}
         <button

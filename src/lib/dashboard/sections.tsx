@@ -34,6 +34,7 @@ import { changesBetween } from "@/lib/metrics/table-columns";
 import { LeadHeatmap } from "@/components/LeadHeatmap";
 import { CampaignStageTable } from "@/components/CampaignStageTable";
 import { CreativeGrid } from "@/components/CreativeGrid";
+import { TiktokCreativeGrid } from "@/components/TiktokCreativeGrid";
 import { CreativeFatiguePanel } from "@/components/CreativeFatigue";
 import { Breakdowns } from "@/components/Breakdowns";
 import { InsightStrip } from "@/components/InsightStrip";
@@ -642,11 +643,33 @@ export function renderSection(id: SectionId, ctx: SectionContext) {
 
     case "creatives":
       /*
-       * Meta only. Creative identity is `image_hash` / `video_id`, which Google
-       * has no equivalent for in our schema — rendering an empty grid on the
-       * Google tab would read as "no creatives ran" rather than "this platform
-       * is not reported at asset level here".
+       * Meta and TikTok. Google has no asset identity in our schema — rendering
+       * an empty grid on the Google tab would read as "no creatives ran" rather
+       * than "this platform is not reported at asset level here". TikTok gets
+       * its own grid: its signals (2- and 6-second views, likes, follows) are
+       * not Meta's, and it has no rankings or learning phase to show.
        */
+      if (platform === "tiktok") {
+        return (
+          <TiktokCreativeGrid
+            slug={slug}
+            creatives={data.tiktokCreatives}
+            currency={currency}
+            emptyState={
+              data.creativesError
+                ? {
+                    title: "Creative data could not be read",
+                    detail:
+                      "The rest of this page is unaffected. This usually means the database schema is behind the deployed code.",
+                    diagnostic: data.creativesError,
+                    tone: "critical" as const,
+                  }
+                : adState
+            }
+            adLevelSynced={data.adLevelSynced}
+          />
+        );
+      }
       if (platform !== "meta") return null;
       return (
         <>

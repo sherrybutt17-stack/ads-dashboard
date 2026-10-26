@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { clients } from "@/db/schema";
+import { clients, type Client } from "@/db/schema";
 import { reapAbandonedSyncRuns } from "@/lib/meta/sync";
 import {
   syncClientTiktokMetrics,
   TIKTOK_RECONCILE_DAYS,
 } from "@/lib/tiktok/sync";
 import { activeTiktokAccounts } from "@/lib/tiktok/accounts";
+import { lastTiktokAdLevelSuccess, syncClientTiktokAdLevel } from "@/lib/tiktok/adlevel";
 import { trailingWindowInclusive } from "@/lib/dates";
 import { isReconcileOverdue, DEFAULT_RECONCILE_HOUR } from "@/lib/reconcile";
 import { safeEqual } from "@/lib/crypto";
@@ -77,6 +78,9 @@ export async function GET(req: NextRequest) {
     error?: string;
   }> = [];
 
+  /** The ad-level pass per client — kept apart from `results`, which is the spend reconcile alone. */
+  const adLevel: Array<Awaited<ReturnType<typeof adLevelIfDue>>> = [];
+
   for (const client of active) {
     if (Date.now() - startedAt > DISPATCH_BUDGET_MS) {
       results.push({ slug: client.slug, status: "deferred" });
@@ -104,25 +108,26 @@ export async function GET(req: NextRequest) {
       )
     ) {
       results.push({ slug: client.slug, status: "skipped" });
-      continue;
+    } else {
+      try {
+        const window = trailingWindowInclusive(TIKTOK_RECONCILE_DAYS, client.timezone);
+        const { rowsWritten } = await syncClientTiktokMetrics(client, {
+          since: window.startKey,
+          until: window.endKey,
+          isReconcile: true,
+        });
+        results.push({ slug: client.slug, status: "synced", rows: rowsWritten });
+      } catch (err) {
+        // One client's revoked advertiser token must not abort the whole run.
+        results.push({
+          slug: client.slug,
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
-    try {
-      const window = trailingWindowInclusive(TIKTOK_RECONCILE_DAYS, client.timezone);
-      const { rowsWritten } = await syncClientTiktokMetrics(client, {
-        since: window.startKey,
-        until: window.endKey,
-        isReconcile: true,
-      });
-      results.push({ slug: client.slug, status: "synced", rows: rowsWritten });
-    } catch (err) {
-      // One client's revoked advertiser token must not abort the whole run.
-      results.push({
-        slug: client.slug,
-        status: "failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    adLevel.push(await adLevelIfDue(client, startedAt, force));
   }
 
   const deferred = results.filter((r) => r.status === "deferred").length;
@@ -133,5 +138,45 @@ export async function GET(req: NextRequest) {
     deferred,
     elapsedMs: Date.now() - startedAt,
     results,
+    adLevel,
   });
+}
+
+/** How long the ad-level pass waits between successes — once a day, retried every run until it lands. */
+const AD_LEVEL_EVERY_MS = 20 * 60 * 60 * 1000;
+/** After this the pass stops fetching pictures, leaving time to answer before `maxDuration`. */
+const AD_LEVEL_STOP_MS = 270_000;
+
+/**
+ * The client's TikTok ad-level pass, when it is due.
+ *
+ * 🔴 Its own gate, not the campaign reconcile's. Tied to that marker, a client
+ * whose campaign reconcile kept failing on one dead advertiser token would
+ * never get ad-level detail for its healthy ones; and a pass that failed or was
+ * deferred would wait a whole day. Due means "no successful ad-level run in 20
+ * hours", so a failed one is tried again on the next run, three hours later.
+ *
+ * Never fatal to anything: its failures are recorded on its own `tiktok_adlevel`
+ * run, and the campaign result above is already in.
+ */
+async function adLevelIfDue(
+  client: Client,
+  startedAt: number,
+  force: boolean,
+): Promise<{ slug: string; status: "synced" | "skipped" | "deferred" | "failed"; rows?: number }> {
+  try {
+    const last = await lastTiktokAdLevelSuccess(client.id);
+    if (!force && last && Date.now() - last.getTime() < AD_LEVEL_EVERY_MS) {
+      return { slug: client.slug, status: "skipped" };
+    }
+    if (Date.now() - startedAt > DISPATCH_BUDGET_MS) return { slug: client.slug, status: "deferred" };
+    const { rowsWritten } = await syncClientTiktokAdLevel(client, {
+      days: TIKTOK_RECONCILE_DAYS,
+      deadline: startedAt + AD_LEVEL_STOP_MS,
+    });
+    return { slug: client.slug, status: "synced", rows: rowsWritten };
+  } catch (err) {
+    console.error(`[tiktok] ad-level pass failed for ${client.slug}:`, err instanceof Error ? err.message : err);
+    return { slug: client.slug, status: "failed" };
+  }
 }

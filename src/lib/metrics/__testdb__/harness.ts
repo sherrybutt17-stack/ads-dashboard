@@ -469,6 +469,76 @@ CREATE TABLE tiktok_daily_metrics (
   CONSTRAINT tiktok_daily_metrics_key UNIQUE (client_id, advertiser_id, date, tiktok_campaign_id)
 );
 
+-- Migration 0033. Ad rows live in their own table, never in tiktok_daily_metrics
+-- (see schema.ts), and the cover JPEG is stored because TikTok's URLs expire.
+CREATE TABLE tiktok_ad_daily_metrics (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL,
+  advertiser_id text NOT NULL,
+  date date NOT NULL,
+  tiktok_campaign_id text NOT NULL DEFAULT '',
+  campaign_name text,
+  tiktok_adgroup_id text NOT NULL DEFAULT '',
+  adgroup_name text,
+  tiktok_ad_id text NOT NULL,
+  ad_name text,
+  creative_key text NOT NULL DEFAULT '',
+  creative_type creative_type NOT NULL DEFAULT 'unknown',
+  impressions bigint NOT NULL DEFAULT 0,
+  clicks integer NOT NULL DEFAULT 0,
+  spend numeric(14,4) NOT NULL DEFAULT '0',
+  conversions numeric(14,2) NOT NULL DEFAULT '0',
+  currency text,
+  raw jsonb,
+  synced_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT tiktok_ad_daily_metrics_key UNIQUE (client_id, advertiser_id, date, tiktok_ad_id)
+);
+
+CREATE TABLE tiktok_ad_creatives (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL,
+  advertiser_id text NOT NULL,
+  tiktok_ad_id text NOT NULL,
+  ad_name text,
+  tiktok_adgroup_id text,
+  tiktok_campaign_id text,
+  creative_key text NOT NULL DEFAULT '',
+  creative_type creative_type NOT NULL DEFAULT 'unknown',
+  thumb_key text NOT NULL DEFAULT '',
+  video_id text,
+  image_ids jsonb,
+  tiktok_item_id text,
+  ad_format text,
+  ad_text text,
+  call_to_action text,
+  display_name text,
+  landing_page_url text,
+  operation_status text,
+  secondary_status text,
+  raw jsonb,
+  synced_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT tiktok_ad_creatives_key UNIQUE (client_id, tiktok_ad_id)
+);
+
+CREATE TABLE tiktok_creative_assets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL,
+  advertiser_id text NOT NULL,
+  asset_key text NOT NULL,
+  kind text NOT NULL,
+  video_id text,
+  image_id text,
+  duration_seconds numeric(8,2),
+  width integer,
+  height integer,
+  thumb bytea,
+  thumb_content_type text,
+  thumb_fetched_at timestamptz,
+  raw jsonb,
+  synced_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT tiktok_creative_assets_key UNIQUE (client_id, asset_key)
+);
+
 CREATE TABLE tiktok_ad_accounts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id uuid NOT NULL,

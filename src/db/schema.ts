@@ -133,6 +133,9 @@ export const syncKindEnum = pgEnum("sync_kind", [
   "tiktok_daily",
   "tiktok_intraday",
   "tiktok_backfill",
+  // The nightly TikTok ad-level pass. Not a FULL_SYNC_KIND: it can never turn
+  // the spend pipe red or green (migration 0033).
+  "tiktok_adlevel",
 ]);
 
 export const syncStatusEnum = pgEnum("sync_status", [
@@ -2646,6 +2649,138 @@ export const tiktokDailyMetrics = pgTable(
 );
 
 export type TiktokDailyMetric = typeof tiktokDailyMetrics.$inferSelect;
+
+/**
+ * Daily TikTok delivery per AD — what creative reporting is built from.
+ *
+ * 🔴 Its own table, never rows in `tiktok_daily_metrics`. Meta can keep ad rows
+ * beside campaign rows because `fb_daily_metrics.level` existed from day one and
+ * every Meta reader filters on it; TikTok's readers were written for a
+ * campaign-only table and sum it with no level filter, so ad rows there would
+ * double TikTok spend in whichever reader was missed. Changing that table's
+ * unique key would also break the spend upsert between migration and deploy.
+ *
+ * Same columns as the campaign table, plus the ad's ad group, ad and creative
+ * key stamped at sync time (Meta's denormalisation — see `fb_daily_metrics
+ * .creative_key`). `raw` holds the API row, `x` (TIKTOK_EXTRAS keys; a refused
+ * field is absent) and `results` `{ value, objective }` — the campaign table's
+ * layout, so the same fragments read both.
+ */
+export const tiktokAdDailyMetrics = pgTable(
+  "tiktok_ad_daily_metrics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    advertiserId: text("advertiser_id").notNull(),
+    date: date("date").notNull(),
+    tiktokCampaignId: text("tiktok_campaign_id").notNull().default(""),
+    campaignName: text("campaign_name"),
+    tiktokAdgroupId: text("tiktok_adgroup_id").notNull().default(""),
+    adgroupName: text("adgroup_name"),
+    /** An ad never changes ad group, so this fixes its ad group and campaign too. */
+    tiktokAdId: text("tiktok_ad_id").notNull(),
+    adName: text("ad_name"),
+    /** `v:<video_id>`, `i:<image_id>`, `p:<tiktok_item_id>`, or '' — see `resolveTiktokCreative`. */
+    creativeKey: text("creative_key").notNull().default(""),
+    creativeType: creativeTypeEnum("creative_type").notNull().default("unknown"),
+    impressions: bigint("impressions", { mode: "number" }).notNull().default(0),
+    clicks: integer("clicks").notNull().default(0),
+    spend: numeric("spend", { precision: 14, scale: 4 }).notNull().default("0"),
+    conversions: numeric("conversions", { precision: 14, scale: 2 }).notNull().default("0"),
+    currency: text("currency"),
+    raw: jsonb("raw"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("tiktok_ad_daily_metrics_key").on(t.clientId, t.advertiserId, t.date, t.tiktokAdId),
+    index("tiktok_ad_daily_metrics_client_date_idx").on(t.clientId, t.date),
+    index("tiktok_ad_daily_metrics_creative_idx").on(t.clientId, t.creativeKey, t.date),
+  ],
+);
+
+export type TiktokAdDailyMetric = typeof tiktokAdDailyMetrics.$inferSelect;
+
+/**
+ * What each TikTok ad shows — the twin of `meta_ad_creatives`, from `ad/get`.
+ *
+ * `thumb_key` is the asset whose picture stands for the ad: its creative key,
+ * or a carousel's first image (which has no single key of its own).
+ */
+export const tiktokAdCreatives = pgTable(
+  "tiktok_ad_creatives",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    advertiserId: text("advertiser_id").notNull(),
+    tiktokAdId: text("tiktok_ad_id").notNull(),
+    adName: text("ad_name"),
+    tiktokAdgroupId: text("tiktok_adgroup_id"),
+    tiktokCampaignId: text("tiktok_campaign_id"),
+    creativeKey: text("creative_key").notNull().default(""),
+    creativeType: creativeTypeEnum("creative_type").notNull().default("unknown"),
+    thumbKey: text("thumb_key").notNull().default(""),
+    videoId: text("video_id"),
+    imageIds: jsonb("image_ids"),
+    tiktokItemId: text("tiktok_item_id"),
+    adFormat: text("ad_format"),
+    adText: text("ad_text"),
+    callToAction: text("call_to_action"),
+    displayName: text("display_name"),
+    landingPageUrl: text("landing_page_url"),
+    operationStatus: text("operation_status"),
+    secondaryStatus: text("secondary_status"),
+    raw: jsonb("raw"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("tiktok_ad_creatives_key").on(t.clientId, t.tiktokAdId),
+    index("tiktok_ad_creatives_creative_idx").on(t.clientId, t.creativeKey),
+  ],
+);
+
+export type TiktokAdCreative = typeof tiktokAdCreatives.$inferSelect;
+
+/**
+ * A TikTok video or image: its length, its size and a small JPEG of its cover.
+ *
+ * 🔴 The picture is stored, not linked. TikTok signs its cover URLs for about
+ * six hours, so a stored URL is dead by the next morning — and a share link or
+ * PDF never asks TikTok for a fresh one. The bytes are fetched in the same run
+ * that resolved the URL, resized to a 400px JPEG (tens of kilobytes), and kept
+ * only for assets that spent.
+ */
+export const tiktokCreativeAssets = pgTable(
+  "tiktok_creative_assets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    advertiserId: text("advertiser_id").notNull(),
+    /** The creative key it is the asset of: `v:<video_id>`, `i:<image_id>`, `p:<item_id>`. */
+    assetKey: text("asset_key").notNull(),
+    /** `video` | `image` | `post`. */
+    kind: text("kind").notNull(),
+    videoId: text("video_id"),
+    imageId: text("image_id"),
+    durationSeconds: numeric("duration_seconds", { precision: 8, scale: 2 }),
+    width: integer("width"),
+    height: integer("height"),
+    thumb: bytea("thumb"),
+    thumbContentType: text("thumb_content_type"),
+    thumbFetchedAt: timestamp("thumb_fetched_at", { withTimezone: true }),
+    /** The info object with every URL stripped — signed, short-lived, and not ours to keep. */
+    raw: jsonb("raw"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("tiktok_creative_assets_key").on(t.clientId, t.assetKey)],
+);
+
+export type TiktokCreativeAsset = typeof tiktokCreativeAssets.$inferSelect;
 
 /**
  * A half-finished connect flow: a credential waiting for someone to say which

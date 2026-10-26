@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { backfillClientMetrics, importMetaAdLevelHistory, syncClientMetrics } from "@/lib/meta/sync";
 import { backfillClientTiktokMetrics } from "@/lib/tiktok/sync";
+import { importTiktokAdLevelHistory } from "@/lib/tiktok/adlevel";
 import { backfillClientGoogleMetrics } from "@/lib/google/sync";
 import { backfillClientSnapshot } from "@/lib/ghl/backfill";
 import { trailingWindowInclusive } from "@/lib/dates";
@@ -22,6 +23,7 @@ const BodySchema = z.object({
       "meta_adlevel_backfill",
       "google_backfill",
       "tiktok_backfill",
+      "tiktok_adlevel_backfill",
       "ghl_backfill",
     ])
     .default("meta_sync"),
@@ -108,6 +110,34 @@ export async function POST(
         });
         return NextResponse.json({ ok: true, ...res });
       }
+      case "tiktok_adlevel_backfill": {
+        // Meta's import above, for TikTok: the same rate limit, resume and audit.
+        const limited = rateLimit(`tiktok-adlevel-import:${client.id}`, ADLEVEL_IMPORTS_PER_HOUR, 60 * 60 * 1000);
+        if (!limited.ok) {
+          return NextResponse.json(
+            { ok: false, error: "Too many imports in the last hour. Try again later." },
+            { status: 429, headers: { "Retry-After": String(Math.ceil(limited.retryAfterMs / 1000)) } },
+          );
+        }
+        const res = await importTiktokAdLevelHistory(client, {
+          days: parsed.data.days,
+          before: parsed.data.before,
+        });
+        await record({
+          action: "client.tiktok_adlevel_import",
+          targetType: "client",
+          targetId: client.id,
+          clientId: client.id,
+          metadata: {
+            days: parsed.data.days,
+            before: parsed.data.before ?? null,
+            done: res.done,
+            months: res.months.length,
+            rowsWritten: res.rowsWritten,
+          },
+        });
+        return NextResponse.json({ ok: true, ...res });
+      }
       case "google_backfill": {
         const rows = await backfillClientGoogleMetrics(client, parsed.data.days);
         return NextResponse.json({ ok: true, rowsWritten: rows });
@@ -135,7 +165,7 @@ export async function POST(
     const source =
       parsed.data.action === "ghl_backfill"
         ? "ghl"
-        : parsed.data.action === "tiktok_backfill"
+        : parsed.data.action === "tiktok_backfill" || parsed.data.action === "tiktok_adlevel_backfill"
           ? "tiktok"
           : parsed.data.action === "google_backfill"
             ? "google"

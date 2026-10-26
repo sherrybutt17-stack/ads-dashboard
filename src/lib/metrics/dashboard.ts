@@ -32,6 +32,7 @@ import { buildLeadSources, type LeadSourceReport } from "./lead-sources";
 import { buildMaturation, type MaturationReport } from "./maturation";
 import { buildChannelMix, type ChannelMix } from "./channels";
 import { platformCurrencyAndSync } from "./currency";
+import { getTiktokCreativePerformance, hasTiktokAdLevelData, type TiktokCreativeRow } from "./tiktok-creatives";
 import {
   assessFatigue,
   EMPTY_FATIGUE_REPORT,
@@ -321,6 +322,12 @@ export interface DashboardData {
    * equivalent creative model in our schema.
    */
   creatives: CreativeWithOutcome[];
+  /**
+   * Per-ASSET performance on the TikTok view — its own shape, because TikTok's
+   * signals are its own (2- and 6-second views, likes and follows; no delivery
+   * rankings, no learning phase). Empty on every other view.
+   */
+  tiktokCreatives: TiktokCreativeRow[];
   /**
    * The two lead counts side by side, so the creative grid can name which one it
    * divides by. They differ by construction — see `getCreativeLeadReconciliation`.
@@ -644,6 +651,7 @@ export async function loadDashboard(
    */
   const {
     creatives,
+    tiktokCreatives,
     creativeLeads,
     adLevelSynced,
     creativesError,
@@ -1036,6 +1044,7 @@ export async function loadDashboard(
     anomalies,
     keepKill,
     creatives,
+    tiktokCreatives,
     fatigue,
     creativeLeads,
     adLevelSynced,
@@ -1071,6 +1080,7 @@ function describeDbError(err: unknown): string {
 
 interface CreativeBundle {
   creatives: CreativeWithOutcome[];
+  tiktokCreatives: TiktokCreativeRow[];
   creativeLeads: CreativeLeadReconciliation;
   adLevelSynced: boolean;
   creativesError: string | null;
@@ -1088,6 +1098,7 @@ const NO_BREAKDOWNS: Breakdowns = {
 
 const NO_CREATIVES: CreativeBundle = {
   creatives: [],
+  tiktokCreatives: [],
   creativeLeads: { metaReported: 0, crmRecorded: 0, gap: 0 },
   adLevelSynced: false,
   creativesError: null,
@@ -1123,6 +1134,7 @@ async function loadCreatives(
   platform: AdPlatform,
   tz: string,
 ): Promise<CreativeBundle> {
+  if (platform === "tiktok") return loadTiktokCreatives(clientId, range);
   if (platform !== "meta") return NO_CREATIVES;
 
   /*
@@ -1185,6 +1197,7 @@ async function loadCreatives(
       ...c,
       outcome: revenue?.byCreative.get(c.creativeKey) ?? null,
     })),
+    tiktokCreatives: [],
     creativeLeads:
       leadsR.status === "fulfilled" ? leadsR.value : NO_CREATIVES.creativeLeads,
     adLevelSynced: syncedR.status === "fulfilled" ? syncedR.value : false,
@@ -1196,6 +1209,24 @@ async function loadCreatives(
         ? assessFatigue(fatigueR.value)
         : EMPTY_FATIGUE_REPORT,
   };
+}
+
+/**
+ * TikTok's per-asset cards, isolated as Meta's are: the ad-level tables arrive
+ * with migration 0033, and a deploy that outruns it must cost this one panel,
+ * never the page.
+ */
+async function loadTiktokCreatives(clientId: string, range: DateWindow): Promise<CreativeBundle> {
+  const [rowsR, anyR] = await Promise.allSettled([
+    getTiktokCreativePerformance(clientId, range),
+    hasTiktokAdLevelData(clientId),
+  ]);
+  if (rowsR.status === "rejected" || anyR.status === "rejected") {
+    const reason = rowsR.status === "rejected" ? rowsR.reason : (anyR as PromiseRejectedResult).reason;
+    console.error("[dashboard] TikTok creative queries failed", reason);
+    return { ...NO_CREATIVES, creativesError: describeDbError(reason) };
+  }
+  return { ...NO_CREATIVES, tiktokCreatives: rowsR.value, adLevelSynced: anyR.value };
 }
 
 /**

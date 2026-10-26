@@ -514,7 +514,7 @@ export const SECTIONS: readonly SectionDef[] = [
     defaultOrder: 65,
     defaultVisible: true,
     cadence: "range",
-    dataKeys: ["creatives", "creativeLeads", "adLevelSynced"],
+    dataKeys: ["creatives", "tiktokCreatives", "creativeLeads", "adLevelSynced"],
   },
   {
     id: "creative_fatigue",

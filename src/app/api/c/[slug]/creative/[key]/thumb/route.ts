@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { clients } from "@/db/schema";
 import { clientAccessGuard } from "@/lib/auth";
 import { loadThumb, parseThumbRef } from "@/lib/meta/thumbs";
+import { loadTiktokPicture, parseTiktokPictureRef } from "@/lib/tiktok/thumbs";
 
 export const runtime = "nodejs";
 
@@ -62,14 +63,24 @@ export async function GET(
     .limit(1);
   if (!client) return new NextResponse(null, { status: 404 });
 
-  const ref = parseThumbRef(decodeURIComponent(key));
-  if (!ref) return new NextResponse(null, { status: 404 });
+  const segment = decodeURIComponent(key);
+
+  /*
+   * A TikTok picture (`tt.` ref): the stored bytes, scoped to this client. Never
+   * re-resolved here — TikTok's URLs live hours, so the sync keeps the picture
+   * itself, and one with none stored shows the typed placeholder.
+   */
+  const tiktokKey = parseTiktokPictureRef(segment);
+  const ref = tiktokKey ? null : parseThumbRef(segment);
+  if (!tiktokKey && !ref) return new NextResponse(null, { status: 404 });
 
   /*
    * Refreshes from Meta only once the stored URL has actually stopped working —
    * never speculatively, or one page load would be thirty Graph calls.
    */
-  const image = await loadThumb(client, ref, { refresh: true });
+  const image = tiktokKey
+    ? await loadTiktokPicture(client.id, tiktokKey)
+    : await loadThumb(client, ref!, { refresh: true });
 
   // No placeholder bytes: the grid already renders a typed fallback card, which
   // says more than a grey square would.
