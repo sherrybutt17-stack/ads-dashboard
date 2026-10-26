@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { clients, tiktokAdAccounts, type TiktokAdAccount } from "@/db/schema";
 import { encrypt } from "@/lib/crypto";
@@ -63,6 +63,10 @@ export async function activeTiktokAccountsForDisplay(
  * counted it. Removed is the only state this app treats as gone, and it is the
  * only one it writes deliberately; everything else is an advertiser we still
  * hold history for.
+ *
+ * `tiktokAdvertiserNamesForDisplay` below, the landing page's batched read, is
+ * a fourth place that restates it, and `accounts.test.ts` holds it to the same
+ * rows as the rest.
  */
 export async function activeTiktokAccounts(
   clientId: string,
@@ -72,6 +76,54 @@ export async function activeTiktokAccounts(
     .from(tiktokAdAccounts)
     .where(eq(tiktokAdAccounts.clientId, clientId));
   return rows.filter((r) => r.status !== "removed");
+}
+
+/**
+ * Every listed client's TikTok advertiser names, in ONE query — the ad line on
+ * the agency landing page's client cards. The Google twin,
+ * `googleAccountNamesForDisplay`, gives the reasoning in full: one read per
+ * platform for the whole list, rather than one per card on a pool of ten.
+ *
+ * 🔴 `<> 'removed'`, the rule above — NOT the Google twin's `= 'active'`,
+ * which is the easy thing to copy across and would take a paused advertiser
+ * off its card while the client's own page still lists it. Restated in SQL
+ * because one query for every client cannot call the per-client readers.
+ *
+ * Degrades as `activeTiktokAccountsForDisplay` does: any failure — this table
+ * arrives by migration — logs and returns an empty map, costing every card the
+ * TikTok half of its ad line and never the agency its client list.
+ *
+ * Scoped by the ids it is handed and by nothing else; pass only the clients
+ * the session may see. A nameless advertiser comes back as `null`, and counts.
+ */
+export async function tiktokAdvertiserNamesForDisplay(
+  clientIds: readonly string[],
+): Promise<Map<string, (string | null)[]>> {
+  const names = new Map<string, (string | null)[]>();
+  // No query for no clients, as in the Google twin.
+  if (clientIds.length === 0) return names;
+  try {
+    const rows = await db
+      .select({ clientId: tiktokAdAccounts.clientId, name: tiktokAdAccounts.advertiserName })
+      .from(tiktokAdAccounts)
+      .where(
+        and(
+          inArray(tiktokAdAccounts.clientId, clientIds),
+          ne(tiktokAdAccounts.status, "removed"),
+        ),
+      )
+      // Oldest first, as the Google twin: a stable order, not a meaningful one.
+      .orderBy(tiktokAdAccounts.createdAt);
+    for (const { clientId, name } of rows) {
+      const list = names.get(clientId);
+      if (list) list.push(name);
+      else names.set(clientId, [name]);
+    }
+    return names;
+  } catch (err) {
+    console.error("[tiktok] advertiser names unavailable, leaving TikTok off the client cards:", err);
+    return new Map();
+  }
 }
 
 export interface AddTiktokAccountResult {

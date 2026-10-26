@@ -554,10 +554,13 @@ export function ShareReport({
                   mode="share"
                   headings="field"
                 />
+                {/* The platform is always named: a report with none opens on the
+                    client's own first platform, which for a client without Meta
+                    is not the Facebook view this preview would be checking. */}
                 {chosen && !periodError && (
                   <a
-                    href={`/c/${encodeURIComponent(slug)}/report?start=${period.start}&end=${period.end}${
-                      period.platform !== "meta" ? `&platform=${period.platform}` : ""
+                    href={`/c/${encodeURIComponent(slug)}/report?start=${period.start}&end=${period.end}&platform=${
+                      period.platform
                     }&v=${encodeURIComponent(encodeView(chosen))}`}
                     target="_blank"
                     rel="noopener"

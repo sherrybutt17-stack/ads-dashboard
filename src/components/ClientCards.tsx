@@ -7,6 +7,7 @@ import { Icon } from "@/components/Icon";
 import type { HealthLevel } from "@/lib/health";
 import type { ChurnLevel } from "@/lib/metrics/churn";
 import type { Accent } from "@/lib/accent";
+import { AD_PLATFORMS, PLATFORM_LABEL, type AdPlatform } from "@/lib/platforms";
 
 /**
  * The agency's book, as one card per sub-account.
@@ -28,8 +29,8 @@ export interface ClientCard {
   id: string;
   name: string;
   slug: string;
-  /** "3 ad accounts", the account's name, or "Meta not connected". */
-  metaLabel: string;
+  /** The ad side of the card's second line — see `adConnection`. */
+  adLabel: string;
   ghlLocationName: string | null;
   firstWebhookAt: Date | string | null;
   /** How many ad accounts are wired, across every platform. */
@@ -39,6 +40,44 @@ export interface ClientCard {
   churn?: ChurnLevel;
   /** This client's own colour — their brand colour, or the generated one. */
   accent: Accent;
+}
+
+/** Each platform's live accounts, by name — what a card's ad facts are read from. */
+export type CardAccounts = Readonly<Record<AdPlatform, ReadonlyArray<string | null>>>;
+
+/** What each platform calls one of its accounts, and several. */
+const ACCOUNT_NOUN: Record<AdPlatform, readonly [one: string, many: string]> = {
+  meta: ["ad account", "ad accounts"],
+  google: ["account", "accounts"],
+  tiktok: ["advertiser", "advertisers"],
+};
+
+/**
+ * The card's ad facts: how many accounts are wired, and the line that says so.
+ *
+ * 🔴 Every platform, not Meta's accounts alone — which is all the list used to
+ * count. A client running TikTok alone read "Meta not connected" and, with no
+ * CRM wired yet, was sorted into "Not connected yet" beside clients nobody had
+ * touched: the one client with a live ad pipe filed as an empty shell. The
+ * count feeds `bucketFor`, so it decides the group as well as the words.
+ *
+ * The label names the platforms actually connected. One platform names itself
+ * and its account — "TikTok · Acme Ads", or "TikTok · 2 advertisers" — as the
+ * Meta line always gave the account's name; several are listed by name, since
+ * one truncating line cannot carry three accounts each.
+ */
+export function adConnection(accounts: CardAccounts): { label: string; count: number } {
+  const connected = AD_PLATFORMS.filter((p) => accounts[p].length > 0);
+  const count = AD_PLATFORMS.reduce((n, p) => n + accounts[p].length, 0);
+  if (connected.length === 0) return { label: "Ads not connected", count };
+  if (connected.length > 1) {
+    return { label: connected.map((p) => PLATFORM_LABEL[p]).join(" + "), count };
+  }
+  const [platform] = connected;
+  const names = accounts[platform];
+  const [one, many] = ACCOUNT_NOUN[platform];
+  const detail = names.length === 1 ? (names[0] ?? `1 ${one}`) : `${names.length} ${many}`;
+  return { label: `${PLATFORM_LABEL[platform]} · ${detail}`, count };
 }
 
 type Bucket = "live" | "attention" | "unconnected";
@@ -102,8 +141,13 @@ const GROUPS: {
  *
  * The badge itself is untouched: `quickHealth` still says what it says, and
  * this only decides where the card sits.
+ *
+ * `adAccounts` counts every platform (`adConnection`); counting Meta alone is
+ * how a TikTok-only client landed among the untouched.
  */
-function bucketFor(c: ClientCard): Bucket {
+export function bucketFor(
+  c: Pick<ClientCard, "health" | "ghlConnected" | "adAccounts" | "firstWebhookAt">,
+): Bucket {
   if (c.health === "green") return "live";
   const touched = c.ghlConnected || c.adAccounts > 0 || Boolean(c.firstWebhookAt);
   return touched ? "attention" : "unconnected";
@@ -258,7 +302,7 @@ function Card({ c, staff }: { c: ClientCard; staff: boolean }) {
             >
               {c.ghlLocationName ?? "GHL not connected"}
               <span aria-hidden="true"> · </span>
-              {c.metaLabel}
+              {c.adLabel}
             </div>
           </div>
         </div>

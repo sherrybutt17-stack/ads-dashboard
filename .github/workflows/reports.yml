@@ -37,9 +37,45 @@ concurrency:
 jobs:
   send:
     runs-on: ubuntu-latest
+    # One call below, of at most 300 seconds (--max-time): ten minutes lets it
+    # run out its own clock and still leaves the job time to say so.
     timeout-minutes: 10
+    # 🔴 Named explicitly, so GitHub runs every step as `bash -eo pipefail` —
+    # reconcile.yml has the reason in full, beside its own `defaults`. Left
+    # unset, a step runs as `bash -e` with NO pipefail.
+    #
+    # The send here used to end in `| tee /tmp/reports.json`, and a pipeline's
+    # status is its last command's: a 401 or a timeout failed curl inside the
+    # pipe, tee exited 0 over an empty file, and the step went green. The run
+    # then failed two steps later, on a JSONDecodeError — the wrong step, with
+    # the wrong cause. The call no longer pipes; this stays so the next pipe
+    # anyone adds cannot swallow its exit status again.
+    defaults:
+      run:
+        shell: bash
     env:
       BASE_URL: https://ads-dashboard-shaheer4.vercel.app
+      # 🔴 What the send step prints of its response: one line of counts, never
+      # the response itself — the rule reconcile.yml's SUMMARY sets out.
+      #
+      # This repository is PUBLIC, and so are its Actions logs. The response
+      # names every scheduled client by slug, with the email provider's error
+      # text beside any send that failed, so printing it whole, as tee did,
+      # published both. The counts are what a log needs; which schedule failed,
+      # and why, stays on that schedule's panel, behind the login.
+      #
+      # `skipped` is the one string it prints, and only as fixed text — the
+      # endpoint's whole-run note, "email not configured" — which
+      # reconcile-parity.test.ts holds every cron route to.
+      #
+      # One line of Python, folded for reading, which joins the lines with
+      # spaces: keep every line at the same indent, or the fold keeps the break
+      # and Python sees an indented statement.
+      SUMMARY: >-
+        import json, sys;
+        d = json.load(open(sys.argv[1]));
+        m = d.get("domains") or {};
+        print("Reports: %s; sending domains: %d checked, %d verified, %d expired, %d errors" % (d["skipped"] if isinstance(d.get("skipped"), str) else "%d sent, %d failed, %d deferred of %d schedule(s)" % (int(d.get("sent") or 0), int(d.get("failed") or 0), int(d.get("deferred") or 0), int(d.get("schedules") or 0)), int(m.get("checked") or 0), int(m.get("verified") or 0), int(m.get("expired") or 0), int(m.get("errors") or 0)))
     steps:
       - name: Check secret is configured
         run: |
@@ -50,12 +86,16 @@ jobs:
 
       - name: Send due reports
         run: |
-          # -f fails the step on any HTTP error, so a 401 is loud rather than a
-          # green tick over a run that sent nothing.
+          # -f exits non-zero on any HTTP error, as --max-time does on a
+          # timeout, and with nothing piped after it that exit fails this step
+          # (see `defaults` above) — so a 401 is loud, and loud HERE, rather
+          # than a green tick over a run that sent nothing. The body goes to a
+          # file, never into the log.
           curl -fsS --max-time 300 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "$BASE_URL/api/cron/reports" | tee /tmp/reports.json
-          echo
+            -o /tmp/reports.json \
+            "$BASE_URL/api/cron/reports"
+          python3 -c "$SUMMARY" /tmp/reports.json
 
       - name: Flag deferred schedules
         run: |
@@ -72,7 +112,19 @@ jobs:
           # A send that failed is recorded and retried next hour, but it should
           # not pass silently: a schedule that quietly stopped working is this
           # feature's version of the spreadsheet block that was empty for months.
-          # `python3 -c`, matching the reconcile workflow. A heredoc would work
-          # here only because YAML block scalars dedent to column 0, which is a
-          # subtlety worth not depending on.
-          python3 -c "import json; d=json.load(open('/tmp/reports.json')); q={'too_early','already_sent','disabled','no recipients','already claimed by another run'}; [print('::warning::%s (%s): %s' % (r['client'], r['platform'], r.get('reason'))) for r in d.get('results',[]) if not r.get('sent') and r.get('reason') not in q]"
+          #
+          # 🔴 One warning with a count — the endpoint's own `failed`.
+          #
+          # This used to print a warning per send, "<client> (<platform>):
+          # <reason>", into a public log, and decided what counted as a failure
+          # from a list of harmless reasons kept here — one nothing kept in step
+          # with the endpoint, so a paused or archived client's schedule warned
+          # every hour. The endpoint now does the counting, and each failure's
+          # reason is where it was already shown: "Last send failed" on that
+          # schedule's panel, on its client's Setup page — or, for a send that
+          # threw before it could be recorded, the deployment's function logs.
+          # Reads 0 from a missing or unreadable file, like the step above.
+          n=$(python3 -c "import json;print(json.load(open('/tmp/reports.json')).get('failed',0))" 2>/dev/null || echo 0)
+          if [ "$n" != "0" ]; then
+            echo "::warning::$n report send(s) failed. Each one's reason is on its schedule's panel, on the client's Setup page (or, for one that threw before it was recorded, in the Vercel function logs)."
+          fi

@@ -18,6 +18,12 @@ export interface BoardDocumentData {
   logo: string | null;
   /** The agency metrics the document's numbers were computed with — its labels must match. */
   metrics: CustomMetric[];
+  /**
+   * When the ad figures last synced, across the client's platforms
+   * (`BoardContext.syncedAt`). Live even for a share link: the layout is frozen
+   * into it, the figures are not.
+   */
+  syncedAt: Date | null;
 }
 
 /**
@@ -65,7 +71,7 @@ export async function loadBoardDocument(
     widgets,
   );
   await inlineCreativeThumbs(client, widgets, data);
-  return { widgets, data, branding: context.branding, agency, logo, metrics };
+  return { widgets, data, branding: context.branding, agency, logo, metrics, syncedAt: context.syncedAt };
 }
 
 /** Enough for every card a full-page widget holds, few enough to keep a PDF light. */

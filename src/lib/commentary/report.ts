@@ -1,6 +1,7 @@
 import type { Client } from "@/db/schema";
 import type { AdPlatform } from "@/lib/metrics/queries";
 import { getPeriodMetrics, type PeriodMetrics } from "@/lib/metrics/queries";
+import { platformCurrency } from "@/lib/metrics/currency";
 import { windowFromKeys } from "@/lib/dates";
 import {
   monthBounds,
@@ -116,7 +117,12 @@ export async function loadCommentaryForReport(
      * distinguishable in a test from "there was no prior month".
      */
     accountability: accountability && accountability.total > 0 ? accountability : null,
-    currency: client.metaCurrency ?? "USD",
+    /*
+     * The platform's own account currency, as its figures are. This was
+     * Meta's on every platform, so a TikTok-only client's targets and actuals
+     * printed in USD whatever TikTok bills in.
+     */
+    currency: await platformCurrency(client, platform),
   };
 }
 
@@ -161,7 +167,8 @@ export async function loadCommentaryForEditor(
     current,
     prior,
     actuals,
-    currency: client.metaCurrency ?? "USD",
+    // The platform's own, as on the report — see loadCommentaryForReport.
+    currency: await platformCurrency(client, platform),
     error,
   };
 }

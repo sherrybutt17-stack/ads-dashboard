@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { sql } from "drizzle-orm";
 import type { Client } from "@/db/schema";
 import { createTestDb, type TestDb } from "@/lib/metrics/__testdb__/harness";
-import { trailingWindowInclusive } from "@/lib/dates";
+import { todayKey, trailingWindowInclusive } from "@/lib/dates";
 
 /**
  * The ingest run: what gets written, and what the sync_runs row says afterwards.
@@ -47,9 +47,16 @@ let breakdownError: Error | null = null;
 let dailyError: Error | null = null;
 /** When set, insights are answered by this instead — for the ad-level import, which asks per window and level. */
 let dailyImpl: ((since: string, until: string, level: string) => Record<string, unknown>[]) | null = null;
-/** The ads listing, by the statuses asked for. */
+/** The ads listing, by the statuses asked for. Asked for by id, only those ids come back. */
 let adsListing: (opts?: { statuses?: readonly string[] }) => unknown[] = () => [];
-const calls: { method: string; account: string; since?: string; until?: string; level?: string }[] = [];
+const calls: {
+  method: string;
+  account: string;
+  since?: string;
+  until?: string;
+  level?: string;
+  ids?: readonly string[];
+}[] = [];
 
 const ACC_1 = "cccccccc-0000-4000-8000-000000000001";
 const ACC_2 = "cccccccc-0000-4000-8000-000000000002";
@@ -77,9 +84,14 @@ vi.mock("./accounts", () => ({
       if (breakdownError) throw breakdownError;
       return [];
     },
-    async getAds(acct: string, opts?: { statuses?: readonly string[] }) {
-      calls.push({ method: opts?.statuses ? `ads:${opts.statuses.join(",")}` : "ads", account: acct });
-      return adsListing(opts);
+    async getAds(acct: string, opts?: { statuses?: readonly string[]; adIds?: readonly string[] }) {
+      calls.push({
+        method: opts?.statuses ? `ads:${opts.statuses.join(",")}` : "ads",
+        account: acct,
+        ids: opts?.adIds,
+      });
+      const listed = adsListing(opts) as Array<{ id: string }>;
+      return opts?.adIds ? listed.filter((ad) => opts.adIds!.includes(ad.id)) : listed;
     },
     async getVideoLengths() {
       return new Map();
@@ -449,6 +461,256 @@ describe("syncClientMetrics — breakdowns", () => {
   });
 });
 
+describe("syncClientMetrics — the ad-level pass", () => {
+  const adRow = (ad: string, over: Record<string, unknown> = {}) => ({
+    ...insight(over),
+    ad_id: ad,
+    ad_name: `Ad ${ad}`,
+    adset_id: "set_1",
+    adset_name: "Set",
+  });
+  const video = (id: string) => ({
+    id,
+    name: `Ad ${id}`,
+    status: "ACTIVE",
+    creative: { id: `cr_${id}`, video_id: `vid_${id}`, thumbnail_url: "https://cdn.example/t.jpg" },
+  });
+  const nightly = (since = "2026-07-20", until = "2026-07-20") =>
+    mod.syncClientMetrics(client(), { since, until, includeAdLevel: true });
+  const keys = async () =>
+    (await run(`SELECT meta_ad_id, creative_key FROM fb_daily_metrics WHERE level = 'ad' ORDER BY meta_ad_id`)).rows;
+  const storeCreative = (ad: string, key: string) =>
+    run(`INSERT INTO meta_ad_creatives (client_id, meta_ad_account_id, meta_ad_id, creative_key, creative_type)
+         VALUES ('${CLIENT_ID}', '111', '${ad}', '${key}', 'video')`);
+
+  beforeEach(async () => {
+    await run(`TRUNCATE meta_ad_creatives`);
+    dailyImpl = (_since, _until, level) => (level === "ad" ? [adRow("a1"), adRow("a2"), adRow("a9")] : [insight()]);
+    // a9 ran and was archived since, so the default listing leaves it out. The
+    // account also holds ads that never ran in the window ("idle", "old").
+    adsListing = (opts) =>
+      opts?.statuses?.includes("ARCHIVED") ? [video("a9"), video("old")] : [video("a1"), video("a2"), video("idle")];
+  });
+
+  it("🔴 asks Meta for exactly the ads that delivered, by id — never the whole account", async () => {
+    await nightly();
+    /*
+     * Listing every ad was what Meta refused from 23 Oct 2026 ("reduce the
+     * amount of data"), failing two clients' whole reconcile for days. One of
+     * them holds 1,569 ads, of which 70 delivered.
+     */
+    expect(calls.filter((c) => c.method.startsWith("ads")).map((c) => [c.method, c.ids])).toEqual([
+      ["ads", ["a1", "a2", "a9"]],
+      ["ads:ARCHIVED", ["a9"]],
+    ]);
+    expect(await keys()).toEqual([
+      { meta_ad_id: "a1", creative_key: "vid_a1" },
+      { meta_ad_id: "a2", creative_key: "vid_a2" },
+      { meta_ad_id: "a9", creative_key: "vid_a9" },
+    ]);
+    const stored = (await run(`SELECT meta_ad_id FROM meta_ad_creatives ORDER BY meta_ad_id`)).rows;
+    expect(stored.map((r) => r.meta_ad_id)).toEqual(["a1", "a2", "a9"]);
+  });
+
+  it("🔴 names an ad archived after it ran — its spend is not 'not attributable'", async () => {
+    await nightly();
+    expect((await keys()).find((r) => r.meta_ad_id === "a9")).toEqual({ meta_ad_id: "a9", creative_key: "vid_a9" });
+  });
+
+  it("keeps the stored creative of an ad Meta no longer returns at all", async () => {
+    await storeCreative("a3", "img_a3");
+    dailyImpl = (_since, _until, level) => (level === "ad" ? [adRow("a3")] : [insight()]);
+    await nightly();
+    // Deleted: in neither listing. Writing an empty key would move its spend
+    // out of its creative's card on every nightly run.
+    expect(await keys()).toEqual([{ meta_ad_id: "a3", creative_key: "img_a3" }]);
+  });
+
+  it("🔴 writes the ad rows anyway when Meta will not list the ads — under their stored creatives, with the failure on the run", async () => {
+    await storeCreative("a1", "vid_a1");
+    adsListing = () => {
+      throw new Error("Please reduce the amount of data you're asking for, then retry your request");
+    };
+    // Days the nightly pulls again tomorrow: today's.
+    const res = await nightly(todayKey(TZ), todayKey(TZ));
+
+    // Spend, leads and every per-ad figure stay current; a name and a thumbnail
+    // are not worth failing — and so not reconciling — the client's whole sync.
+    expect(res.rowsWritten).toBe(4);
+    const [r] = await runs();
+    expect(r.status).toBe("success");
+    expect((r.meta as { creativeFailures?: string[] }).creativeFailures).toEqual([
+      expect.stringMatching(/^111: Please reduce the amount of data/),
+    ]);
+    expect(await keys()).toEqual([
+      { meta_ad_id: "a1", creative_key: "vid_a1" },
+      { meta_ad_id: "a2", creative_key: "" },
+      { meta_ad_id: "a9", creative_key: "" },
+    ]);
+  });
+
+  it("🔴 throws instead for days the nightly will not pull again — nothing re-asks for those", async () => {
+    adsListing = () => {
+      throw new Error("(#2) Service temporarily unavailable");
+    };
+    // An old month, as the backfill scripts sync: written unnamed, the history
+    // import would then skip it as complete and never name its ads.
+    await expect(nightly("2026-07-20", "2026-07-20")).rejects.toThrow(/temporarily unavailable/);
+    const [r] = await runs();
+    expect(r.status).toBe("failed");
+    expect(await keys()).toEqual([]);
+  });
+
+  it("keeps what the first lookup found when the ARCHIVED lookup fails", async () => {
+    adsListing = (opts) => {
+      if (opts?.statuses) throw new Error("(#1) An unknown error occurred");
+      return [video("a1"), video("a2")];
+    };
+    await nightly(todayKey(TZ), todayKey(TZ));
+    // a1 and a2 were found and stored before the second lookup failed.
+    expect(await keys()).toEqual([
+      { meta_ad_id: "a1", creative_key: "vid_a1" },
+      { meta_ad_id: "a2", creative_key: "vid_a2" },
+      { meta_ad_id: "a9", creative_key: "" },
+    ]);
+    const [r] = await runs();
+    expect(r.status).toBe("success");
+    expect((r.meta as { creativeFailures?: string[] }).creativeFailures).toHaveLength(1);
+  });
+
+  it("🔴 names older rows by the creative their ad is now known by — but leaves a Dynamic Creative ad's empty key", async () => {
+    await storeCreative("a7", "vid_a7");
+    await run(`INSERT INTO meta_ad_creatives (client_id, meta_ad_account_id, meta_ad_id, creative_key, creative_type)
+               VALUES ('${CLIENT_ID}', '111', 'dc1', '', 'carousel')`);
+    // Written unnamed weeks ago (an archived ad the old nightly never asked
+    // about), long outside the window the nightly rewrites.
+    await run(`INSERT INTO fb_daily_metrics (client_id, meta_ad_account_id, date, level, meta_campaign_id, meta_ad_id, creative_key, creative_type, spend)
+               VALUES ('${CLIENT_ID}', '111', '2026-05-01', 'ad', 'camp_1', 'a7', '', 'unknown', 5),
+                      ('${CLIENT_ID}', '111', '2026-05-01', 'ad', 'camp_1', 'dc1', '', 'carousel', 5)`);
+    await nightly();
+    const old = (
+      await run(`SELECT meta_ad_id, creative_key FROM fb_daily_metrics WHERE date = '2026-05-01' ORDER BY meta_ad_id`)
+    ).rows;
+    expect(old).toEqual([
+      { meta_ad_id: "a7", creative_key: "vid_a7" },
+      { meta_ad_id: "dc1", creative_key: "" },
+    ]);
+  });
+
+  it("🔴 carries an ad set's learning state onto its ads that did not deliver", async () => {
+    await run(`INSERT INTO meta_ad_creatives (client_id, meta_ad_account_id, meta_ad_id, meta_adset_id, creative_key, creative_type, learning_stage)
+               VALUES ('${CLIENT_ID}', '111', 'stopped', 'set_1', 'vid_s', 'video', 'LEARNING'),
+                      ('${CLIENT_ID}', '111', 'other', 'set_2', 'vid_o', 'video', 'LEARNING')`);
+    adsListing = (opts) =>
+      opts?.statuses
+        ? []
+        : [{ ...video("a1"), adset_id: "set_1", adset: { id: "set_1", learning_stage_info: { status: "SUCCESS" } } }];
+    await nightly();
+    // "stopped" is no longer listed; left at LEARNING it would hold its whole
+    // campaign out of keep/kill. Its set exited learning — so has it.
+    const stages = (
+      await run(`SELECT meta_ad_id, learning_stage FROM meta_ad_creatives WHERE meta_ad_id IN ('stopped', 'other') ORDER BY meta_ad_id`)
+    ).rows;
+    expect(stages).toEqual([
+      { meta_ad_id: "other", learning_stage: "LEARNING" },
+      { meta_ad_id: "stopped", learning_stage: "SUCCESS" },
+    ]);
+  });
+
+  it("says nothing about creatives when every ad resolves", async () => {
+    await nightly();
+    const [r] = await runs();
+    expect((r.meta as { creativeFailures?: string[] }).creativeFailures).toBeUndefined();
+  });
+
+  it("halves a window Meta says is too much, as the history import does", async () => {
+    dailyImpl = (since, until, level) => {
+      if (level !== "ad") return [insight({ date_start: since })];
+      const days = (Date.parse(until) - Date.parse(since)) / 86_400_000 + 1;
+      if (days > 14) throw new Error("Please reduce the amount of data you're asking for, then retry your request");
+      return [adRow("a1", { date_start: since })];
+    };
+    const res = await nightly("2026-07-01", "2026-07-28");
+    expect(res.rowsWritten).toBeGreaterThan(1);
+    const windows = calls
+      .filter((c) => c.method === "daily" && c.level === "ad")
+      .map((c) => (Date.parse(c.until!) - Date.parse(c.since!)) / 86_400_000 + 1);
+    expect(windows).toEqual([28, 14, 14]);
+    // The halves share their ads: a1 is asked for once.
+    expect(calls.filter((c) => c.method === "ads").map((c) => c.ids)).toEqual([["a1"]]);
+  });
+
+  describe("re-reading ads that stopped delivering", () => {
+    const reconcile = (over: Partial<Parameters<typeof mod.syncClientMetrics>[1]> = {}) =>
+      mod.syncClientMetrics(client(), {
+        since: todayKey(TZ),
+        until: todayKey(TZ),
+        includeAdLevel: true,
+        isReconcile: true,
+        ...over,
+      });
+    /** A stored ad last read `readDaysAgo` days ago, which delivered `ranDaysAgo` days ago. */
+    const storeStopped = async (ad: string, { readDaysAgo = 30, ranDaysAgo = 60 } = {}) => {
+      await run(`INSERT INTO meta_ad_creatives (client_id, meta_ad_account_id, meta_ad_id, creative_key, creative_type, synced_at)
+                 VALUES ('${CLIENT_ID}', '111', '${ad}', 'vid_${ad}', 'video', now() - interval '${readDaysAgo} days')`);
+      await run(`INSERT INTO fb_daily_metrics (client_id, meta_ad_account_id, date, level, meta_campaign_id, meta_ad_id, creative_key, creative_type, spend)
+                 VALUES ('${CLIENT_ID}', '111', current_date - ${ranDaysAgo}, 'ad', 'camp_1', '${ad}', 'vid_${ad}', 'video', 5)`);
+    };
+    const askedFor = () => calls.filter((c) => c.method === "ads").flatMap((c) => c.ids ?? []);
+
+    it("🔴 re-reads a stored ad whose picture link is going old, so share links and PDFs keep its picture", async () => {
+      await storeStopped("old1");
+      adsListing = (opts) => (opts?.statuses ? [] : [video("a1"), video("a2"), video("old1")]);
+      await reconcile();
+      expect(askedFor()).toContain("old1");
+      const [row] = (
+        await run(`SELECT synced_at > now() - interval '1 minute' AS fresh FROM meta_ad_creatives WHERE meta_ad_id = 'old1'`)
+      ).rows;
+      expect(row).toEqual({ fresh: true });
+    });
+
+    it("leaves alone an ad read this week, and one no report can show any more", async () => {
+      await storeStopped("recent", { readDaysAgo: 2 });
+      await storeStopped("ancient", { ranDaysAgo: 600 });
+      await reconcile();
+      expect(askedFor()).not.toContain("recent");
+      expect(askedFor()).not.toContain("ancient");
+    });
+
+    it("marks an ad Meta no longer has, and stops asking for it", async () => {
+      await storeStopped("deleted");
+      await reconcile();
+      expect(askedFor()).toContain("deleted");
+      const [row] = (await run(`SELECT raw ? 'gone_at' AS gone FROM meta_ad_creatives WHERE meta_ad_id = 'deleted'`)).rows;
+      expect(row).toEqual({ gone: true });
+
+      calls.length = 0;
+      await reconcile();
+      expect(askedFor()).not.toContain("deleted");
+    });
+
+    it("re-reads at most 250 a night, the longest-unread first", async () => {
+      await run(`INSERT INTO meta_ad_creatives (client_id, meta_ad_account_id, meta_ad_id, creative_key, creative_type, synced_at)
+                 SELECT '${CLIENT_ID}', '111', 's' || i, 'vid_s' || i, 'video', now() - make_interval(days => 8 + i)
+                 FROM generate_series(1, 251) AS i`);
+      await run(`INSERT INTO fb_daily_metrics (client_id, meta_ad_account_id, date, level, meta_campaign_id, meta_ad_id, spend)
+                 SELECT '${CLIENT_ID}', '111', current_date - 40, 'ad', 'camp_1', 's' || i, 1
+                 FROM generate_series(1, 251) AS i`);
+      await reconcile();
+      const stale = askedFor().filter((id) => id.startsWith("s"));
+      expect(stale).toHaveLength(250);
+      expect(stale).toContain("s251");
+      expect(stale).not.toContain("s1");
+    });
+
+    it("is the nightly's upkeep only — not a manual sync's", async () => {
+      await storeStopped("old1");
+      await reconcile({ isReconcile: false });
+      expect(askedFor()).not.toContain("old1");
+    });
+  });
+});
+
 /* ------------------------------------------------------------------ *
  * refreshIfStale — the stale-while-revalidate path
  * ------------------------------------------------------------------ */
@@ -557,6 +819,15 @@ describe("reapAbandonedSyncRuns", () => {
  * The window constant
  * ------------------------------------------------------------------ */
 
+describe("CREATIVE_HORIZON_DAYS", () => {
+  it("covers the longest report range, opened late through the longest-lived share link", async () => {
+    const { MAX_RANGE_DAYS } = await import("@/lib/dates");
+    const { SHARE_TTL_DAYS } = await import("@/lib/share");
+    // Not imported by the sync (it would pull the Board in), so pinned here.
+    expect(mod.CREATIVE_HORIZON_DAYS).toBe(MAX_RANGE_DAYS + Math.max(...SHARE_TTL_DAYS));
+  });
+});
+
 describe("RECONCILE_DAYS", () => {
   it("🔴 is coupled to Meta's restatement horizon", async () => {
     const { META_PROVISIONAL_DAYS } = await import("@/lib/dates");
@@ -645,17 +916,59 @@ describe("importMetaAdLevelHistory", () => {
     expect(calls.some((c) => c.method === "daily" && c.since === start)).toBe(false);
   });
 
-  it("🔴 stops at its budget and carries on, without listing the ads again", async () => {
+  it("🔴 stops at its budget and carries on", async () => {
     const first = await mod.importMetaAdLevelHistory(client(), { days: 60, budgetMs: -1 });
     expect(first.done).toBe(false);
     expect(first.months).toEqual([]);
     expect(first.nextBefore).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(calls).toEqual([]);
 
-    calls.length = 0;
     const rest = await mod.importMetaAdLevelHistory(client(), { days: 60, before: first.nextBefore! });
     expect(rest.done).toBe(true);
     expect(rest.months.length).toBeGreaterThanOrEqual(2);
-    expect(calls.some((c) => c.method.startsWith("ads"))).toBe(false);
+  });
+
+  it("🔴 asks only for the ads its months delivered, each once — never the whole account", async () => {
+    await mod.importMetaAdLevelHistory(client(), { days: 60 });
+    const asked = calls.filter((c) => c.method.startsWith("ads"));
+    // Listing a large account up front is what Meta refused ("reduce the amount of data").
+    expect(asked.map((c) => [c.method, c.ids])).toEqual([
+      ["ads", ["a1", "a9"]],
+      ["ads:ARCHIVED", ["a9"]],
+    ]);
+  });
+
+  it("does not halve a month when it was the ads lookup Meta refused", async () => {
+    adsListing = () => {
+      throw new Error("Please reduce the amount of data you're asking for, then retry your request");
+    };
+    await expect(mod.importMetaAdLevelHistory(client(), { days: 20 })).rejects.toThrow(/reduce the amount of data/);
+    // Halving the window would re-pull the same insights to ask for the same ads.
+    expect(calls.filter((c) => c.method === "daily" && c.level === "ad")).toHaveLength(1);
+  });
+
+  it("names the unnamed rows of months it skips as complete", async () => {
+    const [newest] = mod.planMonths(trailingWindowInclusive(20, TZ));
+    const start = newest.since;
+    await run(`INSERT INTO meta_ad_creatives (client_id, meta_ad_account_id, meta_ad_id, creative_key, creative_type)
+               VALUES ('${CLIENT_ID}', '111', 'a5', 'vid_a5', 'video')`);
+    await run(`
+      INSERT INTO fb_daily_metrics (client_id, meta_ad_account_id, date, level, meta_campaign_id, meta_ad_id, spend)
+      VALUES ('${CLIENT_ID}', '111', '${start}', 'campaign', 'camp_1', '', 40),
+             ('${CLIENT_ID}', '111', '${start}', 'ad', 'camp_1', 'a5', 40)
+    `);
+    const res = await mod.importMetaAdLevelHistory(client(), { days: 20 });
+    expect(res.months[0].status).toBe("complete");
+    const [row] = (await run(`SELECT creative_key FROM fb_daily_metrics WHERE meta_ad_id = 'a5'`)).rows;
+    expect(row).toEqual({ creative_key: "vid_a5" });
+  });
+
+  it("🔴 stops on a month whose ads Meta will not list, rather than filing it done with them unnamed", async () => {
+    adsListing = () => {
+      throw new Error("(#2) Service temporarily unavailable");
+    };
+    await expect(mod.importMetaAdLevelHistory(client(), { days: 20 })).rejects.toThrow(/temporarily unavailable/);
+    expect((await run(`SELECT count(*)::int AS n FROM fb_daily_metrics WHERE level = 'ad'`)).rows).toEqual([{ n: 0 }]);
   });
 
   it("halves a window Meta says is too much, down to a week", async () => {

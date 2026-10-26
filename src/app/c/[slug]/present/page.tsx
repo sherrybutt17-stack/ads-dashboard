@@ -6,7 +6,8 @@ import { getClientBranding } from "@/lib/branding-store";
 import { loadCommentaryForReport } from "@/lib/commentary/report";
 import { monthKeyForDateKey } from "@/lib/commentary/model";
 import type { AdPlatform } from "@/lib/metrics/queries";
-import { parseAdPlatform, PLATFORM_LABEL } from "@/lib/platforms";
+import { isAdPlatform, PLATFORM_LABEL } from "@/lib/platforms";
+import { resolvePagePlatform } from "@/lib/dashboard/platform";
 import {
   trailingWindow,
   isValidDateKey,
@@ -63,7 +64,9 @@ export default async function PresentPage({
   const session = await getSessionUser();
   if (!canAccessSlug(session, slug)) redirect("/");
 
-  const platform: AdPlatform = parseAdPlatform(sp.platform);
+  // The Overview's rule, as on the report: without `?platform=`, the client's
+  // own first platform rather than Meta. Resolved before the dashboard load.
+  const platform: AdPlatform = await resolvePagePlatform(client.id, sp.platform);
 
   // Same validation as the dashboard and the report: the range arrives from a
   // URL, so junk must be rejected before it reaches date maths or SQL.
@@ -108,7 +111,9 @@ export default async function PresentPage({
     } else if (sp.days) {
       qs.set("days", String(safeDays));
     }
-    if (platform !== "meta") qs.set("platform", platform);
+    // As received, as on the report: a named platform goes back named, a
+    // missing one stays missing and resolves to the same view on the way back.
+    if (isAdPlatform(sp.platform)) qs.set("platform", sp.platform);
     const s = qs.toString();
     return s ? `/c/${slug}?${s}` : `/c/${slug}`;
   })();

@@ -16,6 +16,7 @@ import {
   FRAMINGS,
 } from "@/lib/ai/summary";
 import { saveDraft, saveEdits, listSummaries } from "@/lib/ai/store";
+import { AD_PLATFORMS } from "@/lib/platforms";
 
 /**
  * The written weekly summary — §6.2.
@@ -35,15 +36,32 @@ import { saveDraft, saveEdits, listSummaries } from "@/lib/ai/store";
 
 /**
  * Generation is a paid model call, so it is rate limited harder than a write.
- * Four framings over two platforms is eight legitimate calls for one period;
- * twelve leaves room to regenerate a couple without ever being in the way.
+ *
+ * A full set for one period is every framing on every platform — four over
+ * three is twelve legitimate calls — and the limit is that plus room to
+ * regenerate a few, so it is never in the way.
+ *
+ * 🔴 Derived from both lists, not written as a number. It was a literal twelve,
+ * sized when "four framings over two platforms is eight"; TikTok made a full
+ * set twelve, the limit landed exactly on it, and any regeneration after
+ * drafting every framing on every platform was refused. Derived, the next
+ * platform or framing moves the limit with it instead of quietly eating the
+ * headroom again.
  */
-const GENERATE_LIMIT = 12;
+const REGENERATE_ROOM = 4;
+const GENERATE_LIMIT = FRAMINGS.length * AD_PLATFORMS.length + REGENERATE_ROOM;
 const GENERATE_WINDOW_MS = 10 * 60_000;
 const EDIT_LIMIT = 60;
 const EDIT_WINDOW_MS = 10 * 60_000;
 
-const PlatformSchema = z.enum(["meta", "google"]);
+/*
+ * 🔴 Every platform the dashboard has a tab for, and the same list
+ * `publish/route.ts` takes. This was `meta | google`, so the TikTok tab
+ * answered 400 on every draft and every edit — hidden while TikTok was a tab
+ * few chose, and on every visit once a TikTok-only client began opening on
+ * TikTok. The refusal `report-pdf` and `export` had already been cured of.
+ */
+const PlatformSchema = z.enum(AD_PLATFORMS);
 const RangeSchema = z.object({
   start: z.string().refine(isValidDateKey, "Invalid start date"),
   end: z.string().refine(isValidDateKey, "Invalid end date"),

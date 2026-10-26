@@ -22,12 +22,12 @@ import type { AdPipeStatus } from "@/lib/metrics/pipe-state";
 const getAdPipeStatus = vi.fn();
 const backfillClientMetrics = vi.fn();
 const backfillClientGoogleMetrics = vi.fn();
-const syncClientTiktokMetrics = vi.fn();
+const backfillClientTiktokMetrics = vi.fn();
 
 vi.mock("@/lib/metrics/pipe-status", () => ({ getAdPipeStatus }));
 vi.mock("@/lib/meta/sync", () => ({ backfillClientMetrics }));
 vi.mock("@/lib/google/sync", () => ({ backfillClientGoogleMetrics }));
-vi.mock("@/lib/tiktok/sync", () => ({ syncClientTiktokMetrics }));
+vi.mock("@/lib/tiktok/sync", () => ({ backfillClientTiktokMetrics }));
 
 const { kickFirstSync, FIRST_SYNC_DAYS } = await import("./first-sync");
 
@@ -63,7 +63,7 @@ describe("when it runs", () => {
   it.each([
     ["meta", () => backfillClientMetrics],
     ["google", () => backfillClientGoogleMetrics],
-    ["tiktok", () => syncClientTiktokMetrics],
+    ["tiktok", () => backfillClientTiktokMetrics],
   ] as const)("routes %s to its own importer", async (platform, getFn) => {
     /*
      * One assertion per platform because the ancestor of this function branched
@@ -76,7 +76,7 @@ describe("when it runs", () => {
     for (const other of [
       backfillClientMetrics,
       backfillClientGoogleMetrics,
-      syncClientTiktokMetrics,
+      backfillClientTiktokMetrics,
     ]) {
       if (other !== getFn()) expect(other).not.toHaveBeenCalled();
     }
@@ -87,17 +87,12 @@ describe("when it runs", () => {
     expect(getAdPipeStatus).toHaveBeenCalledWith(client, "tiktok");
   });
 
-  it("gives TikTok an explicit window, since it has no backfill of its own", async () => {
-    // The ordinary sync takes a window, which is all a backfill is here — and
-    // it records `tiktok_daily`, which the pipe reader already counts as a full
-    // pull. So the status machine sees it exactly as it sees the other two.
+  it("🔴 gives TikTok the month-by-month backfill, never one 90-day report", async () => {
+    // TikTok refuses a daily report spanning more than 30 days ("max time span
+    // is 30 days"). The ordinary sync asks for its window in one report, so
+    // over 90 days every newly connected advertiser's first import failed.
     await kickFirstSync(client, "tiktok");
-    const [, opts] = syncClientTiktokMetrics.mock.calls[0];
-    expect(opts).toMatchObject({
-      since: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-      until: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-    });
-    expect(opts.since < opts.until).toBe(true);
+    expect(backfillClientTiktokMetrics).toHaveBeenCalledWith(client, FIRST_SYNC_DAYS);
   });
 });
 

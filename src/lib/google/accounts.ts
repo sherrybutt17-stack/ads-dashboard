@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { clients, googleAdAccounts, type GoogleAdAccount } from "@/db/schema";
 import { encrypt, decryptNullable } from "@/lib/crypto";
@@ -62,6 +62,62 @@ export async function activeGoogleAccountsForDisplay(
     const message = err instanceof Error ? err.message : String(err);
     console.error("[google] accounts unavailable, hiding the platform toggle:", message);
     return { accounts: [], error: message };
+  }
+}
+
+/**
+ * Every listed client's Google account names, in ONE query — the ad line on
+ * the agency landing page's client cards.
+ *
+ * 🔴 One read for the whole list, not one per card. The landing page already
+ * fans every client out at once (Meta accounts, branding, health) onto a pool
+ * of ten connections; a Google and a TikTok read per card on top of that put
+ * two more queries per client in the same queue, for one column apiece. Batched,
+ * it costs the same at three clients as at thirty.
+ *
+ * The rule is `activeGoogleAccountsForDisplay`'s — `active` only — and so is
+ * the degradation: any failure logs and returns an empty map, which costs every
+ * card the Google half of its ad line and never the agency its client list.
+ *
+ * Two columns, where that reader selects every column Drizzle knows about: a
+ * column a later migration adds cannot break this the way `login_customer_id`
+ * broke `/c/gg-ads` (see above).
+ *
+ * 🔴 Scoped by the ids it is handed and by nothing else. The caller passes the
+ * clients its session may already see; this does not re-derive a tenant.
+ *
+ * A nameless account comes back as `null` rather than being dropped: it is
+ * still an account, and the card's count decides which group it sits in.
+ */
+export async function googleAccountNamesForDisplay(
+  clientIds: readonly string[],
+): Promise<Map<string, (string | null)[]>> {
+  const names = new Map<string, (string | null)[]>();
+  // No query for no clients — and no reliance on what `inArray(col, [])`
+  // emits, which has changed across Drizzle versions (`client-scope-sql.ts`).
+  if (clientIds.length === 0) return names;
+  try {
+    const rows = await db
+      .select({ clientId: googleAdAccounts.clientId, name: googleAdAccounts.accountName })
+      .from(googleAdAccounts)
+      .where(
+        and(
+          inArray(googleAdAccounts.clientId, clientIds),
+          eq(googleAdAccounts.status, "active"),
+        ),
+      )
+      // `listGoogleAccounts`' order, so each client's names match its reader's.
+      .orderBy(googleAdAccounts.createdAt);
+    for (const { clientId, name } of rows) {
+      const list = names.get(clientId);
+      if (list) list.push(name);
+      else names.set(clientId, [name]);
+    }
+    return names;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[google] account names unavailable, leaving Google off the client cards:", message);
+    return new Map();
   }
 }
 

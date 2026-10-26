@@ -551,7 +551,7 @@ async function checkFreshness(
   const [pipe, [lastTerminal]] = await Promise.all([
     getAdPipeStatus(client, platform),
     db
-      .select({ status: syncRuns.status, error: syncRuns.error })
+      .select({ status: syncRuns.status, error: syncRuns.error, meta: syncRuns.meta })
       .from(syncRuns)
       .where(
         and(
@@ -644,8 +644,37 @@ async function checkFreshness(
           diagnostic: lastTerminal.error ?? undefined,
         };
       }
+      /*
+       * Synced, but Meta would not list the ads. The run succeeds on purpose —
+       * spend and results are written, under each ad's stored creative — so
+       * this is the only place the failure shows. Left green, a listing that
+       * failed night after night would go unseen while new ads piled up
+       * unnamed on every creative report.
+       */
+      const creativeFailures = lastTerminal?.status === "success" ? listedFailures(lastTerminal.meta) : [];
+      if (platform === "meta" && creativeFailures.length > 0) {
+        const failure = describeStoredFailure(creativeFailures[0], platform);
+        return {
+          ...base,
+          level: "amber",
+          message: `Synced ${formatAgo(ago ?? 0)} ago, but Meta did not list the ads`,
+          hint: [
+            failure?.message,
+            "Spend and results are current. New ads show without a name or picture on creative reports until Meta lists them; the nightly sync asks again.",
+          ]
+            .filter(Boolean)
+            .join(". "),
+          diagnostic: creativeFailures.join("\n"),
+        };
+      }
       return { ...base, level: "green", message: `Synced ${formatAgo(ago ?? 0)} ago` };
   }
+}
+
+/** The ad-creative lookups a successful Meta run recorded as failed (`sync_runs.meta.creativeFailures`). */
+function listedFailures(meta: unknown): string[] {
+  const failures = (meta as { creativeFailures?: unknown } | null)?.creativeFailures;
+  return Array.isArray(failures) ? failures.filter((f): f is string => typeof f === "string") : [];
 }
 
 const checkMetaFreshness = (client: Client) => checkFreshness(client, "meta");
@@ -1280,28 +1309,91 @@ export async function quickHealth(client: Client): Promise<HealthLevel> {
    * function from `runHealthChecks` for speed, which is fine; reaching a
    * DIFFERENT verdict about the same facts is not, because the list and the
    * detail page then contradict each other in front of the operator.
+   *
+   * Still one round trip: each platform's live-account count and, for Google
+   * and TikTok, which stamp their own account rows, the OLDEST
+   * `last_synced_at` among those accounts and how many have none. Meta's time
+   * is on the client row, already in hand. Every arm aggregates without a
+   * GROUP BY, so each returns its one row even for a platform with no accounts
+   * at all.
+   *
+   * 🔴 `MIN`, not `MAX`. Each sync stamps an account when that account's own
+   * pull succeeds, but ends the run failed if any account failed — and the
+   * checklist's freshness row dates the platform from its last run that
+   * succeeded. So a platform is as fresh as its stalest account, and `MAX`
+   * let a healthy account vouch for a dead one beside it. `MIN` skips NULLs,
+   * which is why `unsynced` is counted apart: an account that has never synced
+   * would otherwise vanish behind a sibling that has.
+   *
+   * TikTok's arm keeps `activeTiktokAccounts`'s rule — anything not `removed` —
+   * because that is what the checklist counts; Meta and Google keep `active`,
+   * as theirs do.
    */
-  const accounts = await db.execute<{ count: number }>(sql`
-    SELECT (
-      (SELECT COUNT(*) FROM ${metaAdAccounts}
-         WHERE ${metaAdAccounts.clientId} = ${client.id}
-           AND ${metaAdAccounts.status} = 'active')
-    + (SELECT COUNT(*) FROM ${googleAdAccounts}
-         WHERE ${googleAdAccounts.clientId} = ${client.id}
-           AND ${googleAdAccounts.status} = 'active')
-    + (SELECT COUNT(*) FROM ${tiktokAdAccounts}
-         WHERE ${tiktokAdAccounts.clientId} = ${client.id}
-           AND ${tiktokAdAccounts.status} = 'active')
-    )::int AS count
+  const accounts = await db.execute<{
+    platform: string;
+    count: number;
+    synced: Date | string | null;
+    unsynced: number;
+  }>(sql`
+      SELECT 'meta' AS platform, COUNT(*)::int AS count,
+             NULL::timestamptz AS synced, 0 AS unsynced
+        FROM ${metaAdAccounts}
+       WHERE ${metaAdAccounts.clientId} = ${client.id}
+         AND ${metaAdAccounts.status} = 'active'
+    UNION ALL
+      SELECT 'google', COUNT(*)::int, MIN(${googleAdAccounts.lastSyncedAt}),
+             (COUNT(*) - COUNT(${googleAdAccounts.lastSyncedAt}))::int
+        FROM ${googleAdAccounts}
+       WHERE ${googleAdAccounts.clientId} = ${client.id}
+         AND ${googleAdAccounts.status} = 'active'
+    UNION ALL
+      SELECT 'tiktok', COUNT(*)::int, MIN(${tiktokAdAccounts.lastSyncedAt}),
+             (COUNT(*) - COUNT(${tiktokAdAccounts.lastSyncedAt}))::int
+        FROM ${tiktokAdAccounts}
+       WHERE ${tiktokAdAccounts.clientId} = ${client.id}
+         AND ${tiktokAdAccounts.status} <> 'removed'
   `);
+  const rows = accounts.rows ?? [];
+  const on = (platform: string) => rows.find((r) => r.platform === platform);
+  const count = (platform: string) => Number(on(platform)?.count ?? 0);
 
-  const connectedAccounts = Number(accounts.rows?.[0]?.count ?? 0);
+  const connectedAccounts = count("meta") + count("google") + count("tiktok");
 
   if (!ghlConnected || connectedAccounts === 0) return "red";
   if (!client.firstWebhookAt) return "red";
-  const staleHours = client.lastSyncedAt
-    ? (Date.now() - client.lastSyncedAt.getTime()) / 3_600_000
-    : Infinity;
+
+  /*
+   * 🔴 Stale by the WORST platform the client has, as `runHealthChecks` takes
+   * its overall from the worst row — not by the newest sync across them.
+   *
+   * Newest is right for a header timestamp: one line over several pipes can
+   * only say when the client's figures last moved, and that is what
+   * `newestAdSync` gives the board. It is wrong for a verdict. This dot took the
+   * newest, so a client whose Meta pipe had been dead for three days, beside a
+   * Google sync running hourly, sat green on the client list while its own
+   * checklist — a freshness row per platform — said amber. The list and the
+   * detail page disagreeing about the same facts is the one thing this
+   * function must not do.
+   *
+   * One time per platform the client has. Meta's is `client.lastSyncedAt`,
+   * which only the Meta sync writes and which outlives a removed account, so it
+   * counts only while Meta has an active one: a stamp left behind by a detached
+   * account must not drag a healthy TikTok-only client amber over a pipe that
+   * no longer exists. Google's and TikTok's is their oldest account's, and none
+   * while any account has never synced. No time is never synced, and never
+   * synced is infinitely stale.
+   */
+  const hoursSince = (at: Date | string | null) =>
+    at ? (Date.now() - new Date(at).getTime()) / 3_600_000 : Infinity;
+  const ages: number[] = [];
+  if (count("meta") > 0) ages.push(hoursSince(client.lastSyncedAt));
+  for (const platform of ["google", "tiktok"]) {
+    const row = on(platform);
+    if (!row || count(platform) === 0) continue;
+    ages.push(Number(row.unsynced) > 0 ? Infinity : hoursSince(row.synced));
+  }
+  // Never empty: `connectedAccounts` above is the sum of these same counts.
+  const staleHours = Math.max(...ages);
   if (staleHours > 36) return "amber";
   return "green";
 }

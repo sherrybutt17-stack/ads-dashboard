@@ -5,6 +5,7 @@ import { getClientForSession } from "@/lib/clients";
 import { record, requestContext } from "@/lib/audit";
 import { isValidMonthKey } from "@/lib/commentary/model";
 import { publishCommentary, unpublishCommentary } from "@/lib/commentary/store";
+import { AD_PLATFORMS } from "@/lib/platforms";
 
 /**
  * The one endpoint that can put a month's commentary in front of a client.
@@ -29,7 +30,12 @@ import { publishCommentary, unpublishCommentary } from "@/lib/commentary/store";
 const Schema = z
   .object({
     month: z.string().refine(isValidMonthKey, "Invalid month"),
-    platform: z.enum(["meta", "google"]).default("meta"),
+    /*
+     * The list the editor saves under (`commentary/route.ts`). Any narrower
+     * and a month could be written on a platform and never published there.
+     * Both took `meta | google` until TikTok was added to each together.
+     */
+    platform: z.enum(AD_PLATFORMS).default("meta"),
     /** `false` withdraws, leaving the working copy alone. */
     published: z.boolean().default(true),
   })

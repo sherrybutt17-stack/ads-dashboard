@@ -2,9 +2,8 @@ import type { Client } from "@/db/schema";
 import type { AdPlatform } from "@/lib/platforms";
 import { backfillClientMetrics } from "@/lib/meta/sync";
 import { backfillClientGoogleMetrics } from "@/lib/google/sync";
-import { syncClientTiktokMetrics } from "@/lib/tiktok/sync";
+import { backfillClientTiktokMetrics } from "@/lib/tiktok/sync";
 import { getAdPipeStatus } from "@/lib/metrics/pipe-status";
-import { trailingWindowInclusive } from "@/lib/dates";
 
 /**
  * Start pulling history the moment an ad account is attached.
@@ -65,8 +64,6 @@ export async function kickFirstSync(
     if (pipe.lastSuccessAt || pipe.state === "backfilling") return "skipped";
     if (pipe.state === "not_connected") return "skipped";
 
-    const window = trailingWindowInclusive(FIRST_SYNC_DAYS, client.timezone);
-
     switch (platform) {
       case "meta":
         await backfillClientMetrics(client, FIRST_SYNC_DAYS);
@@ -76,15 +73,15 @@ export async function kickFirstSync(
         break;
       case "tiktok":
         /*
-         * No `backfillClientTiktokMetrics` exists — the ordinary sync takes an
-         * explicit window, which is all a backfill is here. It records
-         * `tiktok_daily`, which `FULL_SYNC_KINDS` already counts, so the pipe
-         * status sees it exactly as it sees the other two.
+         * 🔴 The backfill, a calendar month per request — never one report
+         * over the whole window. This was the ordinary sync over all 90 days,
+         * and TikTok refuses any `stat_time_day` report spanning more than 30
+         * ("max time span is 30 days"), so every newly connected advertiser's
+         * first import failed. It records `tiktok_backfill`, which
+         * `FULL_SYNC_KINDS` counts, so the pipe status sees it exactly as it
+         * sees the other two.
          */
-        await syncClientTiktokMetrics(client, {
-          since: window.startKey,
-          until: window.endKey,
-        });
+        await backfillClientTiktokMetrics(client, FIRST_SYNC_DAYS);
         break;
     }
     return "started";

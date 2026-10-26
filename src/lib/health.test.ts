@@ -556,18 +556,24 @@ describe("the client-list badge", () => {
   const connected = (over: Partial<Client> = {}) =>
     client({ ghlAuthMethod: "pit", ghlTokenEncrypted: "tok", lastSyncedAt: NOW, ...over });
 
+  /*
+   * These two carry their own platform's sync time, an hour before NOW. They
+   * used to pass on `connected()`'s Meta time alone — a value no Google-only
+   * or TikTok-only client ever has, since only the Meta sync writes it — which
+   * is how the badge's stale check hid that it read Meta's column for everyone.
+   */
   it("🔴 a Google-only client is not red for having no Meta account", async () => {
     await run(
-      `INSERT INTO google_ad_accounts (client_id, customer_id, status)
-       VALUES ('${CLIENT_A}', '123-456-7890', 'active')`,
+      `INSERT INTO google_ad_accounts (client_id, customer_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '123-456-7890', 'active', '2026-08-18T16:00:00Z')`,
     );
     expect(await health.quickHealth(connected())).toBe("green");
   });
 
   it("🔴 a TikTok-only client likewise", async () => {
     await run(
-      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status)
-       VALUES ('${CLIENT_A}', '700000000000000', 'active')`,
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '700000000000000', 'active', '2026-08-18T16:00:00Z')`,
     );
     expect(await health.quickHealth(connected())).toBe("green");
   });
@@ -627,5 +633,226 @@ describe("the client-list badge", () => {
        VALUES ('${CLIENT_B}', '799999999999999', 'active')`,
     );
     expect(await health.quickHealth(connected())).toBe("red");
+  });
+
+  /*
+   * 🔴 Stale by the sync times of the platforms the client actually has.
+   *
+   * The badge read `client.lastSyncedAt` alone, and that column is Meta's: the
+   * Google and TikTok syncs stamp their own account rows and never touch it.
+   * The one client running TikTok alone — syncing daily — therefore read as ad
+   * data that had never synced, beside a pipe that ran that morning.
+   */
+  it("🔴 dates a TikTok-only client by TikTok's sync, not by Meta's empty column", async () => {
+    await run(
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '700000000000000', 'active', '2026-08-18T16:00:00Z')`,
+    );
+    expect(await health.quickHealth(connected({ lastSyncedAt: null }))).toBe("green");
+  });
+
+  it("🔴 goes amber when TikTok stops syncing, whatever Meta's column still says", async () => {
+    // Detaching a Meta account leaves its last sync on the client row. It must
+    // not vouch for a TikTok pipe that has been dead for three days.
+    await run(
+      `INSERT INTO meta_ad_accounts (client_id, ad_account_id, status)
+       VALUES ('${CLIENT_A}', 'act_1', 'removed')`,
+    );
+    await run(
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '700000000000000', 'active', '2026-08-15T00:00:00Z')`,
+    );
+    expect(await health.quickHealth(connected())).toBe("amber");
+  });
+
+  it("does not let a removed advertiser, or another client's, keep the badge fresh", async () => {
+    await run(
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status, last_synced_at) VALUES
+         ('${CLIENT_A}', '700000000000001', 'active',  '2026-08-15T00:00:00Z'),
+         ('${CLIENT_A}', '700000000000002', 'removed', '2026-08-18T16:00:00Z'),
+         ('${CLIENT_B}', '700000000000003', 'active',  '2026-08-18T16:00:00Z')`,
+    );
+    expect(await health.quickHealth(connected({ lastSyncedAt: null }))).toBe("amber");
+  });
+
+  it("🔴 takes the worst platform: Meta three days stale is amber beside a fresh Google", async () => {
+    /*
+     * The rule chosen, pinned so changing it is a decision. The dot is the
+     * checklist's verdict in one glance, and the checklist's overall is its
+     * worst row — here Meta's freshness, three days stale. This badge once took
+     * the newest sync instead, and read green on the client list over a dead
+     * Meta pipe while the client's own checklist said amber. Newest is right
+     * for the board's header timestamp; it is wrong for a verdict.
+     */
+    await run(
+      `INSERT INTO meta_ad_accounts (client_id, ad_account_id) VALUES ('${CLIENT_A}', 'act_1')`,
+    );
+    await run(
+      `INSERT INTO google_ad_accounts (client_id, customer_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '123-456-7890', 'active', '2026-08-18T16:00:00Z')`,
+    );
+    expect(
+      await health.quickHealth(connected({ lastSyncedAt: new Date("2026-08-15T00:00:00Z") })),
+    ).toBe("amber");
+  });
+
+  it("🔴 and the reverse: Google three days stale is amber beside a fresh Meta", async () => {
+    await run(
+      `INSERT INTO meta_ad_accounts (client_id, ad_account_id) VALUES ('${CLIENT_A}', 'act_1')`,
+    );
+    await run(
+      `INSERT INTO google_ad_accounts (client_id, customer_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '123-456-7890', 'active', '2026-08-15T00:00:00Z')`,
+    );
+    // `connected()` dates Meta's sync at NOW.
+    expect(await health.quickHealth(connected())).toBe("amber");
+  });
+
+  it("🔴 a TikTok-only client with fresh TikTok is green, whatever stamp a removed Meta account left", async () => {
+    /*
+     * The worst-platform rule's own trap. `client.lastSyncedAt` outlives a
+     * detached Meta account, and taken as one more platform's time, a stamp
+     * three days old would hold a healthy TikTok-only client amber over a pipe
+     * that no longer exists — with nothing left to reconnect that could clear it.
+     */
+    await run(
+      `INSERT INTO meta_ad_accounts (client_id, ad_account_id, status)
+       VALUES ('${CLIENT_A}', 'act_1', 'removed')`,
+    );
+    await run(
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '700000000000000', 'active', '2026-08-18T16:00:00Z')`,
+    );
+    expect(
+      await health.quickHealth(connected({ lastSyncedAt: new Date("2026-08-15T00:00:00Z") })),
+    ).toBe("green");
+  });
+
+  /*
+   * Within a platform, its stalest account — on both arms, for the reason the
+   * tenant test above gives: each arm is its own SQL, and a fixture on one
+   * platform leaves the other's untested.
+   */
+  for (const { platform, table, idColumn, ids } of [
+    {
+      platform: "Google",
+      table: "google_ad_accounts",
+      idColumn: "customer_id",
+      ids: ["123-456-7890", "123-456-7891"],
+    },
+    {
+      platform: "TikTok",
+      table: "tiktok_ad_accounts",
+      idColumn: "advertiser_id",
+      ids: ["700000000000001", "700000000000002"],
+    },
+  ]) {
+    it(`🔴 one ${platform} account that has never synced is amber, however fresh the other`, async () => {
+      // `MIN` and `MAX` both skip NULLs, so without the separate count an account
+      // whose figures are not on the dashboard at all hides behind its synced
+      // sibling, and the dot stays green.
+      await run(
+        `INSERT INTO ${table} (client_id, ${idColumn}, status, last_synced_at) VALUES
+           ('${CLIENT_A}', '${ids[0]}', 'active', '2026-08-18T16:00:00Z'),
+           ('${CLIENT_A}', '${ids[1]}', 'active', NULL)`,
+      );
+      expect(await health.quickHealth(connected())).toBe("amber");
+    });
+
+    it(`🔴 one ${platform} account three days stale is amber beside a fresh one`, async () => {
+      // One failing account fails the whole run, so the checklist's freshness
+      // row goes stale with it; a fresh sibling must not vouch for it here.
+      await run(
+        `INSERT INTO ${table} (client_id, ${idColumn}, status, last_synced_at) VALUES
+           ('${CLIENT_A}', '${ids[0]}', 'active', '2026-08-18T16:00:00Z'),
+           ('${CLIENT_A}', '${ids[1]}', 'active', '2026-08-15T00:00:00Z')`,
+      );
+      expect(await health.quickHealth(connected())).toBe("amber");
+    });
+  }
+
+  it("counts a paused TikTok advertiser, as the checklist does", async () => {
+    // Anything but `removed` is an advertiser the client still has — the rule
+    // `activeTiktokAccounts` applies — so it is not "no ad platform", red.
+    await run(
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '700000000000000', 'paused', '2026-08-18T16:00:00Z')`,
+    );
+    expect(await health.quickHealth(connected())).toBe("green");
+  });
+
+  it("🔴 never dates a client by an advertiser it removed — under the oldest sync, that would be amber forever", async () => {
+    /*
+     * A removed advertiser is never synced again, so its stamp only ages.
+     * Taking each platform's OLDEST sync, one left in the query would turn
+     * every client that ever removed one amber for good. The test above with
+     * fresh stamps on the removed row cannot see that; these stale and never
+     * stamped rows can.
+     */
+    await run(
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, status, last_synced_at) VALUES
+         ('${CLIENT_A}', '700000000000001', 'active',  '2026-08-18T16:00:00Z'),
+         ('${CLIENT_A}', '700000000000002', 'removed', '2026-08-01T00:00:00Z'),
+         ('${CLIENT_A}', '700000000000003', 'removed', NULL)`,
+    );
+    expect(await health.quickHealth(connected({ lastSyncedAt: null }))).toBe("green");
+  });
+
+  it("🔴 a Meta client that synced an hour ago is green", async () => {
+    // Meta's time counts only while Meta has an account, so the Google-only and
+    // TikTok-only tests above no longer read it. This one does: Meta-only
+    // clients must look exactly as they always have.
+    await run(
+      `INSERT INTO meta_ad_accounts (client_id, ad_account_id) VALUES ('${CLIENT_A}', 'act_1')`,
+    );
+    expect(
+      await health.quickHealth(connected({ lastSyncedAt: new Date("2026-08-18T16:00:00Z") })),
+    ).toBe("green");
+  });
+
+  it("🔴 two live platforms are green — the worst of two fresh syncs is fresh", async () => {
+    await run(
+      `INSERT INTO meta_ad_accounts (client_id, ad_account_id) VALUES ('${CLIENT_A}', 'act_1')`,
+    );
+    await run(
+      `INSERT INTO google_ad_accounts (client_id, customer_id, status, last_synced_at)
+       VALUES ('${CLIENT_A}', '123-456-7890', 'active', '2026-08-18T16:00:00Z')`,
+    );
+    expect(
+      await health.quickHealth(connected({ lastSyncedAt: new Date("2026-08-18T16:00:00Z") })),
+    ).toBe("green");
+  });
+});
+
+describe("Meta freshness", () => {
+  /** A successful nightly Meta run two hours before NOW, with what it recorded. */
+  const seedRun = (meta: object) =>
+    run(`INSERT INTO sync_runs (client_id, kind, status, started_at, finished_at, meta)
+         VALUES ('${CLIENT_A}', 'meta_daily', 'success', '2026-08-18T15:00:00Z', '2026-08-18T15:02:00Z',
+                 '${JSON.stringify(meta).replace(/'/g, "''")}'::jsonb)`);
+
+  beforeEach(async () => {
+    await run(`INSERT INTO meta_ad_accounts (client_id, ad_account_id) VALUES ('${CLIENT_A}', 'act_1')`);
+  });
+
+  it("🔴 is amber when the run synced but Meta did not list the ads", async () => {
+    /*
+     * The run succeeds on purpose — spend and results were written — so this
+     * row is the only place a listing that keeps failing can show. Green here
+     * hid it while new ads piled up unnamed on every creative report.
+     */
+    await seedRun({
+      creativeFailures: ["act_1: Please reduce the amount of data you're asking for, then retry your request"],
+    });
+    const c = await check("meta_fresh");
+    expect(c.level).toBe("amber");
+    expect(c.message).toMatch(/Meta did not list the ads/);
+    expect(c.hint).toMatch(/Spend and results are current/);
+  });
+
+  it("is green when the run listed them", async () => {
+    await seedRun({ since: "2026-07-22", until: "2026-08-18", accounts: 1 });
+    const c = await check("meta_fresh");
+    expect(c.level).toBe("green");
   });
 });

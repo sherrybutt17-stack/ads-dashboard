@@ -1,5 +1,6 @@
 import type { DashboardData } from "@/lib/metrics/dashboard";
 import type { Insight } from "@/lib/metrics/insights";
+import { PLATFORM_LABEL, type AdPlatform } from "@/lib/platforms";
 import {
   formatCurrency,
   formatNumber,
@@ -107,6 +108,26 @@ const STAGE_LABEL: Record<string, string> = {
   closed_won: "Closed won",
   lost: "Lost",
   disqualified: "Disqualified (never a real prospect)",
+};
+
+/**
+ * The platform as the model is told it, and so as the client will read it.
+ *
+ * "Facebook / Meta" rather than `PLATFORM_LABEL`'s bare "Meta", because the
+ * reader thinks of the product as Facebook and the prose should name it the
+ * way they do.
+ *
+ * 🔴 A record over every platform, not `=== "google" ? … : "Facebook / Meta"`.
+ * That ternary sent TikTok down the else-branch, so a TikTok client's summary
+ * was briefed as "Advertising platform: Facebook / Meta" over TikTok's own
+ * figures — and the model, told it was writing about Facebook, says so to the
+ * client. With no fallback, a fourth platform is a compile error here rather
+ * than another platform's name.
+ */
+const BRIEF_PLATFORM_LABEL: Record<AdPlatform, string> = {
+  meta: "Facebook / Meta",
+  google: "Google Ads",
+  tiktok: "TikTok Ads",
 };
 
 export function buildBrief(
@@ -244,10 +265,19 @@ export function buildBrief(
     return a.text;
   });
 
+  /*
+   * The lead caveat states the CRM's own total beside the leads counted, so
+   * both are facts the model may repeat. The total was never in `allowed`: a
+   * correct "of the 702 leads in your CRM" was flagged as invented, and the
+   * flag costs a second paid generation.
+   */
+  figures.add(data.leadFilter.paid, "count", "leads counted");
+  figures.add(data.leadFilter.total, "count", "total leads in the CRM");
+
   return {
     clientName: data.client.name,
     periodLabel: data.range.label,
-    platformLabel: data.platform === "google" ? "Google Ads" : "Facebook / Meta",
+    platformLabel: BRIEF_PLATFORM_LABEL[data.platform],
     currency,
     facts,
     funnel,
@@ -269,6 +299,7 @@ export function buildBrief(
 function buildCaveats(data: DashboardData): string[] {
   const out: string[] = [];
   const c = data.current;
+  const meta = data.platform === "meta";
 
   if (data.attributionGap) {
     out.push(
@@ -296,23 +327,55 @@ function buildCaveats(data: DashboardData): string[] {
     );
   }
 
+  /*
+   * 🔴 The next two sentences are about Meta's data, and only a Meta brief
+   * carries them.
+   *
+   * Ad-id coverage counts deals whose contact has a `meta_ad_id`, and the
+   * restatement window is `fb_daily_metrics.is_provisional` — both Meta columns.
+   * On every other platform the loaders hand back zeroes for them today
+   * (`loadCreatives`, `getProvisionalCoverage`), which is all that kept a
+   * TikTok summary from being told its leads lack a Meta ad id. Gated here, a
+   * loader that one day fills either field for another platform cannot put
+   * Meta's tracking into that platform's prose: a constraint about the wrong
+   * pipe, which the model would repeat to the client as a fact about theirs.
+   */
   const cov = data.revenueCoverage;
-  if (cov && cov.totalDeals > 0 && cov.attributedDeals === 0) {
+  if (meta && cov && cov.totalDeals > 0 && cov.attributedDeals === 0) {
     out.push(
       "No lead carries a Meta ad id, so revenue cannot be traced to any individual creative. Do not attribute a deal, or the absence of one, to a specific ad or video.",
     );
   }
 
-  if (data.provisional.provisionalRows > 0 && data.provisional.since) {
+  if (meta && data.provisional.provisionalRows > 0 && data.provisional.since) {
     out.push(
       `Meta may still restate figures from ${data.provisional.since} onward as attribution windows fill, so the most recent days can move. Do not present them as final.`,
     );
   }
 
+  /*
+   * Which leads the figures count, said by the rule that counted them.
+   *
+   * 🔴 Meta's are whatever the client's paid-lead filter selects, so its mode
+   * decides. Google's and TikTok's are matched by their own click or campaign
+   * id and ignore that filter entirely (`platformLeadPredicate`; the dashboard
+   * says the same through `leadFilterDescription`). Keyed on Meta's mode for
+   * every platform, a TikTok brief on "all" said nothing while counting only
+   * TikTok's leads, and on any other mode (the default "either" included)
+   * called the rest "not attributed to advertising" when they may well be
+   * Meta's.
+   */
   const f = data.leadFilter;
-  if (f.mode !== "all") {
+  if (meta) {
+    if (f.mode !== "all") {
+      out.push(
+        `These figures count ${f.paid} paid leads out of ${f.total} total leads in the CRM — the rest are not attributed to advertising and are excluded. Do not describe the paid figure as the client's total lead volume.`,
+      );
+    }
+  } else if (f.paid < f.total) {
+    const name = PLATFORM_LABEL[data.platform];
     out.push(
-      `These figures count ${f.paid} paid leads out of ${f.total} total leads in the CRM — the rest are not attributed to advertising and are excluded. Do not describe the paid figure as the client's total lead volume.`,
+      `These figures count the ${f.paid} leads carrying a ${name} click or campaign id, out of ${f.total} total leads in the CRM — the rest came in some other way, other advertising included, and are excluded. Do not describe the ${name} figure as the client's total lead volume.`,
     );
   }
 

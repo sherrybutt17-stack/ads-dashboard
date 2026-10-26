@@ -173,7 +173,9 @@ export default async function ClientBoardPage({
                   >
                     {brandName} <span style={{ color: "var(--text-muted)" }}>· Board</span>
                   </h1>
-                  <SyncIndicator syncedAt={client.lastSyncedAt?.toISOString() ?? null} />
+                  {/* Every platform the client has, not Meta's column alone —
+                      see `BoardContext.syncedAt`. */}
+                  <SyncIndicator syncedAt={context.syncedAt?.toISOString() ?? null} />
                 </div>
               </div>
             </div>

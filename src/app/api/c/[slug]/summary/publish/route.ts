@@ -6,6 +6,7 @@ import { record, requestContext } from "@/lib/audit";
 import { isValidDateKey } from "@/lib/dates";
 import { FRAMINGS } from "@/lib/ai/summary";
 import { publishSummary, unpublishSummary } from "@/lib/ai/store";
+import { AD_PLATFORMS } from "@/lib/platforms";
 
 /**
  * The one endpoint that can put a written summary in front of a client.
@@ -24,7 +25,12 @@ const Schema = z
   .object({
     start: z.string().refine(isValidDateKey, "Invalid start date"),
     end: z.string().refine(isValidDateKey, "Invalid end date"),
-    platform: z.enum(["meta", "google"]).default("meta"),
+    /*
+     * The list drafts are saved under (`summary/route.ts`). Any narrower and a
+     * summary could be drafted on a platform and never published there. Both
+     * took `meta | google` until TikTok was added to each together.
+     */
+    platform: z.enum(AD_PLATFORMS).default("meta"),
     framing: z.enum(FRAMINGS),
     /** `false` withdraws a published summary, leaving the working copy alone. */
     published: z.boolean().default(true),

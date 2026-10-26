@@ -43,36 +43,91 @@ concurrency:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Four calls below may each run for 300 seconds (--max-time), which is 20
+    # minutes before anything else. At 15 the job could be killed inside the
+    # last of them — the pacing alerts, last on purpose — and a job cancelled by
+    # its own timeout says nothing about the work it never reached.
+    timeout-minutes: 25
+    # 🔴 Named explicitly, so GitHub runs every step as `bash -eo pipefail`.
+    #
+    # Left unset, a step runs as `bash -e` with NO pipefail. Each call below
+    # used to end in `| tee /tmp/<name>.json`, and a pipeline's status is its
+    # last command's: an HTTP error (-f) or a timeout (--max-time) failed the
+    # call inside the pipe, tee exited 0, and the step went green over a run
+    # that had reconciled nothing. It did, on 22 Oct — Meta timed out, the job
+    # ticked. The calls no longer pipe, so their exit status reaches the shell
+    # directly; this stays so the next pipe anyone adds cannot swallow it again.
+    defaults:
+      run:
+        shell: bash
     env:
       BASE_URL: https://ads-dashboard-shaheer4.vercel.app
+      # 🔴 What a step prints of its response: one line of counts, never the
+      # response itself.
+      #
+      # This repository is PUBLIC, and so are its Actions logs. Each response
+      # lists every client by slug, and a failure carries the upstream error
+      # text — an ad account id, a Graph or Google error message — so printing
+      # it whole, as tee did, published the client roster and its faults to
+      # anyone who looked. The counts are what a log needs (how many clients
+      # synced, were skipped, failed or were deferred); the detail stays where
+      # it is access-controlled, on each client's health checklist.
+      #
+      # One line of Python on purpose — `python3 -c`, like the step at the end.
+      # Folded below for reading, which joins the lines with spaces: keep every
+      # line at the same indent, or the fold keeps the break and Python sees an
+      # indented statement.
+      SUMMARY: >-
+        import collections, json, sys;
+        d = json.load(open(sys.argv[1]));
+        n = collections.Counter(str(r.get("status")) for r in d.get("results") or [] if r.get("status") != "deferred");
+        print("%s: %s; %s deferred" % (sys.argv[2], ", ".join("%d %s" % (c, s) for s, c in sorted(n.items())) or (d.get("skipped") if isinstance(d.get("skipped"), str) else "no clients processed"), int(d.get("deferred") or 0)))
     steps:
       - name: Check secret is configured
+        # Every step below runs only if this one passed — see their `if`.
+        id: secret
         run: |
           if [ -z "${{ secrets.CRON_SECRET }}" ]; then
             echo "::error::CRON_SECRET is not set. Add it under Settings → Secrets and variables → Actions."
             exit 1
           fi
 
+      # 🔴 Each step below runs even when one before it failed.
+      #
+      # By default a failed step skips every step after it, so a Meta timeout
+      # would also skip Google, TikTok and the pacing alerts — and for TikTok
+      # this workflow is the ONLY reconciliation there is, so one platform's bad
+      # night would leave another's history uncorrected. `!cancelled()` keeps
+      # them running past a failure (but not past a manual cancel or the job
+      # timeout), and the secret check still gates them all: without it, every
+      # call is a guaranteed 401. Any failed step still fails the run.
+
       - name: Reconcile Meta
+        if: ${{ !cancelled() && steps.secret.outcome == 'success' }}
         run: |
-          # -f fails the step on any HTTP error, so a broken pipe is loud rather
-          # than a green tick over a 401.
+          # -f exits non-zero on any HTTP error, as --max-time does on a
+          # timeout, and with nothing piped after it that exit fails this step
+          # (see `defaults` above) — a broken pipe is loud rather than a green
+          # tick over a 401. The body goes to a file, never into the log.
           curl -fsS --max-time 300 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "$BASE_URL/api/cron/meta-sync" | tee /tmp/meta.json
-          echo
+            -o /tmp/meta.json \
+            "$BASE_URL/api/cron/meta-sync"
+          python3 -c "$SUMMARY" /tmp/meta.json Meta
 
       - name: Reconcile Google
+        if: ${{ !cancelled() && steps.secret.outcome == 'success' }}
         run: |
           # Returns ok with a "google not configured" note until Google Ads is
           # wired up, so this is a no-op rather than a failure until then.
           curl -fsS --max-time 300 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "$BASE_URL/api/cron/google-sync" | tee /tmp/google.json
-          echo
+            -o /tmp/google.json \
+            "$BASE_URL/api/cron/google-sync"
+          python3 -c "$SUMMARY" /tmp/google.json Google
 
       - name: Reconcile TikTok
+        if: ${{ !cancelled() && steps.secret.outcome == 'success' }}
         run: |
           # TikTok has no Vercel cron slot — the Hobby tier allows two and Meta
           # and Google hold both — so this schedule is its ONLY reconciliation.
@@ -80,10 +135,12 @@ jobs:
           # this a no-op until one is connected.
           curl -fsS --max-time 300 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "$BASE_URL/api/cron/tiktok-sync" | tee /tmp/tiktok.json
-          echo
+            -o /tmp/tiktok.json \
+            "$BASE_URL/api/cron/tiktok-sync"
+          python3 -c "$SUMMARY" /tmp/tiktok.json TikTok
 
       - name: Budget pacing alerts
+        if: ${{ !cancelled() && steps.secret.outcome == 'success' }}
         run: |
           # Runs AFTER the three reconciles, deliberately: it alerts on figures,
           # and alerting on stale ones would report a drift that the same run
@@ -91,17 +148,22 @@ jobs:
           # in `decidePacingAlert`, so a client hears at most one message per
           # week per direction, and only during their own working hours.
           # No-op until a client has both a budget and an alert destination.
+          # A reconcile that failed above corrected nothing, so the figures this
+          # reads are the ones it would have read without that run.
           curl -fsS --max-time 300 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "$BASE_URL/api/cron/pacing" | tee /tmp/pacing.json
-          echo
+            -o /tmp/pacing.json \
+            "$BASE_URL/api/cron/pacing"
+          python3 -c "$SUMMARY" /tmp/pacing.json Pacing
 
       - name: Flag deferred clients
+        if: ${{ !cancelled() && steps.secret.outcome == 'success' }}
         run: |
           # A non-zero "deferred" means the run hit its dispatch budget and did
           # not reach every overdue client. Harmless once (the next run picks
           # them up) but persistent deferrals mean the client count has outgrown
-          # a single invocation.
+          # a single invocation. A file that is missing or unreadable belongs to
+          # a call that failed, which its own step has already reported.
           for f in /tmp/meta.json /tmp/google.json /tmp/tiktok.json /tmp/pacing.json; do
             n=$(python3 -c "import json,sys; print(json.load(open('$f')).get('deferred', 0))" 2>/dev/null || echo 0)
             if [ "$n" != "0" ]; then

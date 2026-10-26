@@ -344,8 +344,34 @@ export function isFieldRefusal(err: unknown, fields: readonly string[]): boolean
   return fields.some((f) => new RegExp(`\\b${f}\\b`, "i").test(err.message));
 }
 
+/**
+ * Meta asking for a smaller request: "Please reduce the amount of data you're
+ * asking for, then retry your request" (code 1). Nothing is wrong with the
+ * request but its size — a shorter window or a smaller page is the answer.
+ */
+export function isReduceDataError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /reduce the amount of data/i.test(message);
+}
+
 /** The ad's shareable preview link — optional: the listing never fails for want of it. */
 export const PREVIEW_FIELDS = ["preview_shareable_link"] as const;
+
+/**
+ * Ads per listing page.
+ *
+ * 🔴 Not 200. With the creative expansion, a page of 200 ads is a third of a
+ * megabyte or more, and from 23 Oct 2026 Meta refused it outright on every
+ * account with more than ~150 ads ("reduce the amount of data"), failing two
+ * clients' nightly sync for days. 100 was accepted on both; a page Meta still
+ * refuses is asked for again at half the size, down to `ADS_MIN_PAGE`.
+ */
+const ADS_PAGE = 100;
+const ADS_MIN_PAGE = 25;
+/** Ids per `ad.id IN` filter — kept well inside one page. */
+export const ADS_PER_ID_FILTER = 50;
+/** The most ads one listing returns before refusing to report a partial list. */
+const ADS_LISTING_CAP = 10_000;
 
 /**
  * The creative sub-fields, named once.
@@ -576,66 +602,111 @@ export class MetaClient {
   }
 
   /**
-   * Every ad in the account, with its creative and its preview link.
+   * Ads of the account, with their creative and preview link.
+   *
+   * `adIds`: only these ads, asked for 50 at a time — what the syncs use, since
+   * they need the ads that delivered, and a large account lists thousands that
+   * never will again (one client: 1,569 ads, 70 of them delivering). An empty
+   * list asks Meta nothing. Without it, every ad in the account.
    *
    * `statuses`: Meta's default listing leaves ARCHIVED ads out (and DELETED
-   * cannot be asked for at all), so the history import passes ARCHIVED to name
-   * the old ads its months are full of.
+   * cannot be asked for at all), so callers pass ARCHIVED to find the archived
+   * ads that still have delivery to report.
    *
    * The preview link is optional: refused, the listing restarts without it, so
    * the creatives sync — and with it every thumbnail — never fails for a link.
    */
-  async getAds(accountId: string, opts: { statuses?: readonly string[] } = {}): Promise<MetaAdRow[]> {
+  async getAds(
+    accountId: string,
+    opts: { statuses?: readonly string[]; adIds?: readonly string[] } = {},
+  ): Promise<MetaAdRow[]> {
     try {
-      return await this.listAds(accountId, opts, true);
+      return await this.listAdsBy(accountId, opts, true);
     } catch (err) {
       if (!isFieldRefusal(err, PREVIEW_FIELDS)) throw err;
       console.warn(
         `[meta] preview links refused for ${accountId}; listing ads without them:`,
         err instanceof Error ? err.message : err,
       );
-      return this.listAds(accountId, opts, false);
+      return this.listAdsBy(accountId, opts, false);
     }
   }
 
-  private async listAds(
+  private async listAdsBy(
     accountId: string,
-    opts: { statuses?: readonly string[] },
+    opts: { statuses?: readonly string[]; adIds?: readonly string[] },
     withPreview: boolean,
   ): Promise<MetaAdRow[]> {
-    const act = MetaClient.normalizeAccountId(accountId);
+    if (!opts.adIds) return this.listAds(accountId, opts.statuses, withPreview);
+    const ids = [...new Set(opts.adIds)];
+    for (const id of ids) {
+      // Interpolated into the filter: ad ids are purely numeric.
+      if (!/^\d{1,25}$/.test(id)) throw new Error(`Invalid Meta ad id: "${id}" (must be numeric)`);
+    }
     const rows: MetaAdRow[] = [];
-    let next: string | undefined;
-    let page = 0;
-
-    do {
-      const res: { data?: MetaAdRow[]; paging?: { next?: string } } = next
-        ? await this.followCursor(next)
-        : await this.request(`/${act}/ads`, {
-            fields: [
-              "id",
-              "name",
-              "status",
-              "adset_id",
-              "campaign_id",
-              ...(withPreview ? PREVIEW_FIELDS : []),
-              // Nested field expansion — one round trip instead of one per ad.
-              CREATIVE_FIELD_EXPANSION,
-              "adset{id,name,learning_stage_info}",
-            ].join(","),
-            limit: 200,
-            ...(opts.statuses ? { effective_status: JSON.stringify(opts.statuses) } : {}),
-          });
-      rows.push(...(res.data ?? []));
-      next = res.paging?.next;
-    } while (next && ++page < 50);
-
-    if (next) {
-      throw new Error(
-        `Meta ads listing exceeded ${50 * 200} rows for ${act}; refusing to report partial creative data`,
-      );
+    for (let i = 0; i < ids.length; i += ADS_PER_ID_FILTER) {
+      const filter = [{ field: "ad.id", operator: "IN", value: ids.slice(i, i + ADS_PER_ID_FILTER) }];
+      rows.push(...(await this.listAds(accountId, opts.statuses, withPreview, filter)));
     }
     return rows;
+  }
+
+  /**
+   * One listing, page by page on Meta's `after` cursor — followed with our own
+   * request rather than the `next` URL, so a page Meta finds too big can be
+   * asked for again, smaller, from the same place.
+   */
+  private async listAds(
+    accountId: string,
+    statuses: readonly string[] | undefined,
+    withPreview: boolean,
+    filtering?: unknown,
+  ): Promise<MetaAdRow[]> {
+    const act = MetaClient.normalizeAccountId(accountId);
+    const fields = [
+      "id",
+      "name",
+      "status",
+      "adset_id",
+      "campaign_id",
+      ...(withPreview ? PREVIEW_FIELDS : []),
+      // Nested field expansion — one round trip instead of one per ad.
+      CREATIVE_FIELD_EXPANSION,
+      "adset{id,name,learning_stage_info}",
+    ].join(",");
+    const rows: MetaAdRow[] = [];
+    let limit = ADS_PAGE;
+    let after: string | undefined;
+
+    for (;;) {
+      let res: { data?: MetaAdRow[]; paging?: { next?: string; cursors?: { after?: string } } };
+      try {
+        res = await this.request(`/${act}/ads`, {
+          fields,
+          limit,
+          ...(statuses ? { effective_status: JSON.stringify(statuses) } : {}),
+          ...(filtering ? { filtering: JSON.stringify(filtering) } : {}),
+          ...(after ? { after } : {}),
+        });
+      } catch (err) {
+        if (!isReduceDataError(err) || limit <= ADS_MIN_PAGE) throw err;
+        limit = Math.max(ADS_MIN_PAGE, Math.floor(limit / 2));
+        continue;
+      }
+      rows.push(...(res.data ?? []));
+      if (!res.paging?.next) return rows;
+      after = res.paging.cursors?.after;
+      if (!after) {
+        throw new Error(
+          `Meta ads listing for ${act} gave a next page without a cursor; refusing to report partial creative data`,
+        );
+      }
+      if (rows.length >= ADS_LISTING_CAP) {
+        throw new Error(
+          `Meta ads listing exceeded ${ADS_LISTING_CAP} rows for ${act}; refusing to report partial creative data`,
+        );
+      }
+    }
   }
 
   /**
@@ -866,7 +937,18 @@ export class MetaClient {
     }
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) {
-      throw new MetaApiError(`Meta pagination failed`, res.status);
+      // Meta's own message, as on the first page: "reduce the amount of data"
+      // on page 3 must still read as "ask for a shorter window".
+      const body = (await res.json().catch(() => null)) as
+        | { error?: { message?: string; code?: number; error_subcode?: number } }
+        | null;
+      throw new MetaApiError(
+        body?.error?.message ?? `Meta pagination failed`,
+        res.status,
+        body?.error?.code,
+        body?.error?.error_subcode,
+        body,
+      );
     }
     return (await res.json()) as T;
   }

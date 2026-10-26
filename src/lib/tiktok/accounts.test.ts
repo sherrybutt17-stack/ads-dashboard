@@ -86,14 +86,15 @@ const seed = async (advertiserId: string, status = "active") =>
  * The status predicate
  * ------------------------------------------------------------------ */
 
-describe("🔴 the status predicate agrees across all three readers", () => {
+describe("🔴 the status predicate agrees across every reader", () => {
   /*
    * `activeTiktokAccounts` (sync, health, per-client pipe status),
    * `activeTiktokAccountsForDisplay` (the settings list), and the batched SQL
    * in `metrics/pipe-status.ts` (the portfolio panel) all answer "which
    * advertisers does this client have". They must select the same rows, and for
    * a while they did not — this module tested `=== "active"` while the other
-   * two tested `<> "removed"`.
+   * two tested `<> "removed"`. `tiktokAdvertiserNamesForDisplay` (the landing
+   * page's client cards) came later, as a fourth.
    *
    * It was invisible because only two statuses are ever written, which is
    * exactly the condition under which a disagreement survives review and then
@@ -138,6 +139,106 @@ describe("🔴 the status predicate agrees across all three readers", () => {
       ).rows[0].n,
     );
     expect(viaFunction).toBe(viaSql);
+  });
+
+  it("matches what the client cards read", async () => {
+    // One query for every card cannot call the function either, so it restates
+    // the rule too. Each row is named after its id, so the rows can be told apart.
+    await run(`UPDATE tiktok_ad_accounts SET advertiser_name = advertiser_id`);
+    const forDisplay = (await mod.activeTiktokAccountsForDisplay(CLIENT)).accounts
+      .map((a) => a.advertiserName)
+      .sort();
+    const forCards = [...((await mod.tiktokAdvertiserNamesForDisplay([CLIENT])).get(CLIENT) ?? [])].sort();
+    expect(forCards).toEqual(forDisplay);
+  });
+});
+
+describe("tiktokAdvertiserNamesForDisplay — the client cards' one read", () => {
+  const OTHER = "22222222-2222-2222-2222-222222222222";
+  const RIVAL = "33333333-3333-3333-3333-333333333333";
+
+  beforeEach(async () => {
+    for (const [id, slug] of [
+      [OTHER, "other"],
+      [RIVAL, "rival"],
+    ]) {
+      await run(
+        `INSERT INTO clients (id, name, slug, agency_id) VALUES ('${id}', '${slug}', '${slug}', '${AGENCY}')`,
+      );
+    }
+  });
+
+  const seedNamed = (clientId: string, advertiserId: string, name: string | null, status = "active") =>
+    run(
+      `INSERT INTO tiktok_ad_accounts (client_id, advertiser_id, advertiser_name, status)
+       VALUES ('${clientId}', '${advertiserId}', ${name === null ? "NULL" : `'${name}'`}, '${status}')`,
+    );
+
+  it("🔴 keeps a paused advertiser on its card — only removed leaves it", async () => {
+    await seedNamed(CLIENT, "adv_live", "Acme Live");
+    await seedNamed(CLIENT, "adv_paused", "Acme Paused", "paused");
+    await seedNamed(CLIENT, "adv_gone", "Acme Gone", "removed");
+
+    // The Google twin's `= 'active'` is the easy rule to copy across, and it
+    // would drop the paused advertiser the sync and the client's page still keep.
+    const names = (await mod.tiktokAdvertiserNamesForDisplay([CLIENT])).get(CLIENT) ?? [];
+    expect([...names].sort()).toEqual(["Acme Live", "Acme Paused"]);
+  });
+
+  it("🔴 answers for exactly the clients it is handed, each under its own id", async () => {
+    await seedNamed(CLIENT, "adv_acme", "Acme Ads");
+    await seedNamed(OTHER, "adv_other", "Other Ads");
+    await seedNamed(RIVAL, "adv_rival", "Rival Ads");
+    /*
+     * One advertiser under two clients is legitimate here — the unique key is
+     * (client_id, advertiser_id) — and its status belongs to each ROW: removed
+     * under one client, it is still live under the other.
+     */
+    await seedNamed(CLIENT, "adv_shared", "Shared (Acme)");
+    await seedNamed(OTHER, "adv_shared", "Shared (Other)", "removed");
+
+    const names = await mod.tiktokAdvertiserNamesForDisplay([CLIENT, OTHER]);
+
+    // The ids are the page's visible clients and the only boundary this read
+    // has: nothing outside them leaves the database, nothing crosses between.
+    expect([...names.keys()].sort()).toEqual([CLIENT, OTHER].sort());
+    expect([...(names.get(CLIENT) ?? [])].sort()).toEqual(["Acme Ads", "Shared (Acme)"]);
+    expect(names.get(OTHER)).toEqual(["Other Ads"]);
+  });
+
+  it("lists a nameless advertiser as null, and leaves out a client with none live", async () => {
+    await seedNamed(CLIENT, "adv_unnamed", null);
+    await seedNamed(OTHER, "adv_gone", "Other Gone", "removed");
+
+    const names = await mod.tiktokAdvertiserNamesForDisplay([CLIENT, OTHER]);
+
+    // "TikTok · 1 advertiser", not no TikTok at all: the count files the card.
+    expect(names.get(CLIENT)).toEqual([null]);
+    expect(names.has(OTHER)).toBe(false);
+  });
+
+  it("asks the database nothing for an empty list", async () => {
+    const select = vi.spyOn(harness.db, "select");
+    try {
+      expect((await mod.tiktokAdvertiserNamesForDisplay([])).size).toBe(0);
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
+  });
+
+  it("🔴 degrades to an empty map, and says why in the log", async () => {
+    await seedNamed(CLIENT, "adv_acme", "Acme Ads");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A deploy that lands ahead of the migration adding this table.
+    await run(`ALTER TABLE tiktok_ad_accounts RENAME TO tiktok_ad_accounts_parked`);
+    try {
+      expect((await mod.tiktokAdvertiserNamesForDisplay([CLIENT])).size).toBe(0);
+      expect(logged).toHaveBeenCalled();
+    } finally {
+      await run(`ALTER TABLE tiktok_ad_accounts_parked RENAME TO tiktok_ad_accounts`);
+      logged.mockRestore();
+    }
   });
 });
 

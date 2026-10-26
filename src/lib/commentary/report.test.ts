@@ -34,6 +34,12 @@ vi.mock("@/lib/metrics/queries", () => ({
   getPeriodMetrics: (...args: unknown[]) => getPeriodMetrics(...args),
 }));
 
+/** Each platform's account currency, as `lib/metrics/currency.ts` resolves it (tested there). */
+vi.mock("@/lib/metrics/currency", () => ({
+  platformCurrency: async (c: Client, platform: string) =>
+    platform === "meta" ? (c.metaCurrency ?? "USD") : platform === "tiktok" ? "EUR" : "CAD",
+}));
+
 const { loadCommentaryForReport, loadCommentaryForEditor } = await import("./report");
 const { saveCommentary, publishCommentary } = await import("./store");
 
@@ -234,6 +240,17 @@ describe("loadCommentaryForReport", () => {
     await publishCommentary(AUG, "u");
     expect((await loadCommentaryForReport(client({ metaCurrency: "GBP" }), "meta", "2026-08"))?.currency).toBe("GBP");
     expect((await loadCommentaryForReport(client({ metaCurrency: null }), "meta", "2026-08"))?.currency).toBe("USD");
+  });
+
+  it("🔴 prints another platform's figures in that platform's currency, not Meta's", async () => {
+    // A TikTok-only client's targets and actuals printed in USD — Meta's
+    // fallback — whatever TikTok bills in.
+    const TT = { ...AUG, platform: "tiktok" as const };
+    await saveCommentary(TT, { did: "x", commitments: [], outcomes: [] }, "u");
+    await publishCommentary(TT, "u");
+    expect((await loadCommentaryForReport(client({ metaCurrency: "GBP" }), "tiktok", "2026-08"))?.currency).toBe("EUR");
+    expect((await loadCommentaryForEditor(client({ metaCurrency: "GBP" }), "tiktok", "2026-08")).currency).toBe("EUR");
+    expect((await loadCommentaryForEditor(client({ metaCurrency: "GBP" }), "google", "2026-08")).currency).toBe("CAD");
   });
 });
 

@@ -50,6 +50,7 @@ export default async function BoardPrintPage({
       widgets={doc.widgets}
       data={doc.data}
         metrics={doc.metrics}
+      syncedAt={doc.syncedAt}
       rangeStart={window.startKey}
       rangeEnd={window.endKey}
       toolbar={

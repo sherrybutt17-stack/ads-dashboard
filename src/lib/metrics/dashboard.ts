@@ -31,6 +31,7 @@ import { buildQuality, type QualityReport } from "./quality";
 import { buildLeadSources, type LeadSourceReport } from "./lead-sources";
 import { buildMaturation, type MaturationReport } from "./maturation";
 import { buildChannelMix, type ChannelMix } from "./channels";
+import { platformCurrencyAndSync } from "./currency";
 import {
   assessFatigue,
   EMPTY_FATIGUE_REPORT,
@@ -48,7 +49,6 @@ import {
   getDailySeries,
   getPeriodMetrics,
   getPeriodReach,
-  getGoogleAccountSummary,
   getCampaignBreakdown,
   getLeadsByCampaign,
   getLeadAttributionBreakdown,
@@ -942,20 +942,19 @@ export async function loadDashboard(
     preTracking: speedCohort.preTracking,
   });
 
-  // Each platform tracks its own currency and freshness — Meta on `clients`,
-  // Google on the Google accounts — so money is labelled and the footer dated
-  // with the right platform's values rather than always Meta's.
-  let currency = client.metaCurrency ?? "USD";
-  let adSyncedAt = client.lastSyncedAt;
-  if (platform === "google") {
-    const g = await getGoogleAccountSummary(client.id);
-    currency = g.currency ?? client.metaCurrency ?? "USD";
-    adSyncedAt = g.lastSynced;
-  }
+  /*
+   * Each platform tracks its own currency and freshness — Meta on `clients`,
+   * Google and TikTok on their own account rows — so money is labelled and the
+   * header and footer dated with the right platform's values rather than
+   * always Meta's. 🔴 TikTok used to fall through to Meta's here, which dated a
+   * TikTok-only client "never synced"; the switch that ends that, and that the
+   * Board shares, is `platformCurrencyAndSync`.
+   */
+  const { currency, syncedAt: adSyncedAt } = await platformCurrencyAndSync(client, platform);
 
   /*
    * Computed here rather than beside the query because the findings quote
-   * money, and the currency is not known until the Google account summary
+   * money, and the currency is not known until the platform's account summary
    * above has resolved — a Google view priced in Meta's currency would print
    * "$" over figures the platform reported in CAD.
    */

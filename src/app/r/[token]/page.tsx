@@ -120,6 +120,7 @@ export default async function SharedReportPage({
         widgets={doc.widgets}
         data={doc.data}
         metrics={doc.metrics}
+        syncedAt={doc.syncedAt}
         rangeStart={link.rangeStart}
         rangeEnd={link.rangeEnd}
         toolbar={

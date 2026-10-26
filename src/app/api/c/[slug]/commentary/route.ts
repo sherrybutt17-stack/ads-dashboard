@@ -15,6 +15,7 @@ import {
 } from "@/lib/commentary/model";
 import { saveCommentary } from "@/lib/commentary/store";
 import { loadCommentaryForEditor } from "@/lib/commentary/report";
+import { AD_PLATFORMS } from "@/lib/platforms";
 
 /**
  * Monthly commentary — §6.16.
@@ -36,7 +37,16 @@ const SAVE_WINDOW_MS = 10 * 60_000;
 
 const MonthSchema = z.object({
   month: z.string().refine(isValidMonthKey, "Invalid month"),
-  platform: z.enum(["meta", "google"]).default("meta"),
+  /*
+   * 🔴 Every platform the dashboard has a tab for, and the same list
+   * `publish/route.ts` takes, so a month that can be written on a platform
+   * can be published there. This was `meta | google`, so the TikTok tab's
+   * panel answered 400 on every month switch and save — hidden while TikTok
+   * was a tab few chose, and on every visit once a TikTok-only client began
+   * opening on TikTok. The panel is drawn from the page's own load, so it
+   * looked fine until it was used.
+   */
+  platform: z.enum(AD_PLATFORMS).default("meta"),
 });
 
 const TargetSchema = z

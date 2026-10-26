@@ -97,6 +97,21 @@ export async function GET(req: NextRequest) {
   }> = [];
   let sent = 0;
   let deferred = 0;
+  /*
+   * 🔴 Counted HERE, beside the code that knows what each reason means.
+   *
+   * The workflow's log is public, so it prints counts and never `results`,
+   * which name every client — and whether an hour's run warns is decided by
+   * this number alone. It used to be decided in the YAML, against a list of
+   * reasons it took to be harmless that nothing kept in step with this file:
+   * "client is paused" and "client is archived" were never on it, so every
+   * such schedule warned, by client slug, every hour.
+   *
+   * A failure is a send that was due and did not go out — its reason is the
+   * schedule's `lastError`, on its panel — or one that threw before it could
+   * be recorded, whose reason is in the function logs (see the catch below).
+   */
+  let failed = 0;
 
   for (const schedule of schedules) {
     if (Date.now() - startedAt > BUDGET_MS) {
@@ -134,6 +149,7 @@ export async function GET(req: NextRequest) {
           period: outcome.period.label,
         });
       } else {
+        if (outcome.failed) failed++;
         results.push({
           client: client.slug,
           platform: schedule.platform,
@@ -144,6 +160,7 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       // One client's failure must not stop the rest of the book.
       console.error(`[cron/reports] ${client.slug} failed:`, err);
+      failed++;
       results.push({
         client: client.slug,
         platform: schedule.platform,
@@ -157,6 +174,7 @@ export async function GET(req: NextRequest) {
     ok: true,
     schedules: schedules.length,
     sent,
+    failed,
     deferred,
     ms: Date.now() - startedAt,
     results,

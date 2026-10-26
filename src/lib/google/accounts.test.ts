@@ -336,3 +336,100 @@ describe("activeGoogleAccountsForDisplay", () => {
     await run(`ALTER TABLE google_ad_accounts ADD COLUMN login_customer_id text`);
   });
 });
+
+describe("googleAccountNamesForDisplay — the client cards' one read", () => {
+  /*
+   * The agency landing page reads every visible client's Google accounts in one
+   * query rather than one per card. One query for every client cannot call the
+   * per-client reader, so it restates that reader's rule — and a restatement is
+   * the copy that drifts. These hold it to the same rows.
+   */
+
+  /** A row as the connect flow leaves it, without the API round trip. */
+  const seed = (clientId: string, customerId: string, name: string | null, status = "active", ageDays = 0) =>
+    run(
+      `INSERT INTO google_ad_accounts (client_id, customer_id, account_name, status, created_at)
+       VALUES ('${clientId}', '${customerId}', ${name === null ? "NULL" : `'${name}'`}, '${status}',
+               now() - interval '${ageDays} days')`,
+    );
+
+  it("🔴 keeps what activeGoogleAccountsForDisplay keeps: active only", async () => {
+    await seed(CLIENT_A1, "1111111111", "Acme Search", "active", 3);
+    await seed(CLIENT_A1, "2222222222", "Acme Paused", "paused", 2);
+    await seed(CLIENT_A1, "3333333333", "Acme Old", "removed", 1);
+    await seed(CLIENT_A1, "4444444444", "Acme Display", "active", 0);
+
+    const forCards = (await mod.googleAccountNamesForDisplay([CLIENT_A1])).get(CLIENT_A1);
+    const forPage = (await mod.activeGoogleAccountsForDisplay(CLIENT_A1)).accounts.map((a) => a.accountName);
+
+    // A paused account is neither synced nor offered a tab on the client's own
+    // page, so a card that counted it would show a connection the page does not.
+    expect(forCards).toEqual(["Acme Search", "Acme Display"]);
+    expect(forCards).toEqual(forPage);
+  });
+
+  it("🔴 answers for exactly the clients it is handed, each under its own id", async () => {
+    await seed(CLIENT_A1, "1111111111", "Acme Google");
+    await seed(CLIENT_A2, "2222222222", "Acme Two Google");
+    await seed(CLIENT_B1, "3333333333", "Rival Google");
+
+    const names = await mod.googleAccountNamesForDisplay([CLIENT_A1, CLIENT_A2]);
+
+    /*
+     * The ids are the page's visible clients, already scoped to the session,
+     * and they are the only boundary this read has: another agency's accounts
+     * must not leave the database, and no card may wear a sibling's account.
+     */
+    expect([...names.keys()].sort()).toEqual([CLIENT_A1, CLIENT_A2].sort());
+    expect(names.get(CLIENT_A1)).toEqual(["Acme Google"]);
+    expect(names.get(CLIENT_A2)).toEqual(["Acme Two Google"]);
+  });
+
+  it("lists a nameless account as null, and leaves out a client with none live", async () => {
+    await seed(CLIENT_A1, "1111111111", null);
+    await seed(CLIENT_A2, "2222222222", "Acme Two Old", "removed");
+
+    const names = await mod.googleAccountNamesForDisplay([CLIENT_A1, CLIENT_A2]);
+
+    // Dropped, the nameless account would not count — and the count is what
+    // keeps a Google-only client from being filed among the untouched.
+    expect(names.get(CLIENT_A1)).toEqual([null]);
+    expect(names.has(CLIENT_A2)).toBe(false);
+  });
+
+  it("asks the database nothing for an empty list", async () => {
+    const select = vi.spyOn(harness.db, "select");
+    try {
+      expect((await mod.googleAccountNamesForDisplay([])).size).toBe(0);
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
+  });
+
+  it("does not depend on a column it does not read", async () => {
+    await seed(CLIENT_A1, "1111111111", "Acme Google");
+    // The column whose absence took `/c/gg-ads` down. The per-client reader
+    // selects it and degrades; this one never asks for it.
+    await run(`ALTER TABLE google_ad_accounts DROP COLUMN login_customer_id`);
+    try {
+      expect((await mod.googleAccountNamesForDisplay([CLIENT_A1])).get(CLIENT_A1)).toEqual(["Acme Google"]);
+    } finally {
+      await run(`ALTER TABLE google_ad_accounts ADD COLUMN login_customer_id text`);
+    }
+  });
+
+  it("🔴 degrades to an empty map, and says why in the log", async () => {
+    await seed(CLIENT_A1, "1111111111", "Acme Google");
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await run(`ALTER TABLE google_ad_accounts RENAME TO google_ad_accounts_parked`);
+    try {
+      // Every card loses the Google half of its line; the page keeps its list.
+      expect((await mod.googleAccountNamesForDisplay([CLIENT_A1])).size).toBe(0);
+      expect(logged).toHaveBeenCalled();
+    } finally {
+      await run(`ALTER TABLE google_ad_accounts_parked RENAME TO google_ad_accounts`);
+      logged.mockRestore();
+    }
+  });
+});

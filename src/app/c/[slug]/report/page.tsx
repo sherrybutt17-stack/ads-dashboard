@@ -5,7 +5,8 @@ import { getSessionUser, canAccessSlug } from "@/lib/auth";
 import { loadDashboard } from "@/lib/metrics/dashboard";
 import { getClientBranding, getAgencySettings } from "@/lib/branding-store";
 import type { AdPlatform } from "@/lib/metrics/queries";
-import { parseAdPlatform } from "@/lib/platforms";
+import { isAdPlatform } from "@/lib/platforms";
+import { resolvePagePlatform } from "@/lib/dashboard/platform";
 import {
   trailingWindow,
   isValidDateKey,
@@ -53,7 +54,13 @@ export default async function ReportPage({
   if (!client) notFound();
   if (!canAccessSlug(await getSessionUser(), slug)) redirect("/");
 
-  const platform: AdPlatform = parseAdPlatform(sp.platform);
+  /*
+   * Without `?platform=`, the client's own first platform rather than Meta —
+   * the Overview's rule, so a TikTok-only client's report is its TikTok report
+   * and not Meta's "not connected" page. Resolved before the dashboard load,
+   * which is for this one platform. A named platform costs no lookup.
+   */
+  const platform: AdPlatform = await resolvePagePlatform(client.id, sp.platform);
   // A selection from the Share or Export picker's "Preview"; the standard
   // report otherwise.
   const view = decodeView(sp.v) ?? DEFAULT_VIEW;
@@ -93,7 +100,15 @@ export default async function ReportPage({
     } else if (sp.days) {
       qs.set("days", String(safeDays));
     }
-    if (platform !== "meta") qs.set("platform", platform);
+    /*
+     * The platform exactly as this page received it: named if it was named,
+     * left off if it was not. The Overview resolves a missing one by the same
+     * rule this page just did, so the round trip lands on the view it left.
+     * `platform !== "meta"` did that only while every client opened on Meta —
+     * a client without Meta, sent here for its Facebook figures, would have
+     * gone back to its own platform instead.
+     */
+    if (isAdPlatform(sp.platform)) qs.set("platform", sp.platform);
     const s = qs.toString();
     return s ? `/c/${slug}?${s}` : `/c/${slug}`;
   })();

@@ -7,6 +7,7 @@ import {
   fbPeriodReach,
   googleAdAccounts,
   googleDailyMetrics,
+  tiktokAdAccounts,
   tiktokDailyMetrics,
 } from "@/db/schema";
 import type {
@@ -759,6 +760,52 @@ export async function getGoogleAccountSummary(
     }
   }
   return { currency: primary?.currency ?? null, lastSynced };
+}
+
+/**
+ * Display summary for the TikTok view — the same two facts as the Google one:
+ * the currency TikTok reports this client's spend in, and when TikTok last
+ * synced for them.
+ *
+ * 🔴 Both live on the advertiser rows, never on `clients`. The TikTok sync
+ * stamps `tiktok_ad_accounts.last_synced_at` and leaves the client row alone,
+ * whose `last_synced_at` and `meta_currency` belong to Meta. Reading those for
+ * the TikTok view is what dated a TikTok-only client "Not synced yet" over a
+ * sync that had run an hour earlier, and priced its spend in a currency TikTok
+ * never reported.
+ *
+ * The currency is the one `getTiktokCurrencies` hands the pacing panel and the
+ * book — called rather than re-derived, so a TikTok view's tiles and its own
+ * pacing meter cannot disagree. TikTok has no primary advertiser (see
+ * `addTiktokAccount`), so with two in different currencies it is whichever of
+ * them that query lists first; such a client's TikTok spend is a sum of two
+ * currencies whichever label it wears.
+ *
+ * `!== "removed"` for the sync time, the TikTok module's own rule
+ * (`activeTiktokAccounts`): a paused advertiser still syncs its history.
+ */
+export async function getTiktokAccountSummary(
+  clientId: string,
+): Promise<{ currency: string | null; lastSynced: Date | null }> {
+  const [rows, currencies] = await Promise.all([
+    db
+      .select({
+        lastSyncedAt: tiktokAdAccounts.lastSyncedAt,
+        status: tiktokAdAccounts.status,
+      })
+      .from(tiktokAdAccounts)
+      .where(eq(tiktokAdAccounts.clientId, clientId)),
+    getTiktokCurrencies([clientId]),
+  ]);
+
+  let lastSynced: Date | null = null;
+  for (const r of rows) {
+    if (r.status === "removed") continue;
+    if (r.lastSyncedAt && (!lastSynced || r.lastSyncedAt > lastSynced)) {
+      lastSynced = r.lastSyncedAt;
+    }
+  }
+  return { currency: currencies.get(clientId)?.[0] ?? null, lastSynced };
 }
 
 /**

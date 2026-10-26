@@ -4,6 +4,7 @@ import {
   segmentLabel,
   insightFields,
   isFieldRefusal,
+  isReduceDataError,
   isResultFieldRefusal,
   metaVersion,
   META_BREAKDOWNS,
@@ -550,5 +551,149 @@ describe("ad preview links", () => {
     expect(isFieldRefusal(refusal(100, "(#100) Tried accessing nonexisting field (preview_shareable_link)"), ["preview_shareable_link"])).toBe(true);
     expect(isFieldRefusal(refusal(100, "(#100) Param limit is invalid"), ["preview_shareable_link"])).toBe(false);
     expect(isFieldRefusal(refusal(190, "preview_shareable_link"), ["preview_shareable_link"])).toBe(false);
+  });
+});
+
+describe("the ads listing", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const ok = (body: unknown) =>
+    ({ ok: true, status: 200, headers: new Headers(), json: async () => body }) as unknown as Response;
+  const tooMuch = () =>
+    ({
+      ok: false,
+      status: 500,
+      headers: new Headers(),
+      json: async () => ({
+        error: { code: 1, message: "Please reduce the amount of data you're asking for, then retry your request" },
+      }),
+    }) as unknown as Response;
+  const page = (ids: string[], after?: string) =>
+    ok({
+      data: ids.map((id) => ({ id })),
+      ...(after ? { paging: { next: "https://graph.facebook.com/v25.0/act_1/ads?after=x", cursors: { after } } } : {}),
+    });
+  /** Every request's page size and cursor, in order. */
+  function stub(answer: (u: URL) => Response) {
+    const seen: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = new URL(String(url));
+        seen.push(u);
+        return answer(u);
+      }),
+    );
+    return seen;
+  }
+  const pages = (seen: URL[]) => seen.map((u) => [u.searchParams.get("limit"), u.searchParams.get("after")]);
+
+  it("🔴 asks for 100 ads a page, not 200, and follows Meta's cursor", async () => {
+    // From 23 Oct 2026 Meta refused 200 ads a page with the creative attached
+    // on every account with more than ~150 ads; 100 was accepted.
+    const seen = stub((u) => (u.searchParams.get("after") ? page(["2"]) : page(["1"], "c1")));
+    const ads = await new MetaClient("tok").getAds("act_1");
+    expect(ads.map((a) => a.id)).toEqual(["1", "2"]);
+    expect(pages(seen)).toEqual([
+      ["100", null],
+      ["100", "c1"],
+    ]);
+  });
+
+  it("🔴 asks again from the same place at half the page when Meta says it is too much", async () => {
+    const seen = stub((u) => {
+      if (!u.searchParams.get("after")) return page(["1"], "c1");
+      return Number(u.searchParams.get("limit")) > 25 ? tooMuch() : page(["2"]);
+    });
+    const ads = await new MetaClient("tok").getAds("act_1");
+    expect(ads.map((a) => a.id)).toEqual(["1", "2"]);
+    expect(pages(seen)).toEqual([
+      ["100", null],
+      ["100", "c1"],
+      ["50", "c1"],
+      ["25", "c1"],
+    ]);
+  });
+
+  it("gives up when Meta refuses even 25 ads", async () => {
+    const seen = stub(() => tooMuch());
+    await expect(new MetaClient("tok").getAds("act_1")).rejects.toThrow(/reduce the amount of data/);
+    expect(pages(seen).map(([limit]) => limit)).toEqual(["100", "50", "25"]);
+  });
+
+  it("🔴 asks for given ads by id, 50 to a request — and asks nothing for none", async () => {
+    const seen = stub(() => page([]));
+    const ids = Array.from({ length: 120 }, (_, i) => String(1000 + i));
+    await new MetaClient("tok").getAds("act_1", { adIds: [...ids, ids[0]], statuses: ["ARCHIVED"] });
+    const filters = seen.map((u) => JSON.parse(u.searchParams.get("filtering")!));
+    expect(filters.map((f) => [f[0].field, f[0].operator, f[0].value.length])).toEqual([
+      ["ad.id", "IN", 50],
+      ["ad.id", "IN", 50],
+      ["ad.id", "IN", 20],
+    ]);
+    expect(filters.flatMap((f) => f[0].value)).toEqual(ids);
+    expect(seen.every((u) => u.searchParams.get("effective_status") === '["ARCHIVED"]')).toBe(true);
+
+    seen.length = 0;
+    expect(await new MetaClient("tok").getAds("act_1", { adIds: [] })).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  it("refuses an ad id that is not a number", async () => {
+    const seen = stub(() => page([]));
+    await expect(new MetaClient("tok").getAds("act_1", { adIds: ["1", "2&limit=9"] })).rejects.toThrow(
+      /Invalid Meta ad id/,
+    );
+    expect(seen).toEqual([]);
+  });
+
+  it("refuses a partial list when a next page comes without a cursor", async () => {
+    stub(() => ok({ data: [{ id: "1" }], paging: { next: "https://graph.facebook.com/v25.0/act_1/ads?offset=1" } }));
+    await expect(new MetaClient("tok").getAds("act_1")).rejects.toThrow(/without a cursor/);
+  });
+
+  it("recognises Meta asking for a smaller request, and only that", () => {
+    expect(isReduceDataError(new MetaApiError("Please reduce the amount of data you're asking for, then retry your request", 500, 1))).toBe(true);
+    expect(isReduceDataError(new MetaApiError("(#17) User request limit reached", 400, 17))).toBe(false);
+  });
+});
+
+describe("paging past the first page", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("🔴 keeps Meta's own error on a later page — 'reduce the amount of data' must still read as that", async () => {
+    // The window split (`pullAdLevel`) keys on Meta's message. A bare
+    // "pagination failed" on page 3 would fail the sync instead of halving.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = new URL(String(url));
+        if (!u.searchParams.has("after")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            json: async () => ({
+              data: [{ date_start: "2026-09-01", campaign_id: "1" }],
+              paging: { next: "https://graph.facebook.com/v25.0/act_1/insights?after=c2" },
+            }),
+          } as unknown as Response;
+        }
+        return {
+          ok: false,
+          status: 500,
+          headers: new Headers(),
+          json: async () => ({
+            error: { code: 1, message: "Please reduce the amount of data you're asking for, then retry your request" },
+          }),
+        } as unknown as Response;
+      }),
+    );
+    const err = await new MetaClient("tok")
+      .getDailyInsights("act_1", "2026-09-01", "2026-09-30", "ad")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MetaApiError);
+    expect((err as MetaApiError).code).toBe(1);
+    expect(isReduceDataError(err)).toBe(true);
   });
 });

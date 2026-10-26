@@ -240,7 +240,9 @@ describe("sendScheduledReport — failure", () => {
 
     const res = await mod.sendScheduledReport(client(), schedule(), NOW);
 
-    expect(res).toMatchObject({ sent: false });
+    // Flagged, not merely unsent: `failed` is what the cron counts, and that
+    // count is all the hourly workflow warns on.
+    expect(res).toMatchObject({ sent: false, failed: true });
     const [row] = await sends();
     expect(row.status).toBe("failed");
     expect(String(row.error)).toMatch(/mailbox unavailable/);
@@ -306,7 +308,8 @@ describe("sendScheduledReport — no public address", () => {
     env.NODE_ENV = "production";
     try {
       const res = await mod.sendScheduledReport(client(), schedule(), NOW);
-      expect(res.sent).toBe(false);
+      // A failure, so the hourly run warns until the address is set.
+      expect(res).toMatchObject({ sent: false, failed: true });
       expect(sent).toHaveLength(0);
       // Refused before a link was minted, so no live link is left behind.
       expect((await run(`SELECT count(*)::int n FROM share_links`)).rows[0].n).toBe(0);
@@ -363,6 +366,39 @@ describe("sendScheduledReport — refusals", () => {
     // must not go out overnight for them because the server's day has turned.
     expect(res).toMatchObject({ sent: false, reason: "too_early" });
     expect(await sends()).toHaveLength(0);
+  });
+
+  it("🔴 never calls a refusal a failure", async () => {
+    /*
+     * The cron counts `failed`, and the hourly workflow warns on that count
+     * alone — its log is public, so it never sees a reason. A refusal marked
+     * failed would warn every hour about a schedule doing exactly what it was
+     * set up to do, and a warning that fires every hour is one nobody reads.
+     */
+    const refused = [
+      await mod.sendScheduledReport(client(), schedule({ enabled: false }), NOW),
+      await mod.sendScheduledReport(client(), schedule({ recipients: [] }), NOW),
+      await mod.sendScheduledReport(client(), schedule(), new Date("2026-08-05T13:00:00Z")),
+    ];
+    const first = await mod.sendScheduledReport(client(), schedule(), NOW);
+    if (!first.sent) throw new Error("expected the first send to go out");
+    refused.push(
+      // The race: the ORIGINAL row, so only the claim stops it.
+      await mod.sendScheduledReport(client(), schedule(), NOW),
+      await mod.sendScheduledReport(client(), schedule({ lastSentPeriod: first.period.key }), NOW),
+    );
+    configured = false;
+    refused.push(await mod.sendScheduledReport(client(), schedule(), NOW));
+
+    expect(refused.map((r) => (r.sent ? "sent" : r.reason))).toEqual([
+      "disabled",
+      "no recipients",
+      "too_early",
+      "already claimed by another run",
+      "already_sent",
+      "email not configured",
+    ]);
+    for (const r of refused) expect(r).not.toHaveProperty("failed", true);
   });
 });
 

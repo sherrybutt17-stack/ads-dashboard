@@ -111,6 +111,7 @@ export default async function RenderReportPage({
         widgets={doc.widgets}
         data={doc.data}
         metrics={doc.metrics}
+        syncedAt={doc.syncedAt}
         rangeStart={start}
         rangeEnd={end}
       />

@@ -1,5 +1,7 @@
 import { listClientsForSession } from "@/lib/clients";
 import { listAdAccounts } from "@/lib/meta/accounts";
+import { googleAccountNamesForDisplay } from "@/lib/google/accounts";
+import { tiktokAdvertiserNamesForDisplay } from "@/lib/tiktok/accounts";
 import { quickHealth } from "@/lib/health";
 import { getSessionUser, isAgencyOperator } from "@/lib/auth";
 import { AddClientButton } from "@/components/AddClientButton";
@@ -8,7 +10,7 @@ import { BookKpis } from "@/components/BookKpis";
 import { PageTitle } from "@/components/PageTitle";
 import { BookPacingPanel } from "@/components/BookPacing";
 import { ChurnRiskPanel } from "@/components/ChurnRisk";
-import { ClientCards } from "@/components/ClientCards";
+import { ClientCards, adConnection } from "@/components/ClientCards";
 import { getClientBranding } from "@/lib/branding-store";
 import { accentFor } from "@/lib/branding";
 import { loadBook, loadChurn } from "@/lib/metrics/book";
@@ -76,9 +78,30 @@ export default async function ClientsPage() {
     ? ((await getAgencySettings(session.agencyId)).agencyName ?? null)
     : null;
 
+  /*
+   * 🔴 Every platform's accounts, not Meta's alone. Counting Meta only
+   * labelled a TikTok-only client "Meta not connected" and filed it under
+   * "Not connected yet" — see `adConnection`.
+   *
+   * 🔴 Google and TikTok are each read ONCE for the whole list, not per card.
+   * Everything inside the map below runs for every client at once, on a pool
+   * of ten connections; a Google and a TikTok read per card put two more
+   * queries per client into that queue, for one column apiece. Only the visible
+   * ids are asked for, so the tenant boundary is still the one drawn above.
+   *
+   * Both degrade to an empty map: a failure, or a deploy ahead of either
+   * table's migration, costs every card that platform's half of its ad line,
+   * never the agency its whole client list.
+   */
+  const visibleIds = visible.map((c) => c.id);
+  const [googleNames, tiktokNames] = await Promise.all([
+    googleAccountNamesForDisplay(visibleIds),
+    tiktokAdvertiserNamesForDisplay(visibleIds),
+  ]);
+
   const clients = await Promise.all(
     visible.map(async (c) => {
-      const [accounts, branding] = await Promise.all([
+      const [meta, branding] = await Promise.all([
         listAdAccounts(c.id),
         /*
          * The card wears the client's OWN accent — the same colour their
@@ -91,22 +114,22 @@ export default async function ClientsPage() {
          */
         getClientBranding(c.id),
       ]);
-      const label =
-        accounts.length === 0
-          ? "Meta not connected"
-          : accounts.length === 1
-            ? (accounts[0].accountName ?? "1 ad account")
-            : `${accounts.length} ad accounts`;
+      const ads = adConnection({
+        meta: meta.map((a) => a.accountName),
+        // No entry is no live account — the readers list only clients with one.
+        google: googleNames.get(c.id) ?? [],
+        tiktok: tiktokNames.get(c.id) ?? [],
+      });
       return {
         id: c.id,
         name: c.name,
         slug: c.slug,
-        metaLabel: label,
+        adLabel: ads.label,
         ghlLocationName: c.ghlLocationName,
         firstWebhookAt: c.firstWebhookAt,
         // No webhookUrl: this list renders for client-role users too, and the
         // token in it is the GHL shared secret. Nothing here rendered it.
-        adAccounts: accounts.length,
+        adAccounts: ads.count,
         ghlConnected: Boolean(c.ghlLocationId),
         accent: accentFor(c.id, branding),
         health: await quickHealth(c),

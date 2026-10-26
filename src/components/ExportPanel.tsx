@@ -97,9 +97,14 @@ export function ExportPanel({
     `/api/c/${encodeURIComponent(slug)}/export?dataset=${dataset}&format=${format}${range}`;
   const dashboardHref = (format: ExportFormat) =>
     `${href("dashboard", format)}&v=${encodeURIComponent(encodeView(chosen ?? DEFAULT_VIEW))}`;
+  /*
+   * The platform is always named. Leaving Meta off relied on the report opening
+   * on Meta by default, which it no longer does for a client without Meta — so
+   * previewing a Facebook export for one would have shown their TikTok report.
+   */
   const reportHref =
     `/c/${encodeURIComponent(slug)}/report?start=${sel.start}&end=${sel.end}` +
-    (sel.platform !== "meta" ? `&platform=${sel.platform}` : "");
+    `&platform=${sel.platform}`;
   const previewHref = `${reportHref}&v=${encodeURIComponent(encodeView(chosen ?? DEFAULT_VIEW))}`;
 
   /** The format buttons for one export; disabled, with the reason, when blocked. */

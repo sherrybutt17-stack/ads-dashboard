@@ -55,6 +55,7 @@ export async function BoardDocument({
   rangeEnd,
   toolbar,
   metrics,
+  syncedAt,
 }: {
   client: Client;
   branding: ClientBranding;
@@ -69,6 +70,12 @@ export async function BoardDocument({
   toolbar?: ReactNode;
   /** The agency metrics the numbers were computed with (`loadBoardDocument`). */
   metrics: readonly CustomMetric[];
+  /**
+   * When the ad figures last synced, across every platform the client has
+   * (`loadBoardDocument`). Required, so a new caller cannot quietly fall back
+   * to `client.lastSyncedAt` — Meta's alone, and empty for a client without it.
+   */
+  syncedAt: Date | null;
 }) {
   // Skipped when the mark is off: reading a logo to discard it is work for nothing.
   const agencyLogo =
@@ -90,7 +97,15 @@ export async function BoardDocument({
   const pages = paginate(widgets, ROWS_PER_PAGE, {
     keepWithNext: (w) => w.kind === "text" && w.size === "heading",
   });
-  const lastSynced = client.lastSyncedAt?.toISOString() ?? null;
+  /*
+   * 🔴 Not `client.lastSyncedAt`, which this read. That column is written by
+   * the Meta sync alone, so every sheet of a TikTok-only client's board — in
+   * print, in the PDF and behind a share link — dropped its "as at" line, as if
+   * the figures on it had never been synced. One time for the document because
+   * the footer has one line for it; see `BoardContext.syncedAt` for why the
+   * newest.
+   */
+  const lastSynced = syncedAt?.toISOString() ?? null;
 
   return (
     <div style={accentVars}>

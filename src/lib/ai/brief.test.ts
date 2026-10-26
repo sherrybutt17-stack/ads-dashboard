@@ -4,6 +4,7 @@ import { verifyFigures } from "./verify";
 import { EMPTY_FUNNEL, EMPTY_ADS, derive } from "@/lib/metrics/compute";
 import type { DashboardData } from "@/lib/metrics/dashboard";
 import type { RevenueTotals } from "@/lib/metrics/compute";
+import { AD_PLATFORMS } from "@/lib/platforms";
 
 /**
  * What the model is told, and — more importantly — what it is told it may not
@@ -186,6 +187,30 @@ describe("caveats name what the data cannot support", () => {
     expect(caveats(d)).toContain("14 paid leads out of 702");
   });
 
+  it("lets the summary repeat the CRM total its caveat states", () => {
+    // Left out of `allowed`, a correct sentence was flagged as invented — and
+    // a flag costs a second paid generation.
+    for (const platform of AD_PLATFORMS) {
+      const brief = buildBrief(
+        makeData({
+          platform,
+          leadFilter: { mode: "attributed", tag: "", total: 702, attributed: 14, tagged: 0, paid: 14 },
+        }),
+        [],
+      );
+      expect(verifyFigures("Of the 702 leads in the CRM, 14 came from ads.", brief.allowed).ok).toBe(true);
+    }
+  });
+
+  it("🔴 keeps Meta's caveat on any filter but 'all', even when every lead matches it", () => {
+    const meta = (mode: "all" | "attributed", paid: number, total: number) =>
+      caveats(makeData({ leadFilter: { mode, tag: "", total, attributed: paid, tagged: 0, paid } }));
+    // Meta counts what the filter selects, so the filter is what must be said —
+    // whether or not it happened to exclude anything this period.
+    expect(meta("attributed", 46, 46)).toContain("46 paid leads out of 46");
+    expect(meta("all", 46, 46)).not.toMatch(/paid leads out of/);
+  });
+
   it("warns that recent Meta figures can still move", () => {
     const d = makeData({
       provisional: { totalRows: 30, provisionalRows: 12, since: "2026-08-01" },
@@ -229,5 +254,83 @@ describe("the rendered brief", () => {
     expect(out).toContain("Jul 15 – Aug 13");
     expect(out).toContain("Facebook / Meta");
     expect(out).toContain("USD");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The platform
+ * ------------------------------------------------------------------ */
+
+describe("🔴 every platform is briefed as itself", () => {
+  it("calls a TikTok brief TikTok, and nowhere Facebook or Meta", () => {
+    /*
+     * The label was `google ? "Google Ads" : "Facebook / Meta"`, so a TikTok
+     * client's summary was briefed as Facebook over TikTok's own figures — and
+     * the model writes about whichever platform the brief names.
+     */
+    const out = renderBrief(buildBrief(makeData({ platform: "tiktok" }), []));
+    expect(out).toContain("Advertising platform: TikTok Ads");
+    expect(out).not.toMatch(/Facebook|Meta/);
+  });
+
+  it("gives each platform its own name", () => {
+    // A platform added to the list fails here until it is named.
+    const labels = Object.fromEntries(
+      AD_PLATFORMS.map((p) => [p, buildBrief(makeData({ platform: p }), []).platformLabel]),
+    );
+    expect(labels).toEqual({
+      meta: "Facebook / Meta",
+      google: "Google Ads",
+      tiktok: "TikTok Ads",
+    });
+  });
+
+  it("never puts Meta's tracking into a TikTok brief, even handed it", () => {
+    // Both Meta-only inputs filled, as if a loader had let them through for
+    // another platform: ad-id coverage with no attributed deal, and days
+    // still inside Meta's restatement window.
+    const leaked = {
+      revenueCoverage: {
+        totalDeals: 4,
+        attributedDeals: 0,
+        recentContactsWithAdId: 0,
+        recentContacts: 20,
+      },
+      provisional: { totalRows: 30, provisionalRows: 12, since: "2026-08-01" },
+    };
+
+    // On Meta they produce both sentences, so their absence below is the
+    // gate at work rather than a fixture that never triggers them.
+    const onMeta = caveats(makeData({ ...leaked, platform: "meta" }));
+    expect(onMeta).toMatch(/No lead carries a Meta ad id/);
+    expect(onMeta).toMatch(/Meta may still restate/);
+
+    const onTiktok = renderBrief(buildBrief(makeData({ ...leaked, platform: "tiktok" }), []));
+    expect(onTiktok).not.toMatch(/Meta|Facebook/);
+  });
+
+  it("says which leads a TikTok brief counts, by TikTok's rule and not Meta's filter", () => {
+    /*
+     * TikTok's leads are the ones carrying a ttclid or TikTok campaign id; the
+     * client's Meta paid-lead filter plays no part. So a client on "all" must
+     * not leave 14 of 702 reading as the client's whole lead volume.
+     */
+    const counted = (mode: "all" | "attributed", paid: number, total: number) =>
+      caveats(
+        makeData({
+          platform: "tiktok",
+          leadFilter: { mode, tag: "", total, attributed: paid, tagged: 0, paid },
+        }),
+      );
+
+    expect(counted("all", 14, 702)).toContain(
+      "the 14 leads carrying a TikTok click or campaign id, out of 702",
+    );
+    // Whatever Meta's mode — and the rest are not called unadvertised, since
+    // they may be Meta's.
+    expect(counted("attributed", 14, 702)).toContain("carrying a TikTok click");
+    expect(counted("attributed", 14, 702)).not.toMatch(/not attributed to advertising/);
+    // Every lead in the CRM is TikTok's: nothing to qualify.
+    expect(counted("all", 46, 46)).not.toMatch(/total leads in the CRM/);
   });
 });

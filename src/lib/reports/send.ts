@@ -41,7 +41,24 @@ import { appBaseUrl } from "@/lib/app-url";
  */
 
 export type SendOutcome =
-  | { sent: false; reason: string }
+  /**
+   * Not sent, and nothing is wrong: not due yet, already sent, claimed by
+   * another run, nobody to send it to. What almost every schedule answers
+   * almost every hour.
+   */
+  | { sent: false; failed?: false; reason: string }
+  /**
+   * 🔴 Due, claimed, and NOT sent — the one way of not sending that is a
+   * failure. Its reason is also the schedule's `lastError`, which the
+   * schedule's panel shows, and the period is retried next run.
+   *
+   * The cron counts these, and the hourly workflow warns on that count alone
+   * (its log is public, so it never sees which schedule or why). Set it on
+   * anything else and every hour warns about a schedule doing exactly what it
+   * was set up to do; drop it here and a schedule that stopped working never
+   * warns at all.
+   */
+  | { sent: false; failed: true; reason: string }
   | { sent: true; period: Period; recipients: number; shareLinkId: string };
 
 export async function sendScheduledReport(
@@ -202,7 +219,7 @@ export async function sendScheduledReport(
       .set({ lastError: message, updatedAt: new Date() })
       .where(eq(reportSchedules.id, schedule.id));
 
-    return { sent: false, reason: message };
+    return { sent: false, failed: true, reason: message };
   }
 }
 

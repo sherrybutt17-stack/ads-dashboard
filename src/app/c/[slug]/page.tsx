@@ -7,12 +7,16 @@ import { loadDashboard } from "@/lib/metrics/dashboard";
 import { refreshIfStale } from "@/lib/meta/sync";
 import { refreshGoogleIfStale } from "@/lib/google/sync";
 import { refreshTiktokIfStale } from "@/lib/tiktok/sync";
-import { activeGoogleAccountsForDisplay } from "@/lib/google/accounts";
-import { activeTiktokAccountsForDisplay } from "@/lib/tiktok/accounts";
 import type { AdPlatform } from "@/lib/metrics/queries";
 import { getAdDataExtent } from "@/lib/metrics/queries";
 import { outOfRangeNotice } from "@/lib/metrics/data-extent";
-import { parseAdPlatform } from "@/lib/platforms";
+import {
+  defaultAdPlatform,
+  linkCarriesPlatform,
+  offeredAdPlatforms,
+  resolveAdPlatform,
+} from "@/lib/platforms";
+import { connectedAdPlatforms } from "@/lib/dashboard/platform";
 import {
   trailingWindow,
   isValidDateKey,
@@ -101,15 +105,18 @@ export default async function ClientDashboard({
     await Promise.allSettled([
       refreshIfStale(client),
       refreshGoogleIfStale(client),
-      // TikTok has no cron — both Vercel Hobby slots are spent on Meta and
-      // Google — so this on-load path is the ONLY thing that ever calls the
-      // TikTok sync. Without it a connected advertiser shows a permanently
-      // empty tab.
+      /*
+       * TikTok has no VERCEL cron — both Hobby slots are spent on Meta and
+       * Google — but it is not without one: `/api/cron/tiktok-sync` re-pulls
+       * the trailing 28 days from the 3-hourly GitHub Actions schedule in
+       * `.github/workflows/reconcile.yml`, and that workflow is its ONLY
+       * reconciliation. This path is the other half, as for the two above: it
+       * re-pulls today and nothing else, keeping the current day warm between
+       * those runs. Neither replaces the other — see `refreshTiktokIfStale`.
+       */
       refreshTiktokIfStale(client),
     ]);
   });
-
-  const platform: AdPlatform = parseAdPlatform(sp.platform);
 
   // Range comes straight from the URL (the picker markets links as shareable), so
   // validate before it reaches the date math / SQL — junk like ?start=foo or
@@ -152,8 +159,27 @@ export default async function ClientDashboard({
    *
    * It resolves to code defaults on any failure, so a client whose layout row
    * cannot be read gets the whole dashboard rather than an error.
+   *
+   * 🔴 Which platforms the client has rides the same round trip, for the same
+   * reason: the dashboard is loaded for ONE platform, and which one depends on
+   * them. Without `?platform=` the page opens on the first platform the client
+   * actually runs. It used to open on Meta unconditionally, so a client running
+   * TikTok alone landed on "Meta isn't connected" with its only live data
+   * behind a toggle — and was reported as the dashboard not showing TikTok.
+   * Run in parallel with the layout read, it adds no serial step.
    */
-  const storedLayout = await getLayout(client.id, defaultAudience(session));
+  const [storedLayout, connected] = await Promise.all([
+    getLayout(client.id, defaultAudience(session)),
+    connectedAdPlatforms(client.id),
+  ]);
+  /*
+   * An explicit `?platform=` wins, even for a platform with no account, so
+   * every link already printed keeps opening the view it was made on.
+   * `opensOn` is where this client lands with no parameter at all, which the
+   * links below need in order to know when they may leave the platform off.
+   */
+  const platform: AdPlatform = resolveAdPlatform(sp.platform, connected);
+  const opensOn = defaultAdPlatform(connected);
 
   /*
    * Which sections render, in what order.
@@ -215,8 +241,6 @@ export default async function ClientDashboard({
 
   const [
     data,
-    google,
-    tiktok,
     adPipe,
     branding,
     summaries,
@@ -224,15 +248,6 @@ export default async function ClientDashboard({
     adExtent,
   ] = await Promise.all([
       loadDashboard(client, { ...range, sections: visibleSections }, platform),
-      /*
-       * Degrades to "no Google accounts" rather than throwing. This table gains
-       * columns, and a deploy that lands before its migration would otherwise
-       * take the whole page down over a feature this client may not even use.
-       */
-      activeGoogleAccountsForDisplay(client.id),
-      // Same degradation as Google: an empty list rather than an error page when
-      // the migration adding this table has not run yet.
-      activeTiktokAccountsForDisplay(client.id),
       // Two indexed queries, run alongside the dashboard rather than after it, so
       // every empty region below can say WHY it is empty instead of rendering the
       // same dashed box for "paused", "unreachable" and "never connected".
@@ -276,10 +291,6 @@ export default async function ClientDashboard({
   const crmPipe = getCrmPipeStatus(client);
   const { current, daily } = data;
   const currency = data.client.currency;
-  // The toggle only appears once Google is actually connected — a Meta-only
-  // client keeps the single, un-switched dashboard it had before.
-  const hasGoogle = google.accounts.length > 0;
-  const hasTiktok = tiktok.accounts.length > 0;
   const PLATFORM_LABEL = {
     meta: "Meta",
     google: "Google",
@@ -287,14 +298,18 @@ export default async function ClientDashboard({
   } as const;
   const spendLabel = PLATFORM_LABEL[platform];
   /*
-   * Only the platforms actually connected. A client running Meta alone keeps
-   * the single un-switched dashboard they had before, and a tab for a platform
-   * with no account behind it would render an empty view that looks like a
-   * broken pipe rather than an absent one.
+   * Only the platforms actually connected, plus the one on screen. A client
+   * running one platform keeps the single un-switched dashboard — the toggle
+   * appears only with two entries — and a tab for a platform with no account
+   * behind it would render an empty view that looks like a broken pipe rather
+   * than an absent one.
+   *
+   * 🔴 That now includes Meta, which used to be listed for everyone. A client
+   * running TikTok alone was given a Facebook tab that could only ever say
+   * "not connected"; Meta is offered now only when the client has it, or has
+   * nothing at all. See `offeredAdPlatforms`.
    */
-  const platforms = (["meta", "google", "tiktok"] as const).filter(
-    (p) => p === "meta" || (p === "google" ? hasGoogle : hasTiktok),
-  );
+  const platforms = offeredAdPlatforms(platform, connected);
 
   /*
    * Resolved once, so the trend chart, the campaign table and the heatmap cannot
@@ -327,20 +342,23 @@ export default async function ClientDashboard({
    * always as start/end rather than as `days`, so a report opened tomorrow from
    * a link someone kept still covers the days it covered when it was generated.
    * A trailing-window parameter would quietly slide.
+   *
+   * The platform likewise, and for the same reason: it is left off only for
+   * Meta on a client that opens on Meta (`linkCarriesPlatform`), so a client
+   * with Meta gets exactly the links it always had, and a kept link to anyone
+   * else's report still opens the platform it was made on after they connect
+   * another.
    */
   // The board covers every platform at once, so it carries the range only —
   // as the picker wrote it, so a preset is still lit when the board opens.
   const boardHref = withRange(`/c/${slug}/board`, carriedRange(sp));
-  const reportHref = `/c/${slug}/report?start=${range.startKey}&end=${range.endKey}${
-    platform !== "meta" ? `&platform=${platform}` : ""
-  }`;
+  const platformParam = linkCarriesPlatform(platform, opensOn) ? `&platform=${platform}` : "";
+  const reportHref = `/c/${slug}/report?start=${range.startKey}&end=${range.endKey}${platformParam}`;
   /*
    * Meeting mode, on the same explicit period and for the same reason: a deck
    * opened from a kept link must cover the days it covered when it was built.
    */
-  const presentHref = `/c/${slug}/present?start=${range.startKey}&end=${range.endKey}${
-    platform !== "meta" ? `&platform=${platform}` : ""
-  }`;
+  const presentHref = `/c/${slug}/present?start=${range.startKey}&end=${range.endKey}${platformParam}`;
 
   /*
    * One href builder for both the platform toggle and the tabs.
@@ -348,6 +366,12 @@ export default async function ClientDashboard({
    * Each carries the OTHER's current value, so switching platform keeps you on
    * the tab you were reading and switching tab keeps the platform — along with
    * the date range, which the picker advertises as shareable.
+   *
+   * 🔴 The platform goes through `linkCarriesPlatform`, not `!== "meta"`.
+   * That comparison was the same thing while every client opened on Meta. It
+   * is not for a client without Meta: their Facebook button would have printed
+   * a bare URL, a bare URL now opens their own platform — and the button would
+   * have reloaded the page it was meant to leave.
    */
   const hrefWith = (over: { platform?: AdPlatform; tab?: string }) => {
     const params = new URLSearchParams();
@@ -355,7 +379,7 @@ export default async function ClientDashboard({
     if (sp.start) params.set("start", sp.start);
     if (sp.end) params.set("end", sp.end);
     const p = over.platform ?? platform;
-    if (p !== "meta") params.set("platform", p);
+    if (linkCarriesPlatform(p, opensOn)) params.set("platform", p);
     const t = over.tab ?? activeGroup;
     if (t !== "overview") params.set("tab", t);
     const qs = params.toString();
