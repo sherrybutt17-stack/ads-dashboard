@@ -2448,8 +2448,8 @@ html {
    */
   :root,
   :root[data-theme="dark"],
-  :root[data-theme="light"],
-  .paper {
+  .paper,
+  :root[data-theme="light"] {
     color-scheme: light;
 
     --surface-page: #ffffff;

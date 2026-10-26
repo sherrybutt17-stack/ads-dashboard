@@ -40,11 +40,20 @@ vi.mock("@/db", () => ({
 type Remote = Record<string, unknown>;
 const remote: { pages: Remote[][]; throws: boolean } = { pages: [], throws: false };
 
-vi.mock("./process", () => ({
+vi.mock("./process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./process")>()),
   getGhlClientAsync: async () => ({
-    async *iterateOpportunities() {
+    async getPipelines() {
+      return [];
+    },
+    // No contacts: these tests are about the opportunity ledger.
+    async *iterateContacts() {},
+    async *iterateOpportunityPages() {
       if (remote.throws) throw new Error("GHL 500");
-      for (const page of remote.pages) yield page;
+      for (const [i, page] of remote.pages.entries()) {
+        const next = i + 1 < remote.pages.length ? { startAfter: i + 1, startAfterId: `p${i + 1}` } : null;
+        yield { opportunities: page, next, total: null };
+      }
     },
   }),
 }));

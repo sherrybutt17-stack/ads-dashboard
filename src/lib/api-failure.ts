@@ -77,11 +77,18 @@ export function isUpstreamError(err: unknown): boolean {
  * `TypeError`, a `RangeError` or anything a dependency subclasses does not — so
  * "cannot read properties of undefined" cannot reach a customer wearing the
  * costume of an explanation.
+ *
+ * 🔴 Except a failed database statement. drizzle's `DrizzleQueryError` never
+ * renames itself, so it reads as `"Error"` too — and its message is the SQL
+ * and every parameter bound to it: names, emails, phone numbers. Its `query`
+ * and `params` fields give it away.
  */
 function isDeliberateMessage(err: unknown): err is Error {
   return (
     err instanceof Error &&
     err.name === "Error" &&
+    !("query" in err) &&
+    !("params" in err) &&
     typeof err.message === "string" &&
     err.message.trim().length > 0
   );

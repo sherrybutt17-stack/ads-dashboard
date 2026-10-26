@@ -412,8 +412,14 @@ async function otherAgency(a: string, b: string): Promise<boolean> {
  */
 export async function getValidAccessToken(
   installation: GhlInstallation,
+  /**
+   * Renew a token with less than this left. A long-running caller — the
+   * history import calls GoHighLevel for minutes — passes its own length, so
+   * the token cannot run out partway and turn every later call into a 401.
+   */
+  { minValidityMs = 0 }: { minValidityMs?: number } = {},
 ): Promise<string> {
-  if (installation.expiresAt.getTime() > Date.now()) {
+  if (installation.expiresAt.getTime() > Date.now() + minValidityMs) {
     return decrypt(installation.accessTokenEncrypted);
   }
 

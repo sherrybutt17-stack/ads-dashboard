@@ -4,7 +4,7 @@ import { backfillClientMetrics, importMetaAdLevelHistory, syncClientMetrics } fr
 import { backfillClientTiktokMetrics } from "@/lib/tiktok/sync";
 import { importTiktokAdLevelHistory } from "@/lib/tiktok/adlevel";
 import { backfillClientGoogleMetrics } from "@/lib/google/sync";
-import { backfillClientSnapshot } from "@/lib/ghl/backfill";
+import { decodeHistoryCursor, importGhlHistory } from "@/lib/ghl/history";
 import { trailingWindowInclusive } from "@/lib/dates";
 import { isSuperadmin, requireClient } from "@/lib/auth";
 import { safeFailure } from "@/lib/api-failure";
@@ -34,6 +34,8 @@ const BodySchema = z.object({
    * zero rows from a backfill that reported success.
    */
   days: z.number().int().min(1).max(1095).default(90),
+  /** GoHighLevel history only: where the last request stopped (the last answer's `cursor`). */
+  cursor: z.string().max(4000).optional(),
   /** Ad-level import only: carry on with the months before this day (the last answer's `nextBefore`). */
   before: z
     .string()
@@ -43,6 +45,8 @@ const BodySchema = z.object({
 
 /** Ad-level import requests per client per hour: a year resumes in a handful; this stops a loop gone wrong. */
 const ADLEVEL_IMPORTS_PER_HOUR = 40;
+/** GoHighLevel history requests per client per hour: even 13,000 contacts and 6,000 opportunities finish in a few. */
+const GHL_HISTORY_REQUESTS_PER_HOUR = 60;
 
 /** Manual sync triggers, used by the onboarding wizard and the Re-test button. */
 export async function POST(
@@ -147,15 +151,48 @@ export async function POST(
         return NextResponse.json({ ok: true, rowsWritten: rows });
       }
       case "ghl_backfill": {
-        const res = await backfillClientSnapshot(client);
-        return NextResponse.json({
-          ok: true,
-          ...res,
-          note: "Snapshot only — one synthetic arrival per opportunity. GHL cannot supply the path each lead took, so true stage flow begins from when the webhook went live.",
+        /*
+         * A page at a time, resumable: the setup page sends back each
+         * answer's `cursor` until `done`. No lock, as for the ad-level
+         * imports: every write is idempotent, so overlapping runs only repeat
+         * work.
+         */
+        const limited = rateLimit(`ghl-history:${client.id}`, GHL_HISTORY_REQUESTS_PER_HOUR, 60 * 60 * 1000);
+        if (!limited.ok) {
+          return NextResponse.json(
+            { ok: false, error: "Too many imports in the last hour. Try again later." },
+            { status: 429, headers: { "Retry-After": String(Math.ceil(limited.retryAfterMs / 1000)) } },
+          );
+        }
+        const cursor = parsed.data.cursor ? decodeHistoryCursor(parsed.data.cursor) : null;
+        if (parsed.data.cursor && !cursor) {
+          return NextResponse.json(
+            { ok: false, error: "That import can't be carried on. Start it again — nothing is imported twice." },
+            { status: 400 },
+          );
+        }
+        const res = await importGhlHistory(client, { cursor });
+        await record({
+          action: "client.ghl_history_import",
+          targetType: "client",
+          targetId: client.id,
+          clientId: client.id,
+          metadata: { resumed: Boolean(cursor), done: res.done, phase: res.phase, ...res.totals },
         });
+        return NextResponse.json({ ok: true, ...res });
       }
     }
   } catch (err) {
+    if (parsed.data.action === "ghl_backfill") {
+      // A failed import is audited too — without its text, which the run row keeps.
+      await record({
+        action: "client.ghl_history_import",
+        targetType: "client",
+        targetId: client.id,
+        clientId: client.id,
+        metadata: { resumed: Boolean(parsed.data.cursor), failed: true },
+      });
+    }
     /*
      * The action decides whose error this is. A thrown timeout says nothing
      * about which platform timed out, and reporting a GHL backfill failure as

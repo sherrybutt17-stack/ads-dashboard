@@ -467,7 +467,7 @@ async function upsertContactFromEvent(
 }
 
 /** GHL returns tags as a string array; normalise defensively. */
-function extractTags(contact: GhlContact): string[] {
+export function extractTags(contact: GhlContact): string[] {
   const raw = (contact as { tags?: unknown }).tags;
   if (!Array.isArray(raw)) return [];
   return raw
@@ -492,6 +492,8 @@ function extractTags(contact: GhlContact): string[] {
  */
 export async function getGhlClientAsync(
   client: Client,
+  /** For a long caller: renew the token now if it has less than this left. */
+  opts: { minValidityMs?: number } = {},
 ): Promise<GhlClient | null> {
   if (client.ghlAuthMethod === "oauth") {
     const { getInstallationForClient, getValidAccessToken } = await import(
@@ -500,7 +502,7 @@ export async function getGhlClientAsync(
     const installation = await getInstallationForClient(client.id);
     if (installation && !installation.uninstalledAt) {
       try {
-        return new GhlClient(await getValidAccessToken(installation));
+        return new GhlClient(await getValidAccessToken(installation, opts));
       } catch {
         // Refresh failed (revoked, or a refresh token that was already spent).
         // Fall through to the PIT rather than losing REST access entirely.

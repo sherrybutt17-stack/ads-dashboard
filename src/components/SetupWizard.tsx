@@ -3084,6 +3084,8 @@ function BackfillStep({
   /** The ad-level import's months so far, while it runs. */
   const [progress, setProgress] = useState<string | null>(null);
   const stopRef = useRef(false);
+  /** Stop was pressed; the request under way finishes first. */
+  const [stopping, setStopping] = useState(false);
 
   /*
    * Ad-level history arrives a few months per request (each fits the route's
@@ -3138,12 +3140,105 @@ function BackfillStep({
     } finally {
       setBusy(null);
       setProgress(null);
+      setStopping(false);
     }
   }
 
-  async function run(
-    action: "meta_backfill" | "google_backfill" | "tiktok_backfill" | "ghl_backfill",
-  ) {
+  /*
+   * GoHighLevel history arrives a page at a time — every contact, then every
+   * opportunity — and the server hands back where it stopped, so a large
+   * sub-account finishes across a few requests instead of timing out in one.
+   * Where it stopped is kept between presses: after a stop, a failure or a
+   * dropped connection, pressing again carries on from there rather than
+   * starting over. Repeating work is safe either way — nothing is written twice.
+   */
+  const ghlCursorRef = useRef<string | undefined>(undefined);
+
+  async function importGhl() {
+    setBusy("ghl_backfill");
+    setMsg(null);
+    setProgress(null);
+    stopRef.current = false;
+    const n = (v: unknown) => (Number(v) || 0).toLocaleString("en-US");
+    const carryOn = (why: string) =>
+      /import again/i.test(why) ? why : `${why} Import again to carry on where it stopped — nothing is imported twice.`;
+
+    /** One request. A reply cut off by the time limit, or a dropped connection, is tried once more from the same place. */
+    async function post(cursor: string | undefined) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const res = await fetch(`/api/clients/${clientId}/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "ghl_backfill", ...(cursor ? { cursor } : {}) }),
+          });
+          // A request cut off by the time limit answers with a page that is not JSON.
+          const body = await res.json().catch(() => null);
+          if (attempt === 0 && (res.status === 504 || !body)) {
+            await new Promise((r) => setTimeout(r, 3000));
+            continue;
+          }
+          return { res, body };
+        } catch {
+          if (attempt > 0) return null;
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    }
+
+    try {
+      for (let request = 0; request < 60; request++) {
+        const reply = await post(ghlCursorRef.current);
+        if (!reply) {
+          setMsg({ ok: false, msg: carryOn("Could not reach the server.") });
+          return;
+        }
+        const { res, body } = reply;
+        if (!res.ok || !body) {
+          // A cursor the server refused can only be refused again: the next press starts afresh.
+          if (res.status === 400) ghlCursorRef.current = undefined;
+          const why = body
+            ? failureText(body, "The GoHighLevel import failed")
+            : `The GoHighLevel import was cut off (HTTP ${res.status}).`;
+          setMsg({ ok: false, msg: res.status === 400 ? why : carryOn(why) });
+          return;
+        }
+        const t = body.totals ?? {};
+        if (body.done) {
+          ghlCursorRef.current = undefined;
+          const notes = ((body.notes ?? []) as string[]).join(" ");
+          setMsg({
+            ok: true,
+            msg:
+              `Imported ${n(t.contacts)} contacts and ${n(t.opportunities)} opportunities from GoHighLevel` +
+              (Number(t.leads) > 0 ? `, with ${n(t.leads)} past leads dated to when they came in.` : ".") +
+              (notes ? ` ${notes}` : ""),
+          });
+          return;
+        }
+        ghlCursorRef.current = body.cursor ?? undefined;
+        setProgress(
+          `${body.phase === "contacts" ? "Contacts" : "Opportunities"}: ${n(t.contacts)} contacts and ${n(
+            t.opportunities,
+          )} opportunities so far — carrying on…`,
+        );
+        if (stopRef.current) {
+          setMsg({
+            ok: true,
+            msg: `Stopped after ${n(t.contacts)} contacts and ${n(t.opportunities)} opportunities. Import again to carry on where it stopped — nothing is imported twice.`,
+          });
+          return;
+        }
+      }
+      setMsg({ ok: false, msg: "The import is taking longer than expected. Import again to carry on where it stopped." });
+    } finally {
+      setBusy(null);
+      setProgress(null);
+      setStopping(false);
+    }
+  }
+
+  async function run(action: "meta_backfill" | "google_backfill" | "tiktok_backfill") {
     setBusy(action);
     setMsg(null);
     try {
@@ -3158,11 +3253,9 @@ function BackfillStep({
           ? {
               ok: true,
               msg:
-                action !== "ghl_backfill"
-                  ? body.rowsWritten === 0
-                    ? `No spend found in the last ${windowLabel(days)}. The connection works — this account simply has no activity in that window. Try a longer one.`
-                    : `Imported ${body.rowsWritten} daily metric rows.`
-                  : `Snapshotted ${body.opportunities} opportunities (${body.transitions} arrivals). ${body.note}`,
+                body.rowsWritten === 0
+                  ? `No spend found in the last ${windowLabel(days)}. The connection works — this account simply has no activity in that window. Try a longer one.`
+                  : `Imported ${body.rowsWritten} daily metric rows.`,
             }
           : { ok: false, msg: failureText(body, "Failed") },
       );
@@ -3175,7 +3268,7 @@ function BackfillStep({
     <Card
       step={step}
       title="Import historical data"
-      description="Optional, run once. Ad platform history imports fully, results included; GHL history does not. Ad-level detail — what creative cards and ad tables read — imports separately, month by month."
+      description="Optional. Ad platform history imports fully, results included. GoHighLevel history imports every contact and opportunity, with each lead dated to when it came in. Ad-level detail — what creative cards and ad tables read — imports separately, month by month."
     >
       <div className="flex flex-wrap items-center gap-2">
         <label className="sr-only" htmlFor="backfill-window">
@@ -3221,15 +3314,17 @@ function BackfillStep({
         >
           {busy === "meta_adlevel_backfill" ? "Importing ad-level detail…" : "Import ad-level detail (creative cards)"}
         </button>
-        {(busy === "meta_adlevel_backfill" || busy === "tiktok_adlevel_backfill") && (
+        {(busy === "meta_adlevel_backfill" || busy === "tiktok_adlevel_backfill" || busy === "ghl_backfill") && (
           <button
             onClick={() => {
               stopRef.current = true;
+              setStopping(true);
             }}
-            className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium"
+            disabled={stopping}
+            className="rounded-[var(--radius-sm)] px-3 py-2 text-[13px] font-medium disabled:opacity-60"
             style={{ color: "var(--text-muted)" }}
           >
-            Stop after this month
+            {stopping ? "Stopping…" : busy === "ghl_backfill" ? "Stop after this batch" : "Stop after this month"}
           </button>
         )}
         {hasGoogle && (
@@ -3278,7 +3373,7 @@ function BackfillStep({
           </button>
         )}
         <button
-          onClick={() => run("ghl_backfill")}
+          onClick={() => importGhl()}
           disabled={busy !== null}
           className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium disabled:opacity-50"
           style={{
@@ -3286,17 +3381,16 @@ function BackfillStep({
             color: "var(--text-secondary)",
           }}
         >
-          {busy === "ghl_backfill"
-            ? "Importing…"
-            : "Snapshot GHL opportunities"}
+          {busy === "ghl_backfill" ? "Importing GoHighLevel history…" : "Import GoHighLevel history"}
         </button>
       </div>
 
       <p className="mt-3 text-xs" style={{ color: "var(--text-muted)" }}>
-        GoHighLevel exposes no stage-transition history, so the snapshot records
-        only where each opportunity sits now and when it last moved. The path
-        each lead took to get there is not recoverable — true funnel flow begins
-        from when the webhook went live.
+        GoHighLevel keeps no record of the stages a lead passed through, so the
+        import knows when each lead came in, its source and ad, and the stage it
+        is in now — not the steps in between. Map your pipeline stages first: a
+        lead counts once its pipeline has a stage mapped to New lead. Full
+        stage-by-stage history begins from when the webhook went live.
       </p>
 
       {progress && (

@@ -58,7 +58,8 @@ describe("the paper theme", () => {
     const printAt = CSS.indexOf("@media print");
     expect(printAt).toBeGreaterThan(paperAt);
     const printRule = CSS.slice(printAt, CSS.indexOf("{", CSS.indexOf(":root,", printAt)));
-    expect(printRule).toMatch(/:root\[data-theme="light"\],\s*\.paper\s*$/);
+    // One of the print rule's selectors — ahead of the light root, whose literal the ink tests find the print scope by.
+    expect(printRule.split(",").map((s) => s.trim())).toContain(".paper");
   });
 
   it("🔴 is what every board document is drawn on", () => {

@@ -234,6 +234,19 @@ describe("safeFailure — a bug, not an answer", () => {
     expect(safe.cause).toBe("unknown");
   });
 
+  it("🔴 never passes a failed database statement through — its message is the SQL and every value bound to it", async () => {
+    const { DrizzleQueryError } = await import("drizzle-orm");
+    const err = new DrizzleQueryError(
+      'insert into "contacts" ("first_name", "email") values ($1, $2)',
+      ["Dana", "dana@example.com"],
+      Object.assign(new Error("invalid byte sequence"), { code: "22021" }),
+    );
+    expect(err.name).toBe("Error");
+    const safe = safeFailure(err, "ghl", {});
+    for (const leak of ["insert", "contacts", "Dana", "dana@example.com"]) expect(`${safe.error} ${safe.hint}`).not.toContain(leak);
+    expect(safe.cause).toBe("unknown");
+  });
+
   it("survives a throw that is not an Error at all", () => {
     for (const thrown of [null, undefined, "boom", 42, { oops: true }]) {
       const safe = safeFailure(thrown, "meta", {});

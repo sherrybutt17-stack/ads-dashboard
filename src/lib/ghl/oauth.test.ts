@@ -622,6 +622,40 @@ describe("getValidAccessToken", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("🔴 renews a token that would run out inside a long caller's window", async () => {
+    // The history import calls GoHighLevel for minutes; a token with one left fails every call after it.
+    const { encrypt } = await import("@/lib/crypto");
+    await seedInstall({ clientId: CLIENT_A1 });
+    const fetchMock = mockToken({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 86400 });
+    const value = await mod.getValidAccessToken(
+      {
+        id: INSTALL,
+        accessTokenEncrypted: encrypt("one-minute-left"),
+        refreshTokenEncrypted: encrypt("refresh-1"),
+        expiresAt: new Date(Date.now() + 60_000),
+      } as never,
+      { minValidityMs: 6 * 60_000 },
+    );
+    expect(value).toBe("access-2");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a token with more than the caller's window left — a refresh token is spent by every renewal", async () => {
+    const { encrypt } = await import("@/lib/crypto");
+    const fetchMock = mockToken({});
+    const value = await mod.getValidAccessToken(
+      {
+        id: INSTALL,
+        accessTokenEncrypted: encrypt("an-hour-left"),
+        refreshTokenEncrypted: encrypt("refresh-1"),
+        expiresAt: new Date(Date.now() + 60 * 60_000),
+      } as never,
+      { minValidityMs: 6 * 60_000 },
+    );
+    expect(value).toBe("an-hour-left");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("🔴 persists the new pair before returning it", async () => {
     const { encrypt, decrypt } = await import("@/lib/crypto");
     await seedInstall({ clientId: CLIENT_A1 });

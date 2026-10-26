@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { GhlClient, GhlApiError, flattenStages } from "./client";
+import { GhlClient, GhlApiError, flattenStages, isTransientGhlFailure } from "./client";
 
 /**
  * The GoHighLevel API client.
@@ -185,6 +185,101 @@ describe("🔴 rate limiting", () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Time limits
+ * ------------------------------------------------------------------ */
+
+describe("🔴 a call that never answers", () => {
+  /*
+   * There was no limit: a call GoHighLevel never answered held its request
+   * until the platform killed it, and a killed request reports nothing — the
+   * import's page, its run row and its cursor all went with it.
+   */
+  const hang = () =>
+    fetchMock.mockImplementation(
+      (_url: unknown, init: RequestInit) =>
+        new Promise((_resolve, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason))),
+    );
+
+  beforeEach(() => {
+    // AbortSignal.timeout runs on Node's own clock, which fake timers do not move.
+    vi.useRealTimers();
+  });
+
+  it("is abandoned at its time limit, as a 408 worth retrying", async () => {
+    hang();
+    const started = Date.now();
+    const err = (await client()
+      .iterateContacts("loc", { limits: { timeoutMs: 30, deadline: Date.now() + 300 } })
+      .next()
+      .catch((e: unknown) => e)) as GhlApiError;
+    expect(err).toBeInstanceOf(GhlApiError);
+    expect(err.status).toBe(408);
+    expect(err.isRetryable).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("is tried again while the deadline leaves time", async () => {
+    let calls = 0;
+    fetchMock.mockImplementation((_url: unknown, init: RequestInit) =>
+      ++calls === 1
+        ? new Promise((_resolve, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason)))
+        : Promise.resolve(res(200, { contacts: [] })),
+    );
+    const page = await client().iterateContacts("loc", { limits: { timeoutMs: 30, deadline: Date.now() + 5_000 } }).next();
+    expect(page.done).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("🔴 starts no retry wait that would end past the deadline", async () => {
+    fetchMock.mockResolvedValue(res(503, "busy"));
+    const started = Date.now();
+    await expect(
+      client().iterateOpportunityPages("loc", { limits: { deadline: Date.now() + 500 } }).next(),
+    ).rejects.toThrow(/503/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(400);
+  });
+
+  it("starts no call at all once the deadline has passed", async () => {
+    await expect(client().iterateContacts("loc", { limits: { deadline: Date.now() - 1 } }).next()).rejects.toMatchObject({
+      status: 408,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a dropped connection", () => {
+  it("is retried like a 5xx", async () => {
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(res(200, { location: { name: "Acme" } }));
+    expect((await settle(client().getLocation("l"))).name).toBe("Acme");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("but a bug in the request is not", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Invalid header value"));
+    await expect(settle(client().getLocation("l"))).rejects.toThrow("Invalid header value");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("isTransientGhlFailure", () => {
+  it("is what an import pauses on rather than fails on", () => {
+    expect(isTransientGhlFailure(new GhlApiError("x", 503))).toBe(true);
+    expect(isTransientGhlFailure(new GhlApiError("x", 429))).toBe(true);
+    expect(isTransientGhlFailure(new GhlApiError("x", 408))).toBe(true);
+    expect(isTransientGhlFailure(new TypeError("fetch failed"))).toBe(true);
+    expect(isTransientGhlFailure(Object.assign(new Error("aborted"), { name: "TimeoutError" }))).toBe(true);
+    // A dead token, a wrong id, our own words, a bug: all the same next time.
+    expect(isTransientGhlFailure(new GhlApiError("x", 401))).toBe(false);
+    expect(isTransientGhlFailure(new GhlApiError("x", 404))).toBe(false);
+    expect(isTransientGhlFailure(new Error("GoHighLevel isn't connected for this client yet."))).toBe(false);
+    expect(isTransientGhlFailure(new TypeError("Cannot read properties of undefined"))).toBe(false);
+  });
+});
+
+/* ------------------------------------------------------------------ *
  * Missing records
  * ------------------------------------------------------------------ */
 
@@ -210,6 +305,8 @@ describe("a 404 on a single record", () => {
 describe("iterateOpportunities", () => {
   const page = (n: number) =>
     Array.from({ length: n }, (_, i) => ({ id: `opp_${i}` }));
+  /** A full page as GHL answers it: with the cursor to carry on from. */
+  const full = (n: number, at = 1) => ({ opportunities: page(n), meta: { startAfter: 1700000000000 + at, startAfterId: `opp_after_${at}`, total: 999 } });
 
   async function collect(gen: AsyncGenerator<unknown[]>) {
     const out: unknown[][] = [];
@@ -219,7 +316,7 @@ describe("iterateOpportunities", () => {
 
   it("stops on a short page", async () => {
     fetchMock
-      .mockResolvedValueOnce(res(200, { opportunities: page(100) }))
+      .mockResolvedValueOnce(res(200, full(100)))
       .mockResolvedValueOnce(res(200, { opportunities: page(7) }));
     const batches = await settle(collect(client().iterateOpportunities("loc_1")));
     expect(batches.map((b) => b.length)).toEqual([100, 7]);
@@ -227,7 +324,7 @@ describe("iterateOpportunities", () => {
 
   it("stops on an empty page without yielding it", async () => {
     fetchMock
-      .mockResolvedValueOnce(res(200, { opportunities: page(100) }))
+      .mockResolvedValueOnce(res(200, full(100)))
       .mockResolvedValueOnce(res(200, { opportunities: [] }));
     const batches = await settle(collect(client().iterateOpportunities("loc_1")));
     expect(batches).toHaveLength(1);
@@ -250,7 +347,7 @@ describe("iterateOpportunities", () => {
      * so and no history to reconcile against later.
      */
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    fetchMock.mockResolvedValue(res(200, { opportunities: page(2) }));
+    fetchMock.mockResolvedValue(res(200, full(2)));
 
     const batches = await settle(
       collect(client().iterateOpportunities("loc_1", { limit: 2, maxPages: 3 })),
@@ -266,6 +363,100 @@ describe("iterateOpportunities", () => {
       collect(client().iterateOpportunities("loc_1", { limit: 2, maxPages: 3 })),
     );
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("iterateOpportunityPages", () => {
+  const opps = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `opp_${i}` }));
+
+  it("🔴 pages with GHL's startAfter cursor, never a page number — GHL refuses those past 10,000", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(200, { opportunities: opps(2), meta: { startAfter: 1761000000000, startAfterId: "opp_1", total: 17796 } }))
+      .mockResolvedValueOnce(res(200, { opportunities: opps(1), meta: { total: 17796 } }));
+    const pages: Array<{ n: number; next: unknown; total: number | null }> = [];
+    for await (const p of client().iterateOpportunityPages("loc_1", { limit: 2 })) {
+      pages.push({ n: p.opportunities.length, next: p.next, total: p.total });
+    }
+    expect(pages).toEqual([
+      { n: 2, next: { startAfter: 1761000000000, startAfterId: "opp_1" }, total: 17796 },
+      { n: 1, next: null, total: 17796 },
+    ]);
+    const urls = fetchMock.mock.calls.map((c) => new URL(String(c[0])));
+    expect(urls.every((u) => !u.searchParams.has("page"))).toBe(true);
+    expect(urls[1].searchParams.get("startAfter")).toBe("1761000000000");
+    expect(urls[1].searchParams.get("startAfterId")).toBe("opp_1");
+    expect(urls[0].searchParams.get("status")).toBe("all");
+  });
+
+  it("resumes from the cursor an import stopped at", async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { opportunities: opps(1) }));
+    for await (const _ of client().iterateOpportunityPages("loc_1", { after: { startAfter: 5, startAfterId: "opp_9" } })) void _;
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.searchParams.get("startAfter")).toBe("5");
+    expect(url.searchParams.get("startAfterId")).toBe("opp_9");
+  });
+
+  it("stops on a full page that names no cursor rather than fetching the first page again", async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { opportunities: opps(2), meta: {} }));
+    const pages = [];
+    for await (const p of client().iterateOpportunityPages("loc_1", { limit: 2 })) pages.push(p);
+    expect(pages).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("iterateContacts", () => {
+  /** A page of contacts, each carrying GHL's own cursor as the search returns it. */
+  const contacts = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `c_${from + i}`, searchAfter: [1700000000000 + from + i, `c_${from + i}`] }));
+
+  async function collect(gen: AsyncGenerator<{ contacts: unknown[]; next: unknown[] | null; total: number | null }>) {
+    const out: Array<{ n: number; next: unknown[] | null; total: number | null }> = [];
+    for await (const p of gen) out.push({ n: p.contacts.length, next: p.next, total: p.total });
+    return out;
+  }
+
+  it("🔴 pages with the last contact's searchAfter, 500 at a time, until a short page", async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(200, { contacts: contacts(0, 2), total: 3 }))
+      .mockResolvedValueOnce(res(200, { contacts: contacts(2, 1), total: 3 }));
+    const pages = await settle(collect(client().iterateContacts("loc_1", { pageLimit: 2 })));
+
+    expect(pages.map((p) => p.n)).toEqual([2, 1]);
+    expect(pages[0].next).toEqual([1700000000001, "c_1"]);
+    // The last page is short: nothing to carry on from.
+    expect(pages[1].next).toBeNull();
+    expect(pages[0].total).toBe(3);
+
+    const [first, second] = fetchMock.mock.calls.map((c) => ({
+      url: String(c[0]),
+      init: c[1] as RequestInit,
+    }));
+    expect(first.url).toBe("https://services.leadconnectorhq.com/contacts/search");
+    expect(first.init.method).toBe("POST");
+    expect(JSON.parse(String(first.init.body))).toEqual({ locationId: "loc_1", pageLimit: 2 });
+    expect(JSON.parse(String(second.init.body))).toEqual({
+      locationId: "loc_1",
+      pageLimit: 2,
+      searchAfter: [1700000000001, "c_1"],
+    });
+  });
+
+  it("asks for GHL's largest page by default — more than 500 is refused", async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { contacts: [] }));
+    await settle(collect(client().iterateContacts("loc_1")));
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)).pageLimit).toBe(500);
+  });
+
+  it("resumes from a cursor an import stopped at", async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { contacts: contacts(5, 1) }));
+    await settle(collect(client().iterateContacts("loc_1", { searchAfter: [1, "c_4"] })));
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)).searchAfter).toEqual([1, "c_4"]);
+  });
+
+  it("yields nothing for a location with no contacts", async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { contacts: [], total: 0 }));
+    expect(await settle(collect(client().iterateContacts("loc_1")))).toEqual([]);
   });
 });
 
