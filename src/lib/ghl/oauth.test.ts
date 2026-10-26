@@ -60,6 +60,19 @@ const CLIENT_A1 = "11111111-1111-1111-1111-111111111111";
 const CLIENT_A2 = "22222222-2222-2222-2222-222222222222";
 const CLIENT_B1 = "33333333-3333-3333-3333-333333333333";
 const INSTALL = "99999999-9999-4999-8999-999999999999";
+/** An agency install that does not wait for GHL's INSTALL notification. */
+const NO_WAIT = { waitMs: 0, pollMs: 0 };
+
+/** GHL's signed INSTALL notification of one sub-account, as the webhook route stores it. */
+async function installEvent(locationId: string, opts: { companyId?: string; signature?: string; ago?: string } = {}) {
+  await run(
+    `INSERT INTO webhook_events (event_type, received_at, headers, payload, status)
+     VALUES ('INSTALL', now() - interval '${opts.ago ?? "0 seconds"}',
+             '{"__signature":"${opts.signature ?? "valid"}"}'::jsonb,
+             '{"type":"INSTALL","installType":"Location","locationId":"${locationId}","companyId":"${opts.companyId ?? "comp-1"}"}'::jsonb,
+             'processed')`,
+  );
+}
 
 /** Enough of a `Client` for the binding rules; the rest is never read here. */
 const asClient = (id: string, agencyId: string, slug: string): Client =>
@@ -148,7 +161,7 @@ afterEach(() => {
 });
 
 beforeEach(async () => {
-  await run(`TRUNCATE ghl_installations, clients RESTART IDENTITY CASCADE`);
+  await run(`TRUNCATE ghl_installations, webhook_events, clients RESTART IDENTITY CASCADE`);
   for (const [id, slug, agency] of [
     [CLIENT_A1, "acme", AGENCY_A],
     [CLIENT_A2, "acme-two", AGENCY_A],
@@ -365,7 +378,7 @@ describe("exchangeCode", () => {
   it("🔴 turns an agency install of one sub-account into that sub-account's own tokens", async () => {
     const fetchMock = mockAgency({ token: agencyToken({ approvedLocations: ["loc-1"] }), locations: { "loc-1": locToken("loc-1") } });
 
-    const rows = await mod.exchangeCode("code-1", CLIENT_A1);
+    const rows = await mod.exchangeCode("code-1", CLIENT_A1, NO_WAIT);
 
     expect(rows.map((r) => r.installation.locationId)).toEqual(["loc-1"]);
     // GHL's documented exchange: the agency's bearer token, form-encoded ids, the pinned version.
@@ -389,7 +402,7 @@ describe("exchangeCode", () => {
     });
 
     // Started from another client's page: with two sub-accounts there is no telling which is its.
-    const rows = await mod.exchangeCode("code-1", CLIENT_B1);
+    const rows = await mod.exchangeCode("code-1", CLIENT_B1, NO_WAIT);
 
     expect(rows.map((r) => r.installation.locationId).sort()).toEqual(["loc-1", "loc-2"]);
     const bound = (await run(
@@ -436,6 +449,53 @@ describe("exchangeCode", () => {
       ["loc-1", false],
       ["loc-2", true],
     ]);
+  });
+
+  it("🔴 waits for GHL to finish installing the sub-account just ticked — the Aloha race", async () => {
+    // King LASIK: on the app since the 22nd, one of the agency's clients.
+    await seedInstall({ locationId: "king-lasik", clientId: CLIENT_A1 });
+    mockAgency({
+      // GHL redirected before Aloha's install finished: the token names King LASIK alone.
+      token: agencyToken({ approvedLocations: ["king-lasik"] }),
+      locations: { "king-lasik": locToken("king-lasik"), aloha: locToken("aloha") },
+    });
+    // GHL's INSTALL for Aloha lands a moment after the redirect.
+    setTimeout(() => void installEvent("aloha"), 60);
+
+    const subs = await mod.exchangeCode("code-1", CLIENT_A2, { waitMs: 3000, pollMs: 20 });
+
+    const pick = mod.pickInstall(CLIENT_A2, subs);
+    expect(pick.kind === "client" && pick.installation.locationId).toBe("aloha");
+    const bound = (await run(
+      `SELECT location_id, client_id::text AS client_id FROM ghl_installations ORDER BY location_id`,
+    )).rows;
+    expect(bound).toContainEqual({ location_id: "king-lasik", client_id: CLIENT_A1 });
+  });
+
+  it("🔴 binds nothing when GHL never says what it installed — King LASIK is not taken for Aloha", async () => {
+    await seedInstall({ locationId: "king-lasik", clientId: CLIENT_A1 });
+    mockAgency({ token: agencyToken({ approvedLocations: ["king-lasik"] }), locations: { "king-lasik": locToken("king-lasik") } });
+
+    const subs = await mod.exchangeCode("code-1", CLIENT_A2, { waitMs: 50, pollMs: 10 });
+
+    expect(mod.pickInstall(CLIENT_A2, subs)).toEqual({ kind: "unclear" });
+    expect((await installRow())!.client_id).toBe(CLIENT_A1);
+  });
+
+  it("trusts only this agency's signed INSTALL notifications of the last two minutes", async () => {
+    mockAgency({
+      token: agencyToken({ approvedLocations: ["a", "b"] }),
+      locations: { a: locToken("a"), b: locToken("b"), forged: locToken("forged"), old: locToken("old"), other: locToken("other") },
+    });
+    await installEvent("forged", { signature: "invalid" });
+    await installEvent("old", { ago: "5 minutes" });
+    await installEvent("other", { companyId: "comp-2" });
+    await installEvent("b");
+
+    const subs = await mod.exchangeCode("code-1", CLIENT_A2, NO_WAIT);
+
+    expect(subs.filter((x) => x.justInstalled).map((x) => x.installation.locationId)).toEqual(["b"]);
+    expect(subs.map((x) => x.installation.locationId).sort()).toEqual(["a", "b"]);
   });
 
   it("surfaces an agency install no sub-account of which could be connected, storing nothing", async () => {
@@ -497,6 +557,28 @@ describe("exchangeCode", () => {
 
     const { decrypt } = await import("@/lib/crypto");
     expect(decrypt(stored.access_token_encrypted as string)).toBe("access-1");
+  });
+
+  it("🔴 keeps the binding when an install for another of the agency's clients names it", async () => {
+    await seedInstall({ clientId: CLIENT_A1 });
+    mockToken(token());
+
+    // Same agency: no tenant boundary to protect, and moving it would hand
+    // one client's CRM to another — what happened to King LASIK, 26 Oct 2026.
+    const [sub] = await mod.exchangeCode("code-1", CLIENT_A2);
+
+    expect(sub.installation.clientId).toBe(CLIENT_A1);
+    expect(mod.pickInstall(CLIENT_A2, [sub])).toEqual({ kind: "elsewhere", names: ["Parfaire Medical"] });
+  });
+
+  it("counts a sub-account reinstalled after an uninstall as freshly installed", async () => {
+    await seedInstall({ clientId: null });
+    await run(`UPDATE ghl_installations SET uninstalled_at = now()`);
+    mockToken(token());
+
+    const [sub] = await mod.exchangeCode("code-1", null);
+
+    expect(sub.isNew).toBe(true);
   });
 
   it("clears the uninstall marker on reinstall", async () => {
@@ -613,9 +695,10 @@ describe("buildAuthorizeUrl", () => {
  * ------------------------------------------------------------------ */
 
 describe("installFor", () => {
-  const sub = (locationId: string, clientId: string | null, isNew = false) => ({
-    installation: { id: `inst-${locationId}`, locationId, clientId } as never,
+  const sub = (locationId: string, clientId: string | null, isNew = false, justInstalled = false) => ({
+    installation: { id: `inst-${locationId}`, locationId, clientId, locationName: locationId } as never,
     isNew,
+    justInstalled,
   });
   const pick = (subs: Array<ReturnType<typeof sub>>, clientId = CLIENT_A2) =>
     (mod.installFor(clientId, subs) as { locationId: string } | null)?.locationId ?? null;
@@ -640,7 +723,25 @@ describe("installFor", () => {
     expect(pick([sub("a", CLIENT_A1), sub("b", CLIENT_B1)])).toBeNull();
   });
 
-  it("takes a lone sub-account as before — claiming it still checks who holds it", () => {
-    expect(pick([sub("a", CLIENT_B1)])).toBe("a");
+  it("🔴 never takes a sub-account another client holds — not even the only one that came back", () => {
+    expect(pick([sub("king-lasik", CLIENT_A1)])).toBeNull();
+    expect(pick([sub("king-lasik", CLIENT_A1, false, true)])).toBeNull();
+    expect(pick([sub("aloha", null)])).toBe("aloha");
+  });
+
+  it("🔴 lets what GHL says was installed decide alone", () => {
+    // The ticked one, over a fresher-looking other.
+    expect(pick([sub("older", null, true), sub("aloha", null, false, true)])).toBe("aloha");
+    // GHL installed only another client's sub-account: nothing else is taken instead.
+    expect(pick([sub("king-lasik", CLIENT_A1, false, true), sub("aloha", null, true)])).toBeNull();
+  });
+
+  it("says which: the client's, another client's, or not knowable", () => {
+    expect(mod.pickInstall(CLIENT_A2, [sub("king-lasik", CLIENT_A1, false, true)] as never)).toEqual({
+      kind: "elsewhere",
+      names: ["king-lasik"],
+    });
+    expect(mod.pickInstall(CLIENT_A2, [sub("king-lasik", CLIENT_A1)] as never)).toEqual({ kind: "unclear" });
+    expect(mod.pickInstall(CLIENT_A2, [sub("aloha", null, true)] as never)).toMatchObject({ kind: "client" });
   });
 });

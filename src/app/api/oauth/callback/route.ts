@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { safeFailureMessage } from "@/lib/api-failure";
-import { claimInstallation, exchangeCode, installFor } from "@/lib/ghl/oauth";
+import { claimInstallation, exchangeCode, pickInstall } from "@/lib/ghl/oauth";
 import { importPipelineStages } from "@/lib/clients";
 import { getClientUnscoped } from "@/lib/clients";
 
@@ -50,17 +50,30 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // One per sub-account the install covers — several for an agency install,
-    // whose token lists every sub-account the app is approved on.
-    const subs = await exchangeCode(code, clientId);
-    const installation = clientId
-      ? installFor(clientId, subs)
-      : subs.length === 1
-        ? subs[0].installation
-        : null;
+    /*
+     * One per sub-account the install covers — several for an agency install,
+     * whose token lists every sub-account the app is approved on.
+     *
+     * 🔴 `|| null`: with no state cookie (an install from GHL's marketplace)
+     * `clientId` is "", and "" passed as the intended client counted as "a
+     * different client" — clearing a working binding on every marketplace
+     * reinstall.
+     */
+    const subs = await exchangeCode(code, clientId || null);
+    const pick = clientId ? pickInstall(clientId, subs) : null;
+    if (pick?.kind === "elsewhere") {
+      // Nothing moves: a sub-account already another client's stays theirs.
+      const names = [...new Set(pick.names)].join(", ");
+      return redirectWithError(
+        req,
+        `${names} is already connected to another client here, so it was left where it is. Try again, ticking only this client's own sub-account.`,
+      );
+    }
+    const installation =
+      pick?.kind === "client" ? pick.installation : !clientId && subs.length === 1 ? subs[0].installation : null;
 
     let slug: string | null = null;
-    // The one that is this client's, when that can be told; else all stay unclaimed.
+    // The one that is this client's, when that can be told; else nothing is bound.
     if (clientId && installation) {
       /*
        * Unscoped on purpose, and named so. The authorization for this lookup is

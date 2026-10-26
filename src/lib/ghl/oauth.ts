@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { ghlInstallations, type GhlInstallation, type Client } from "@/db/schema";
+import { ghlInstallations, webhookEvents, type GhlInstallation, type Client } from "@/db/schema";
 import { encrypt, decrypt } from "@/lib/crypto";
 import { agencyIdForClient } from "@/lib/tenancy";
 import { GhlClient } from "./client";
@@ -33,6 +33,14 @@ const API_VERSION = "2021-07-28";
  * from their clients' setup pages.
  */
 const AGENCY_INSTALL_MAX_LOCATIONS = 50;
+/**
+ * How long an agency install waits for GHL to finish installing on the
+ * sub-account just ticked, and how often it looks. GHL redirects back before
+ * it has (see `installFromAgencyToken`), so the callback waits for its INSTALL
+ * notification — usually under a second, the whole wait only when none comes.
+ */
+const TICKED_WAIT_MS = 10_000;
+const TICKED_POLL_MS = 1_000;
 
 /**
  * Scopes requested at install.
@@ -125,17 +133,31 @@ async function postForm(
 /** One sub-account an install covers. */
 export interface InstalledSubAccount {
   installation: GhlInstallation;
-  /** No row held it before this install: the sub-account just ticked, most likely. */
+  /** No row held it before this install, or only an uninstalled one: freshly installed, by our records. */
   isNew: boolean;
+  /**
+   * GHL says this is the sub-account installed now: a sub-account install's
+   * own token, or an agency install's signed INSTALL notification. The one
+   * positive sign of what was ticked; everything else is inference.
+   */
+  justInstalled: boolean;
+}
+
+export interface ExchangeOptions {
+  /** How long an agency install waits for the ticked sub-account (ms). */
+  waitMs?: number;
+  pollMs?: number;
 }
 
 /**
  * Exchange the authorization code from the OAuth callback: every sub-account
- * the install covers, one installation each.
+ * the install covers, one installation each. Never moves a sub-account
+ * between clients of one agency (`upsertInstallation`, `installFor`).
  */
 export async function exchangeCode(
   code: string,
   intendedClientId: string | null,
+  opts: ExchangeOptions = {},
 ): Promise<InstalledSubAccount[]> {
   const token = await postToken({
     client_id: process.env.GHL_CLIENT_ID!,
@@ -151,8 +173,9 @@ export async function exchangeCode(
     redirect_uri: redirectUri(),
   });
 
-  if (token.locationId) return [await upsertInstallation(token, intendedClientId)];
-  return installFromAgencyToken(token, intendedClientId);
+  // A sub-account install: GHL names the one sub-account installed.
+  if (token.locationId) return [{ ...(await upsertInstallation(token, intendedClientId)), justInstalled: true }];
+  return installFromAgencyToken(token, intendedClientId !== null, opts);
 }
 
 /**
@@ -173,13 +196,22 @@ export async function exchangeCode(
  *
  * 🔴 The token lists every sub-account the app is approved on in that
  * agency, not only the ones just ticked (King LASIK, linked since 22 Oct,
- * came back with Aloha Laser Vision). Which of them is the client the install
- * was started for is `installFor`'s question; nothing here strips another
- * client's binding on the way (`upsertInstallation`).
+ * came back with Aloha Laser Vision). So nothing here changes which client
+ * any sub-account belongs to: `installFor` picks the client's one.
+ *
+ * 🔴 And GHL redirects back BEFORE it has finished installing on the
+ * sub-account just ticked. 26 Oct 2026: our exchange at 17:45:49.26, GHL's
+ * INSTALL for Aloha at 17:45:49.44 — so the token came back naming King LASIK
+ * alone, and an earlier rule ("one sub-account came back: it is the one")
+ * moved King LASIK onto Aloha's client. So when the install was started for a
+ * client, this waits for GHL's signed INSTALL notification of the ticked
+ * sub-account (its webhook lands in `webhook_events`), mints that one too, and
+ * marks it `justInstalled` — what GHL says was installed, not what we guess.
  */
 async function installFromAgencyToken(
   token: TokenResponse,
-  intendedClientId: string | null,
+  waitForTicked: boolean,
+  opts: ExchangeOptions,
 ): Promise<InstalledSubAccount[]> {
   const companyId = token.companyId;
   if (!companyId) {
@@ -189,14 +221,12 @@ async function installFromAgencyToken(
     ...new Set((token.approvedLocations ?? []).filter((l): l is string => typeof l === "string" && l !== "")),
   ];
   if (locations.length === 0) locations = await installedLocations(token.access_token, companyId);
-  if (locations.length === 0) {
-    throw new Error("This install named no sub-account. Install the app on a sub-account, then try again.");
-  }
 
-  const target = locations.length === 1 ? intendedClientId : null;
-  const out: InstalledSubAccount[] = [];
+  const out = new Map<string, InstalledSubAccount>();
   let firstError: unknown = null;
-  for (const locationId of locations.slice(0, AGENCY_INSTALL_MAX_LOCATIONS)) {
+  /** One sub-account's own token pair from the agency's. Bindings untouched: the token chose no client. */
+  const mint = async (locationId: string) => {
+    if (out.has(locationId) || out.size >= AGENCY_INSTALL_MAX_LOCATIONS) return;
     try {
       const loc = await postForm(
         LOCATION_TOKEN_URL,
@@ -207,19 +237,58 @@ async function installFromAgencyToken(
       if (!loc.access_token || !loc.refresh_token) {
         throw new Error("GHL returned no usable token for a sub-account of this install.");
       }
-      out.push(
-        await upsertInstallation(
-          { ...loc, locationId: loc.locationId ?? locationId, companyId: loc.companyId ?? companyId, userType: "Location" },
-          target,
-        ),
+      const sub = await upsertInstallation(
+        { ...loc, locationId: loc.locationId ?? locationId, companyId: loc.companyId ?? companyId, userType: "Location" },
+        null,
       );
+      out.set(locationId, { ...sub, justInstalled: false });
     } catch (err) {
-      // One sub-account refused must not cost the others theirs.
+      // One sub-account refused must not cost the others theirs — and one not
+      // installed yet is tried again below.
       firstError ??= err;
     }
+  };
+  for (const locationId of locations) await mint(locationId);
+
+  if (waitForTicked) {
+    const deadline = Date.now() + (opts.waitMs ?? TICKED_WAIT_MS);
+    for (;;) {
+      const ticked = await recentInstalls(companyId);
+      for (const locationId of ticked) await mint(locationId);
+      for (const locationId of ticked) {
+        const sub = out.get(locationId);
+        if (sub) sub.justInstalled = true;
+      }
+      if (ticked.some((l) => out.has(l)) || Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, opts.pollMs ?? TICKED_POLL_MS));
+    }
   }
-  if (out.length === 0) throw firstError ?? new Error("No sub-account of this install could be connected.");
-  return out;
+
+  if (out.size === 0) {
+    throw firstError ?? new Error("This install named no sub-account. Install the app on a sub-account, then try again.");
+  }
+  return [...out.values()];
+}
+
+/**
+ * Sub-accounts GHL has just told us it installed the app on, in one agency:
+ * its INSTALL notifications of the last two minutes, signature-verified — a
+ * forged one cannot steer which sub-account a client gets.
+ */
+async function recentInstalls(companyId: string): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ locationId: sql<string>`${webhookEvents.payload}->>'locationId'` })
+    .from(webhookEvents)
+    .where(
+      and(
+        sql`${webhookEvents.receivedAt} > now() - interval '2 minutes'`,
+        sql`${webhookEvents.payload}->>'type' IN ('INSTALL', 'AppInstall')`,
+        sql`${webhookEvents.payload}->>'companyId' = ${companyId}`,
+        sql`${webhookEvents.headers}->>'__signature' = 'valid'`,
+        sql`coalesce(${webhookEvents.payload}->>'locationId', '') <> ''`,
+      ),
+    );
+  return rows.map((r) => r.locationId);
 }
 
 /**
@@ -260,7 +329,7 @@ async function upsertInstallation(
    * state — null for an agency-level install with no target.
    */
   intendedClientId: string | null,
-): Promise<InstalledSubAccount> {
+): Promise<Omit<InstalledSubAccount, "justInstalled">> {
   // Refresh a minute early so a request in flight cannot land on a dead token.
   const expiresAt = new Date(Date.now() + (token.expires_in - 60) * 1000);
 
@@ -299,15 +368,21 @@ async function upsertInstallation(
    * row still pointing at agency A's client, which then reads B's contacts and
    * pipeline through them.
    *
-   * So the binding is cleared whenever the install names a DIFFERENT client
-   * than the row holds. `claimInstallation` below then re-binds it, with the
-   * authorization this function has no way to perform.
+   * So the binding is cleared when the install names a client of ANOTHER
+   * agency than the one holding the row. `claimInstallation` below then
+   * re-binds it, with the authorization this function has no way to perform.
+   *
+   * 🔴 Within one agency the binding stays. A sub-account does not move from
+   * one of an agency's clients to another because an install named it — on 26
+   * Oct 2026 an install for Aloha Laser Vision moved King LASIK onto Aloha's
+   * client that way. The callback refuses instead (`pickInstall`).
    */
   const existing = await getInstallationByLocation(token.locationId!);
   const rebinding =
     intendedClientId !== null &&
     existing?.clientId != null &&
-    existing.clientId !== intendedClientId;
+    existing.clientId !== intendedClientId &&
+    (await otherAgency(existing.clientId, intendedClientId));
 
   const [row] = await db
     .insert(ghlInstallations)
@@ -318,7 +393,13 @@ async function upsertInstallation(
     })
     .returning();
 
-  return { installation: row, isNew: existing === null };
+  return { installation: row, isNew: existing === null || existing.uninstalledAt !== null };
+}
+
+/** Whether two clients belong to different agencies — an unresolvable one counts as different. */
+async function otherAgency(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([agencyIdForClient(a), agencyIdForClient(b)]);
+  return x === null || x !== y;
 }
 
 /**
@@ -386,28 +467,51 @@ export async function getInstallationForClient(
 /**
  * Which sub-account of an install is the client it was started for — or null.
  *
- * One sub-account is simply that one. Several happen because GHL's agency
- * token lists every sub-account the app is approved on in the agency, not only
- * the one just ticked (26 Oct 2026: King LASIK, linked since the 22nd, came
- * back alongside Aloha Laser Vision, ticked for its new client). In order:
+ * 🔴 Never one another client holds. A sub-account changes client by being
+ * disconnected first, never because a token named it: GHL's agency token
+ * names every sub-account the app is on in the agency, and once named only
+ * King LASIK (linked to its own client) for an install meant for Aloha Laser
+ * Vision. That moved it — 26 Oct 2026.
  *
- * 1. the one sub-account this install is the first we have heard of — the one
- *    just ticked;
- * 2. else the one already this client's — a reconnect;
- * 3. else the one no client holds yet.
+ * 1. What GHL says was installed now (`justInstalled`) decides alone, when it
+ *    says anything: the one such sub-account free for this client, or null.
+ * 2. Else, by our records: the one freshly installed and unclaimed;
+ * 3. else the one already this client's — a reconnect;
+ * 4. else the one no client holds yet.
  *
  * Anything else would be a guess, and an install bound to the wrong client
- * reads another business's CRM: null, and every sub-account stays unclaimed.
- * Never one another client holds — `claimInstallation` still checks tenancy.
+ * reads another business's CRM: null, and nothing is bound.
  */
 export function installFor(clientId: string, subs: readonly InstalledSubAccount[]): GhlInstallation | null {
-  if (subs.length === 1) return subs[0].installation;
+  const free = (s: InstalledSubAccount) =>
+    s.installation.clientId === null || s.installation.clientId === clientId;
   const one = (list: readonly InstalledSubAccount[]) => (list.length === 1 ? list[0].installation : null);
+  const ticked = subs.filter((s) => s.justInstalled);
+  if (ticked.length > 0) return one(ticked.filter(free));
+  const open = subs.filter(free);
   return (
-    one(subs.filter((s) => s.isNew && s.installation.clientId === null)) ??
-    one(subs.filter((s) => s.installation.clientId === clientId)) ??
-    one(subs.filter((s) => s.installation.clientId === null))
+    one(open.filter((s) => s.isNew && s.installation.clientId === null)) ??
+    one(open.filter((s) => s.installation.clientId === clientId)) ??
+    one(open.filter((s) => s.installation.clientId === null))
   );
+}
+
+/** What the callback does with an install started for a client. */
+export type InstallPick =
+  | { kind: "client"; installation: GhlInstallation }
+  /** GHL installed only sub-accounts other clients here already hold: nothing moves. */
+  | { kind: "elsewhere"; names: string[] }
+  /** Installed, but which sub-account is this client's cannot be told: nothing bound. */
+  | { kind: "unclear" };
+
+export function pickInstall(clientId: string, subs: readonly InstalledSubAccount[]): InstallPick {
+  const installation = installFor(clientId, subs);
+  if (installation) return { kind: "client", installation };
+  const ticked = subs.filter((s) => s.justInstalled);
+  if (ticked.length > 0 && ticked.every((s) => s.installation.clientId !== null && s.installation.clientId !== clientId)) {
+    return { kind: "elsewhere", names: ticked.map((s) => s.installation.locationName ?? "That sub-account") };
+  }
+  return { kind: "unclear" };
 }
 
 /**

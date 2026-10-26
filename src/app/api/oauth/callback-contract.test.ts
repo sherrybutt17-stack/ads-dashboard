@@ -104,3 +104,19 @@ describe("OAuth callback → setup handoff", () => {
     }
   });
 });
+
+describe("the GoHighLevel callback", () => {
+  const GHL = read("api/oauth/callback/route.ts").replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("🔴 binds only the sub-account pickInstall names, and moves none another client holds", () => {
+    expect(GHL).toContain("pickInstall(clientId, subs)");
+    expect(GHL).toMatch(/if \(pick\?\.kind === "elsewhere"\) \{[\s\S]*?return redirectWithError\(/);
+    // Nothing else picks: a lone sub-account is named only when no client is being connected.
+    expect(GHL).not.toContain("installFor(");
+    expect(GHL).toContain('pick?.kind === "client" ? pick.installation : !clientId && subs.length === 1');
+  });
+
+  it("🔴 passes no client — not an empty string — for an install from GHL's marketplace", () => {
+    expect(GHL).toContain("exchangeCode(code, clientId || null)");
+  });
+});
