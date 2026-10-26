@@ -21,8 +21,18 @@ import { appBaseUrlOr } from "@/lib/app-url";
  */
 
 const TOKEN_URL = "https://services.leadconnectorhq.com/oauth/token";
+const LOCATION_TOKEN_URL = "https://services.leadconnectorhq.com/oauth/locationToken";
+const INSTALLED_LOCATIONS_URL = "https://services.leadconnectorhq.com/oauth/installedLocations";
 const AUTHORIZE_URL =
   "https://marketplace.gohighlevel.com/v2/oauth/chooselocation";
+/** The API version the two agency calls are documented under. */
+const API_VERSION = "2021-07-28";
+/**
+ * Sub-accounts one agency install connects at most: a "select all" on a large
+ * agency must not run the callback past its time. The rest can be connected
+ * from their clients' setup pages.
+ */
+const AGENCY_INSTALL_MAX_LOCATIONS = 50;
 
 /**
  * Scopes requested at install.
@@ -68,14 +78,27 @@ interface TokenResponse {
   companyId?: string;
   userType?: string;
   isBulkInstallation?: boolean;
+  /** An agency-level install: the sub-accounts it was approved for. */
+  approvedLocations?: string[];
 }
 
 async function postToken(body: Record<string, string>): Promise<TokenResponse> {
-  const res = await fetch(TOKEN_URL, {
+  return postForm(TOKEN_URL, body, {}, "GHL token exchange");
+}
+
+/** A form POST to GHL's OAuth service, answered with JSON — or an error naming what failed. */
+async function postForm(
+  url: string,
+  body: Record<string, string>,
+  headers: Record<string, string>,
+  what: string,
+): Promise<TokenResponse> {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",
+      ...headers,
     },
     body: new URLSearchParams(body).toString(),
     cache: "no-store",
@@ -91,7 +114,7 @@ async function postToken(body: Record<string, string>): Promise<TokenResponse> {
 
   if (!res.ok) {
     throw new Error(
-      `GHL token exchange failed (${res.status}): ${
+      `${what} failed (${res.status}): ${
         typeof parsed === "string" ? parsed : JSON.stringify(parsed)
       }`,
     );
@@ -99,11 +122,14 @@ async function postToken(body: Record<string, string>): Promise<TokenResponse> {
   return parsed as TokenResponse;
 }
 
-/** Exchange the authorization code from the OAuth callback. */
+/**
+ * Exchange the authorization code from the OAuth callback: every sub-account
+ * the install covers, one installation each.
+ */
 export async function exchangeCode(
   code: string,
   intendedClientId: string | null,
-): Promise<GhlInstallation> {
+): Promise<GhlInstallation[]> {
   const token = await postToken({
     client_id: process.env.GHL_CLIENT_ID!,
     client_secret: process.env.GHL_CLIENT_SECRET!,
@@ -112,25 +138,110 @@ export async function exchangeCode(
     /*
      * 🔴 Without this GHL answers with a Company token — no locationId — even
      * for a single sub-account install (`installType: "Location"` on the
-     * INSTALL webhook). Every install hit the agency-level refusal below.
+     * INSTALL webhook).
      */
     user_type: "Location",
     redirect_uri: redirectUri(),
   });
 
-  if (!token.locationId) {
-    /*
-     * An agency-level (bulk) install returns a Company token with no
-     * locationId. Supporting that properly means enumerating sub-accounts and
-     * minting a location token for each — deliberately out of scope here, and
-     * reported plainly rather than silently storing an unusable row.
-     */
-    throw new Error(
-      "This install returned no locationId (agency-level install). Install the app on an individual sub-account instead.",
-    );
+  if (token.locationId) return [await upsertInstallation(token, intendedClientId)];
+  return installFromAgencyToken(token, intendedClientId);
+}
+
+/**
+ * An agency-level install, made into sub-account ones.
+ *
+ * 🔴 GHL's install screen makes one even when a single sub-account is ticked.
+ * Every new marketplace app is bulk-installable, so the screen is a
+ * multi-select, and the code it hands back is the agency's: a Company token
+ * with no locationId, whatever `user_type` asks for. Refusing it refused every
+ * install made from the agency (Aloha Laser Vision, 26 Oct 2026: installed in
+ * GHL, "agency-level install" here).
+ *
+ * GHL's documented path: the agency token names the sub-accounts it was
+ * approved for (`approvedLocations`), and `oauth/locationToken` turns it into
+ * each one's own Location token with its own refresh token — so everything
+ * downstream stays per sub-account, exactly as for a direct install. Needs the
+ * app's `oauth.write` (and `oauth.readonly` for the fallback list).
+ *
+ * Only an install of ONE sub-account takes the client it was started for.
+ * Several at once leave every row unclaimed rather than guess which is whose —
+ * and never strip another client's binding on the way (`upsertInstallation`).
+ */
+async function installFromAgencyToken(
+  token: TokenResponse,
+  intendedClientId: string | null,
+): Promise<GhlInstallation[]> {
+  const companyId = token.companyId;
+  if (!companyId) {
+    throw new Error("GHL returned neither a sub-account nor an agency for this install.");
+  }
+  let locations = [
+    ...new Set((token.approvedLocations ?? []).filter((l): l is string => typeof l === "string" && l !== "")),
+  ];
+  if (locations.length === 0) locations = await installedLocations(token.access_token, companyId);
+  if (locations.length === 0) {
+    throw new Error("This install named no sub-account. Install the app on a sub-account, then try again.");
   }
 
-  return upsertInstallation(token, intendedClientId);
+  const target = locations.length === 1 ? intendedClientId : null;
+  const out: GhlInstallation[] = [];
+  let firstError: unknown = null;
+  for (const locationId of locations.slice(0, AGENCY_INSTALL_MAX_LOCATIONS)) {
+    try {
+      const loc = await postForm(
+        LOCATION_TOKEN_URL,
+        { companyId, locationId },
+        { Version: API_VERSION, Authorization: `Bearer ${token.access_token}` },
+        "GHL sub-account token",
+      );
+      if (!loc.access_token || !loc.refresh_token) {
+        throw new Error("GHL returned no usable token for a sub-account of this install.");
+      }
+      out.push(
+        await upsertInstallation(
+          { ...loc, locationId: loc.locationId ?? locationId, companyId: loc.companyId ?? companyId, userType: "Location" },
+          target,
+        ),
+      );
+    } catch (err) {
+      // One sub-account refused must not cost the others theirs.
+      firstError ??= err;
+    }
+  }
+  if (out.length === 0) throw firstError ?? new Error("No sub-account of this install could be connected.");
+  return out;
+}
+
+/**
+ * The sub-accounts this app is installed on in one agency — for an agency
+ * install that names none (everything approved). A fallback only: a failure
+ * here is an empty list, and the caller says so.
+ */
+async function installedLocations(agencyToken: string, companyId: string): Promise<string[]> {
+  // The parent app id: a version's client id is `<app id>-<suffix>`.
+  const appId = (process.env.GHL_CLIENT_ID ?? "").split("-")[0];
+  const url = new URL(INSTALLED_LOCATIONS_URL);
+  url.searchParams.set("companyId", companyId);
+  url.searchParams.set("appId", appId);
+  url.searchParams.set("isInstalled", "true");
+  url.searchParams.set("limit", String(AGENCY_INSTALL_MAX_LOCATIONS));
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: "application/json", Version: API_VERSION, Authorization: `Bearer ${agencyToken}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as {
+      locations?: Array<{ _id?: unknown; isInstalled?: unknown }>;
+      items?: Array<{ _id?: unknown; isInstalled?: unknown }>;
+    };
+    return (body.locations ?? body.items ?? [])
+      .filter((l) => l.isInstalled !== false && typeof l._id === "string" && l._id !== "")
+      .map((l) => l._id as string);
+  } catch {
+    return [];
+  }
 }
 
 async function upsertInstallation(

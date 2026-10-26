@@ -78,6 +78,13 @@ export default async function OAuthResultPage({
   }
 
   const accent = ok ? "var(--status-good)" : "var(--status-critical)";
+  /*
+   * Installed in GHL but bound to no client here: started from GHL's own
+   * marketplace (no client to bind to), or several sub-accounts ticked at
+   * once. Saying "This client is now wired" would be false — the install
+   * waits until it is connected from a client's page.
+   */
+  const unlinked = ok && clientName === null;
 
   return (
     <AppShell>
@@ -130,14 +137,15 @@ export default async function OAuthResultPage({
           className="mt-6 text-center text-[24px] leading-tight font-semibold tracking-[-0.02em]"
           style={{ color: "var(--text-primary)" }}
         >
-          {ok ? "GoHighLevel connected" : "Connection didn’t finish"}
+          {unlinked ? "Installed in GoHighLevel" : ok ? "GoHighLevel connected" : "Connection didn’t finish"}
         </h1>
 
         {ok ? (
           <div className="mt-2 text-center">
             <p style={{ color: "var(--text-secondary)" }}>
-              {clientName ?? "This client"} is now wired to GoHighLevel. New
-              leads and stage changes will stream in from here.
+              {unlinked
+                ? "The app is installed. One step left: link it to its client here."
+                : `${clientName} is now wired to GoHighLevel. New leads and stage changes will stream in from here.`}
             </p>
             {location && (
               <p
@@ -162,7 +170,20 @@ export default async function OAuthResultPage({
           className="card mt-8 w-full p-5 sm:p-6"
           style={{ borderColor: "var(--border)" }}
         >
-          {ok ? (
+          {unlinked ? (
+            <div className="text-sm" style={{ color: "var(--text-secondary)" }}>
+              <p className="mb-2 font-medium" style={{ color: "var(--text-primary)" }}>
+                To link it
+              </p>
+              <ol className="flex list-decimal flex-col gap-1.5 pl-4">
+                <li>Open the client’s <strong>Connections</strong> page here.</li>
+                <li>
+                  Click <strong>Connect GoHighLevel</strong>.
+                </li>
+                <li>Tick the same sub-account, alone, and continue.</li>
+              </ol>
+            </div>
+          ) : ok ? (
             <ul className="flex flex-col gap-3 text-sm">
               <Row label="Pipeline stages imported" value={`${stageCount}`} />
               {unmapped > 0 && (
@@ -267,8 +288,9 @@ const ADVICE: Record<Provider, ReactNode[]> = {
       browser, then start the install again.
     </>,
     <>
-      Start it from <strong>Setup → Install on a sub-account</strong> in this
-      app (not from GHL’s marketplace) so the secure hand-off matches.
+      Start it from the client’s <strong>Connections</strong> page here —{" "}
+      <strong>Connect GoHighLevel</strong> — so the install is linked to that
+      client.
     </>,
     <>
       If the app is still in draft, add the sub-account as a test location in

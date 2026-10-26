@@ -50,10 +50,14 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const installation = await exchangeCode(code, clientId);
+    // One per sub-account the install covers — several when GHL's install
+    // screen had more than one ticked (an agency install).
+    const installations = await exchangeCode(code, clientId);
+    const installation = installations.length === 1 ? installations[0] : null;
 
     let slug: string | null = null;
-    if (clientId) {
+    // Only a single sub-account can be this client's; several stay unclaimed.
+    if (clientId && installation) {
       /*
        * Unscoped on purpose, and named so. The authorization for this lookup is
        * the HMAC-signed `state` verified above — the client id was minted into
@@ -95,7 +99,9 @@ export async function GET(req: NextRequest) {
     if (slug) params.set("slug", slug);
     params.set(
       "location",
-      installation.locationName ?? installation.locationId,
+      installation
+        ? (installation.locationName ?? installation.locationId)
+        : `${installations.length} sub-accounts`,
     );
     url.search = `?${params.toString()}`;
 

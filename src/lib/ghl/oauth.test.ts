@@ -286,7 +286,7 @@ describe("exchangeCode", () => {
   it("stores tokens encrypted, never in the clear", async () => {
     mockToken(token());
 
-    const row = await mod.exchangeCode("code-1", null);
+    const [row] = await mod.exchangeCode("code-1", null);
 
     const stored = await installRow(row.id);
     expect(stored!.access_token_encrypted).not.toContain("access-1");
@@ -309,13 +309,129 @@ describe("exchangeCode", () => {
     expect(body.get("user_type")).toBe("Location");
   });
 
-  it("rejects an agency-level install that carries no locationId", async () => {
-    mockToken(token({ locationId: undefined }));
+  /*
+   * Agency-level installs. GHL's install screen is a multi-select for every new
+   * (bulk-installable) app, and what comes back is the agency's Company token —
+   * even with one sub-account ticked. It used to be refused; now each approved
+   * sub-account gets its own Location token from it.
+   */
+  const agencyToken = (over: Record<string, unknown> = {}) => ({
+    access_token: "agency-access",
+    refresh_token: "agency-refresh",
+    expires_in: 86400,
+    userType: "Company",
+    companyId: "comp-1",
+    isBulkInstallation: true,
+    ...over,
+  });
+  const locToken = (loc: string) => ({
+    access_token: `access-${loc}`,
+    refresh_token: `refresh-${loc}`,
+    expires_in: 86400,
+    userType: "Location",
+    locationId: loc,
+    scope: "opportunities.readonly",
+  });
+  type Init = { body?: string; headers?: Record<string, string> };
 
-    await expect(mod.exchangeCode("code-1", null)).rejects.toThrow(/locationId/i);
-    // Nothing stored: an unusable row would show up in the UI as a connected
-    // install that can never sync.
-    expect((await run(`SELECT count(*)::int AS n FROM ghl_installations`)).rows[0].n).toBe(0);
+  /** GHL by URL: the code exchange, each sub-account's token (null = refused), the installed list. */
+  function mockAgency(opts: {
+    token: Record<string, unknown>;
+    locations?: Record<string, Record<string, unknown> | null>;
+    installed?: string[];
+  }) {
+    const fetchMock = vi.fn(async (url: string | URL, init?: Init) => {
+      const u = String(url);
+      if (u.includes("/oauth/locationToken")) {
+        const body = opts.locations?.[new URLSearchParams(init?.body ?? "").get("locationId") ?? ""];
+        return body
+          ? { ok: true, status: 200, text: async () => JSON.stringify(body) }
+          : { ok: false, status: 400, text: async () => JSON.stringify({ message: "Location not approved" }) };
+      }
+      if (u.includes("/oauth/installedLocations")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ locations: (opts.installed ?? []).map((id) => ({ _id: id, isInstalled: true })) }),
+        };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify(opts.token) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const count = async () => (await run(`SELECT count(*)::int AS n FROM ghl_installations`)).rows[0].n;
+
+  it("🔴 turns an agency install of one sub-account into that sub-account's own tokens", async () => {
+    const fetchMock = mockAgency({ token: agencyToken({ approvedLocations: ["loc-1"] }), locations: { "loc-1": locToken("loc-1") } });
+
+    const rows = await mod.exchangeCode("code-1", CLIENT_A1);
+
+    expect(rows.map((r) => r.locationId)).toEqual(["loc-1"]);
+    // GHL's documented exchange: the agency's bearer token, form-encoded ids, the pinned version.
+    const call = fetchMock.mock.calls.find(([u]) => String(u).includes("/oauth/locationToken"))!;
+    const init = call[1] as Required<Init>;
+    expect(Object.fromEntries(new URLSearchParams(init.body))).toEqual({ companyId: "comp-1", locationId: "loc-1" });
+    expect(init.headers.Authorization).toBe("Bearer agency-access");
+    expect(init.headers.Version).toBe("2021-07-28");
+    // The sub-account's own pair is what is stored — never the agency's.
+    const stored = await installRow(rows[0].id);
+    const { decrypt } = await import("@/lib/crypto");
+    expect(decrypt(stored!.access_token_encrypted as string)).toBe("access-loc-1");
+    expect(decrypt(stored!.refresh_token_encrypted as string)).toBe("refresh-loc-1");
+  });
+
+  it("🔴 connects every sub-account of a multi-select install, and moves no client's binding", async () => {
+    await seedInstall({ clientId: CLIENT_A1 });
+    mockAgency({
+      token: agencyToken({ approvedLocations: ["loc-1", "loc-2"] }),
+      locations: { "loc-1": locToken("loc-1"), "loc-2": locToken("loc-2") },
+    });
+
+    // Started from another client's page: with two sub-accounts there is no telling which is its.
+    const rows = await mod.exchangeCode("code-1", CLIENT_B1);
+
+    expect(rows.map((r) => r.locationId).sort()).toEqual(["loc-1", "loc-2"]);
+    const bound = (await run(
+      `SELECT location_id, client_id::text AS client_id FROM ghl_installations ORDER BY location_id`,
+    )).rows;
+    expect(bound).toEqual([
+      { location_id: "loc-1", client_id: CLIENT_A1 },
+      { location_id: "loc-2", client_id: null },
+    ]);
+  });
+
+  it("falls back to where the app is installed when the token names no sub-account", async () => {
+    const fetchMock = mockAgency({ token: agencyToken(), installed: ["loc-3"], locations: { "loc-3": locToken("loc-3") } });
+
+    const rows = await mod.exchangeCode("code-1", null);
+
+    expect(rows.map((r) => r.locationId)).toEqual(["loc-3"]);
+    const listed = new URL(String(fetchMock.mock.calls.find(([u]) => String(u).includes("/oauth/installedLocations"))![0]));
+    // The parent app id: the client id's part before the dash.
+    expect(Object.fromEntries(listed.searchParams)).toMatchObject({ companyId: "comp-1", appId: "test", isInstalled: "true" });
+  });
+
+  it("keeps the sub-accounts GHL gave tokens for when one is refused", async () => {
+    mockAgency({
+      token: agencyToken({ approvedLocations: ["loc-1", "loc-2"] }),
+      locations: { "loc-1": null, "loc-2": locToken("loc-2") },
+    });
+
+    const rows = await mod.exchangeCode("code-1", null);
+
+    expect(rows.map((r) => r.locationId)).toEqual(["loc-2"]);
+  });
+
+  it("surfaces an agency install no sub-account of which could be connected, storing nothing", async () => {
+    mockAgency({ token: agencyToken({ approvedLocations: ["loc-1"] }), locations: { "loc-1": null } });
+    await expect(mod.exchangeCode("code-1", null)).rejects.toThrow(/sub-account token failed \(400\)/);
+
+    mockAgency({ token: agencyToken({ companyId: undefined }) });
+    await expect(mod.exchangeCode("code-1", null)).rejects.toThrow(/neither a sub-account nor an agency/);
+
+    // An unusable row would show in the UI as a connected install that can never sync.
+    expect(await count()).toBe(0);
   });
 
   it("preserves the existing binding when the same client reinstalls", async () => {
