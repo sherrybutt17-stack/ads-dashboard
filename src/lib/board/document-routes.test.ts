@@ -20,6 +20,9 @@ const PDF = source("src", "app", "api", "c", "[slug]", "board", "pdf", "route.ts
 const RENDER = source("src", "app", "render", "[token]", "page.tsx");
 const SHARED = source("src", "app", "r", "[token]", "page.tsx");
 const SHARE_ROUTE = source("src", "app", "api", "clients", "[id]", "share", "route.ts");
+const EMAIL_ROUTE = source("src", "app", "api", "clients", "[id]", "share", "email", "route.ts");
+const BOARD_PAGE = source("src", "app", "c", "[slug]", "board", "page.tsx");
+const SHARE_DIALOG = source("src", "components", "ShareReport.tsx");
 
 function inOrder(text: string, needles: string[]) {
   let at = -1;
@@ -95,5 +98,34 @@ describe("a shared board", () => {
 
   it("lists a board link as a board, ahead of the report reading", () => {
     inOrder(SHARE_ROUTE, ["const board = boardForLink(link);", "const view = viewForLink(link);"]);
+  });
+});
+
+describe("an emailed board", () => {
+  it("🔴 freezes the STORED board, never widgets from the request, with its metric definitions", () => {
+    expect(EMAIL_ROUTE).toMatch(/board = \(await getBoard\(client\.id, context\.starter\)\)\.widgets/);
+    expect(EMAIL_ROUTE).not.toMatch(/body[^\n]*\.widgets|widgets: rawWidgets|\bwidgets\b[^\n]*= body/);
+    expect(EMAIL_ROUTE).toContain("boardMetrics: context?.metrics");
+  });
+
+  it("is refused when empty, before anything is minted or sent", () => {
+    inOrder(EMAIL_ROUTE, ["if (board.length === 0)", "mintShareLink(", "sendForAgency("]);
+  });
+
+  it("says board in the email, and warms reach for the link after the response", () => {
+    expect(EMAIL_ROUTE).toContain('document: isBoard ? "board" : "report"');
+    inOrder(EMAIL_ROUTE, ["needsReach(board, context?.registry)", "after(async () =>", "ensurePeriodReach(client, window)"]);
+  });
+
+  it("is offered in the board's share dialog, which sends no widgets of its own", () => {
+    expect(SHARE_DIALOG).not.toMatch(/\{!isBoard && \(\s*<div[^>]*\n?[^>]*role="tablist"/);
+    const send = SHARE_DIALOG.slice(SHARE_DIALOG.indexOf("async function sendByEmail"));
+    expect(send).toContain('...(isBoard ? { document: "board" } : { platform: period.platform, view: chosen })');
+  });
+});
+
+describe("the board page", () => {
+  it("🔴 downloads the PDF in one click, where a renderer is configured", () => {
+    expect(BOARD_PAGE).toMatch(/isPdfConfigured\(\) && \(\s*<DownloadPdfButton[\s\S]*?kind="board"/);
   });
 });

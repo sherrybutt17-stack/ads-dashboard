@@ -88,6 +88,14 @@ describe("board editor accessibility", () => {
     }
   });
 
+  it("🔴 offers Rename first in the menu, and beside the drag handle, wherever a name is shown", () => {
+    expect(MENU.indexOf('label: "Rename…"')).toBeLessThan(MENU.indexOf('label: "Settings…"'));
+    expect(EDITOR).toContain("hidden={{ rename: !hasName(w) }}");
+    expect(EDITOR).toMatch(/\{hasName\(w\) && \(\s*<button[\s\S]*?aria-label=\{`Rename \$\{title\}`\}/);
+    // A rename is part of the draft, saved with the board like every other change.
+    expect(EDITOR).toMatch(/function rename\(\) \{[\s\S]*?change\(/);
+  });
+
   it("repeats every arrangement in the menu, in words", () => {
     for (const label of ["Move up", "Move down", "Move left", "Move right", "Wider", "Narrower", "Taller", "Shorter"]) {
       expect(MENU).toContain(`label: "${label}"`);

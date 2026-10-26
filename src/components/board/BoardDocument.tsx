@@ -108,7 +108,15 @@ export async function BoardDocument({
   const lastSynced = syncedAt?.toISOString() ?? null;
 
   return (
-    <div style={accentVars}>
+    /*
+     * `paper`: always the light theme, as the PDF is — see the rule in
+     * globals.css. The page ground is painted here too, so a reader whose
+     * dashboard is dark does not see the sheets floating on a dark page.
+     */
+    <div
+      className="paper flex min-h-full flex-1 flex-col"
+      style={{ ...accentVars, background: "var(--surface-page)" }}
+    >
       {/* This document's sheets are landscape; the report's stay portrait. */}
       <style>{"@page { size: 11in 8.5in; margin: 0; }"}</style>
       {toolbar}

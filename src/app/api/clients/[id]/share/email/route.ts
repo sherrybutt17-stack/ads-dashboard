@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { z } from "zod";
 import { getSessionUser, requireClient, agencyGuard } from "@/lib/auth";
-import { isValidDateKey } from "@/lib/dates";
+import { isValidDateKey, windowFromKeys } from "@/lib/dates";
 import { record as recordAudit, requestContext } from "@/lib/audit";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -26,6 +26,11 @@ import { getClientBranding } from "@/lib/branding-store";
 import { getUserById } from "@/lib/users";
 import { AD_PLATFORMS } from "@/lib/platforms";
 import { appBaseUrl } from "@/lib/app-url";
+import { loadBoardContext } from "@/lib/board/context";
+import { getBoard } from "@/lib/board/store";
+import { needsReach } from "@/lib/board/document";
+import { ensurePeriodReach } from "@/lib/board/reach";
+import type { BoardWidget } from "@/lib/board/types";
 
 export const runtime = "nodejs";
 
@@ -39,6 +44,13 @@ export const runtime = "nodejs";
  * an address supplied in the request, for whatever range the operator is
  * looking at. Both mint a share link and both render through
  * `renderReportEmail`, deliberately — see the note on forking below.
+ *
+ * ── A board, too ──────────────────────────────────────────────────────
+ *
+ * `document: "board"` emails the client's board instead of the report: frozen
+ * as STORED, read here exactly as the copy-link route reads it — never widgets
+ * from the body, which would let a request publish a board nobody built under
+ * this client's name. Its link opens the same sheets as the board's PDF.
  *
  * ── 🔴 A LINK, never an attachment ────────────────────────────────────
  *
@@ -89,6 +101,8 @@ const Body = z
     message: z.string().max(500).optional(),
     // Sections and headline numbers; validated by `normalizeView` below.
     view: z.unknown().optional(),
+    /** The client's board instead of the report. A board has no view or platform of its own. */
+    document: z.literal("board").optional(),
   })
   .strict()
   .refine((b) => b.rangeStart <= b.rangeEnd, {
@@ -161,6 +175,10 @@ export async function POST(
   }
   const { to, rangeStart, rangeEnd, platform, label, ttlDays, password, message, view: rawView } =
     parsed.data;
+  const isBoard = parsed.data.document === "board";
+  if (isBoard && rawView !== undefined && rawView !== null) {
+    return NextResponse.json({ error: "A board has no sections to choose." }, { status: 400 });
+  }
 
   const session = await getSessionUser();
 
@@ -198,6 +216,23 @@ export async function POST(
     );
   }
 
+  /*
+   * 🔴 The board AS STORED — the copy-link route's rule. Read before anything
+   * is minted, so an empty board is refused rather than emailed.
+   */
+  let board: BoardWidget[] | null = null;
+  let context: Awaited<ReturnType<typeof loadBoardContext>> | null = null;
+  if (isBoard) {
+    context = await loadBoardContext(client);
+    board = (await getBoard(client.id, context.starter)).widgets;
+    if (board.length === 0) {
+      return NextResponse.json(
+        { error: "This board is empty. Add a widget before sharing it." },
+        { status: 400 },
+      );
+    }
+  }
+
   let token: string;
   let row: Awaited<ReturnType<typeof mintShareLink>>["row"];
   try {
@@ -205,7 +240,8 @@ export async function POST(
       clientId: client.id,
       rangeStart,
       rangeEnd,
-      platform,
+      // A board covers every platform at once; the column is unused for it.
+      platform: isBoard ? "meta" : platform,
       /*
        * Labelled with the first recipient by default. This is what makes
        * "revoke the one the CFO got" an answerable question later — the share
@@ -217,6 +253,8 @@ export async function POST(
       password: password || null,
       createdBy: session?.userId ?? null,
       view,
+      board,
+      boardMetrics: context?.metrics,
     }));
   } catch (err) {
     console.error("[share-email] mint failed:", err);
@@ -246,6 +284,7 @@ export async function POST(
     skipped: [],
     message: message ?? null,
     senderName: sender?.name ?? null,
+    document: isBoard ? "board" : "report",
   });
 
   let providerId: string | null = null;
@@ -331,14 +370,26 @@ export async function POST(
       // Whose address it left from: the agency's domain, or ours.
       via,
       hasMessage: Boolean(message?.trim()),
-      sections: view?.sections ?? null,
-      includesLeadNames: view ? viewHasPersonal(view) : false,
+      ...(board
+        ? { document: "board", widgets: board.length }
+        : { sections: view?.sections ?? null, includesLeadNames: view ? viewHasPersonal(view) : false }),
       rangeStart: row.rangeStart,
       rangeEnd: row.rangeEnd,
       expiresAt: row.expiresAt.toISOString(),
       hasPassword: Boolean(row.passwordHash),
     },
   });
+
+  /*
+   * The shared page reads reach from the cache only — the copy-link route's
+   * reason — so ask Meta now, after the response.
+   */
+  if (board && needsReach(board, context?.registry)) {
+    const window = windowFromKeys(row.rangeStart, row.rangeEnd, client.timezone);
+    after(async () => {
+      await ensurePeriodReach(client, window);
+    });
+  }
 
   return NextResponse.json({
     id: row.id,

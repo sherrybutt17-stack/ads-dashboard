@@ -13,9 +13,11 @@ import {
   type ReactNode,
 } from "react";
 import { Icon } from "@/components/Icon";
-import { MAX_WIDGETS, WIDGET_KINDS, defaultTitle } from "@/lib/board/catalog";
+import { Modal } from "@/components/Modal";
+import { MAX_WIDGETS, TITLE_MAX, WIDGET_KINDS, defaultTitle } from "@/lib/board/catalog";
 import { BOARD_COLS, firstFreeSlot, limitsFor, moveBy, normalizeLayout, resizeBy } from "@/lib/board/grid";
 import { encodeWidgetQuery, widgetQueryKey, widgetQueryOf } from "@/lib/board/query";
+import { hasName, renamed } from "@/lib/board/rename";
 import type { Registry } from "@/lib/board/registry";
 import type { BoardData, BoardWidget, WidgetBox, WidgetData, WidgetQuery } from "@/lib/board/types";
 import type { AdPlatform } from "@/lib/platforms";
@@ -122,6 +124,8 @@ export function BoardEditor({
     return out;
   });
   const [picker, setPicker] = useState<{ editing: BoardWidget | null; seq: number } | null>(null);
+  /** The widget being renamed, and the name typed so far. */
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [confirm, setConfirm] = useState<"reset" | "leave" | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [said, setSaid] = useState("");
@@ -220,6 +224,8 @@ export function BoardEditor({
   function act(action: WidgetAction, w: BoardWidget) {
     const title = titleOf(w, reg);
     switch (action) {
+      case "rename":
+        return setRenaming({ id: w.id, name: title });
       case "settings":
         seq.current += 1;
         return setPicker({ editing: w, seq: seq.current });
@@ -254,6 +260,25 @@ export function BoardEditor({
         addButton.current?.focus();
         return;
     }
+  }
+
+  function rename() {
+    if (!renaming) return;
+    const w = widgets.find((x) => x.id === renaming.id);
+    setRenaming(null);
+    if (!w) return;
+    const next = renamed(w, renaming.name, reg);
+    if ((next.title ?? "") === (w.title ?? "")) return;
+    change(
+      widgets.map((x) => (x.id === w.id ? next : x)),
+      next.title ? `Renamed ${titleOf(w, reg)} to ${next.title}.` : `${titleOf(next, reg)} is back on its automatic name.`,
+    );
+    // Back to the widget the name belongs to.
+    setTimeout(() => {
+      document
+        .querySelector<HTMLElement>(`[data-widget-id="${w.id}"] .board-drag-handle`)
+        ?.focus({ preventScroll: true });
+    }, 0);
   }
 
   function disabledFor(w: BoardWidget): Partial<Record<WidgetAction, boolean>> {
@@ -536,7 +561,28 @@ export function BoardEditor({
                       >
                         <Icon name="grip" size={14} />
                       </button>
-                      <WidgetMenu title={title} onAction={(a) => act(a, w)} disabled={disabledFor(w)} />
+                      {hasName(w) && (
+                        <button
+                          type="button"
+                          onClick={() => act("rename", w)}
+                          aria-label={`Rename ${title}`}
+                          title="Rename"
+                          className="pointer-events-auto inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-xs)] border transition-colors hover:bg-[var(--surface-2)]"
+                          style={{
+                            background: "var(--surface-raised)",
+                            borderColor: "var(--border-strong)",
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          <Icon name="pencil" size={13} />
+                        </button>
+                      )}
+                      <WidgetMenu
+                        title={title}
+                        onAction={(a) => act(a, w)}
+                        disabled={disabledFor(w)}
+                        hidden={{ rename: !hasName(w) }}
+                      />
                     </div>
                   </div>
                 );
@@ -549,6 +595,54 @@ export function BoardEditor({
           {said}
         </div>
       </main>
+
+      {renaming &&
+        (() => {
+          const w = widgets.find((x) => x.id === renaming.id);
+          const automatic = w ? defaultTitle(widgetQueryOf(w), reg) : "";
+          return (
+            <Modal open onClose={() => setRenaming(null)} title="Rename widget">
+              <form
+                className="flex flex-col gap-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  rename();
+                }}
+              >
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium" style={{ color: "var(--text-secondary)" }}>
+                    Name
+                  </span>
+                  <input
+                    autoFocus
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="field w-full"
+                    value={renaming.name}
+                    maxLength={TITLE_MAX}
+                    placeholder={automatic}
+                    onChange={(e) => setRenaming({ ...renaming, name: e.target.value })}
+                  />
+                  <span className="text-[11.5px]" style={{ color: "var(--text-muted)" }}>
+                    Shown on the board, in print, in the PDF and on share links. Leave it empty to use the
+                    automatic name, “{automatic}”.
+                  </span>
+                </label>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="btn-ghost rounded-[var(--radius-sm)] px-3 py-2 text-[13px]"
+                    onClick={() => setRenaming(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn-accent">
+                    Rename
+                  </button>
+                </div>
+              </form>
+            </Modal>
+          );
+        })()}
 
       {picker && (
         <WidgetPicker

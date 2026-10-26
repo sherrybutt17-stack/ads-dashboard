@@ -29,6 +29,8 @@ import { ShareReport } from "@/components/ShareReport";
 import { DataState, PipeNotice } from "@/components/DataState";
 import { Icon } from "@/components/Icon";
 import { BoardGrid } from "@/components/board/BoardGrid";
+import { DownloadPdfButton } from "@/components/report/DownloadPdfButton";
+import { isPdfConfigured } from "@/lib/report/pdf";
 import { StatsProvider } from "@/components/board/StatsContext";
 
 export const dynamic = "force-dynamic";
@@ -208,6 +210,18 @@ export default async function ClientBoardPage({
                   platforms={[]}
                   today={todayKey(client.timezone)}
                   kind="board"
+                />
+              )}
+              {/* The board as a file, in one click: the same sheets the print
+                  view shows and a share link opens. Without a renderer, the
+                  print view's Print → Save as PDF makes the same file. */}
+              {board.widgets.length > 0 && isPdfConfigured() && (
+                <DownloadPdfButton
+                  slug={slug}
+                  start={window.startKey}
+                  end={window.endKey}
+                  kind="board"
+                  size="header"
                 />
               )}
               <Link

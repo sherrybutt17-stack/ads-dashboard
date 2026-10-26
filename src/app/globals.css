@@ -2307,6 +2307,109 @@ html {
 }
 
 /* ================================================================== *
+ * Paper: a board document is always light.
+ *
+ * The share link, the print view and the PDF are one document
+ * (`BoardDocument`), and the PDF is light — it is printed. So the link
+ * and the preview are light too, whatever theme the reader's dashboard is
+ * in: someone who switched the dashboard to dark would otherwise open a
+ * shared board that looked nothing like the PDF of it.
+ *
+ * Every token either dark block changes, at its light value, declared on
+ * the document's own wrapper — so its subtree inherits light from here,
+ * not dark from <html>. Kept equal to `:root` by paper-theme.test.ts.
+ * ================================================================== */
+.paper {
+  color-scheme: light;
+  --surface-page: #e9e9ee;
+  --surface-app: #f5f5f9;
+  --surface-1: #ffffff;
+  --surface-2: #efeff2;
+  --surface-raised: #ffffff;
+  --card-bg: #ffffff;
+  --text-primary: #16161d;
+  --text-secondary: #5c5c68;
+  --text-muted: #666673;
+  --text-faint: #a1a1ad;
+  --border: #e6e6ee;
+  --border-strong: #d8d8e2;
+  --gridline: #eeeef3;
+  --baseline: #d8d8e2;
+  --violet-100: #eceafe;
+  --violet-400: #7a6cf6;
+  --violet-500: #5b4cf0;
+  --violet-600: #4a3bd8;
+  --lime: #bef264;
+  --lime-hover: #aee245;
+  --lime-on: #16161d;
+  --tint-violet: #ece9fe;
+  --tint-blue: #dfedff;
+  --tint-mint: #d4f5e5;
+  --tint-amber: #fbeecd;
+  --ink: #1e1e24;
+  --navy: #17182b;
+  --navy-raised: #22233a;
+  --periwinkle: #8da4de;
+  --periwinkle-soft: #b9c8ee;
+  --butter: #e9d79a;
+  --blush: #efa3a3;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-1-ink: #2469bd;
+  --series-2-ink: #b94212;
+  --series-3-ink: #137854;
+  --series-4-ink: #8e6100;
+  --series-5-ink: #c82361;
+  --series-6-ink: #007b00;
+  --series-7-ink: #4a3aa7;
+  --series-8-ink: #ce211f;
+  --seq-250: #86b6ef;
+  --seq-300: #6da7ec;
+  --seq-350: #5598e7;
+  --seq-400: #3987e5;
+  --seq-450: #2a78d6;
+  --seq-500: #256abf;
+  --seq-550: #1c5cab;
+  --seq-600: #184f95;
+  --status-good: #137a13;
+  --status-warning: #8a5f00;
+  --status-serious: #a8481f;
+  --status-critical: #a92626;
+  --status-ink: #ffffff;
+  --good-bg: #dcf5e9;
+  --good-ink: #14714a;
+  --warn-bg: #fbf0d6;
+  --warn-ink: #8a6a12;
+  --warn-line: #e8cfa0;
+  --bad-bg: #fbe2e2;
+  --bad-ink: #a3262a;
+  --bad-line: #f0cacb;
+  --delta-good: #006300;
+  --delta-bad: #c0392b;
+  --shadow-frame: 0 30px 80px -20px rgba(20, 20, 40, 0.18);
+  --shadow-card: 0 1px 2px rgba(16, 16, 30, 0.04);
+  --shadow-sm: 0 1px 2px rgba(16, 16, 30, 0.05);
+  --shadow-elevated: 0 12px 32px -8px rgba(20, 20, 40, 0.2);
+  --shadow-overlay: 0 8px 16px -6px rgba(20, 20, 40, 0.14), 0 32px 80px -20px rgba(20, 20, 40, 0.3);
+  --shadow-violet: 0 8px 20px -6px rgba(91, 76, 240, 0.55);
+  --shadow-row: 0 8px 24px -8px rgba(91, 76, 240, 0.6);
+  --overlay-scrim: rgba(22, 22, 29, 0.42);
+  --card-highlight: none;
+  --page-glow: transparent;
+  --accent-glow: var(--shadow-violet);
+  --glass-edge: rgba(24, 24, 44, 0.12);
+  --glass-sheen: rgba(255, 255, 255, 0.8);
+  --glass-shadow: 0 10px 30px -18px rgba(20, 20, 40, 0.34);
+  --accent-ink: #ffffff;
+}
+
+/* ================================================================== *
  * Print
  *
  * Two failures this block exists to prevent, both of which produce a
@@ -2345,7 +2448,8 @@ html {
    */
   :root,
   :root[data-theme="dark"],
-  :root[data-theme="light"] {
+  :root[data-theme="light"],
+  .paper {
     color-scheme: light;
 
     --surface-page: #ffffff;

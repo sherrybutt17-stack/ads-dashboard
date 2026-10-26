@@ -50,6 +50,8 @@ export interface ReportEmailInput {
   message?: string | null;
   /** Who sent it, named in the body so the recipient knows why it arrived. */
   senderName?: string | null;
+  /** What the link opens — the report (the default) or the client's board. */
+  document?: "report" | "board";
 }
 
 function escapeHtml(s: string): string {
@@ -96,9 +98,11 @@ export function renderReportEmail(input: ReportEmailInput): {
     .replace(/\s+/g, " ")
     .trim();
 
+  const board = input.document === "board";
+  const noun = board ? "performance board" : "report";
   const intro = senderName
-    ? `${senderName} shared your report for ${period.label}.`
-    : `Your report for ${period.label} is ready.`;
+    ? `${senderName} shared your ${noun} for ${period.label}.`
+    : `Your ${noun} for ${period.label} is ready.`;
 
   const gap =
     skipped.length > 0
@@ -144,7 +148,7 @@ export function renderReportEmail(input: ReportEmailInput): {
           : ""
       }
       <tr><td style="padding:20px 28px 4px 28px;">
-        <a href="${escapeHtml(url)}" style="display:inline-block;background:#1a1a18;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:11px 20px;border-radius:8px;">View the report</a>
+        <a href="${escapeHtml(url)}" style="display:inline-block;background:#1a1a18;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:11px 20px;border-radius:8px;">${board ? "View the board" : "View the report"}</a>
       </td></tr>
       <tr><td style="padding:16px 28px 28px 28px;">
         <p style="margin:0;font-size:12px;line-height:1.6;color:#6b6a65;">This link works until ${escapeHtml(day(expiresAt))}.</p>

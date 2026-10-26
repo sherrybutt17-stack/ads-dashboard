@@ -3,8 +3,9 @@ import { roleLabel } from "@/lib/roles";
 import type { SessionPayload } from "@/lib/session";
 
 /**
- * The sidebar for one client's pages — Overview, Board, Report, Present,
- * Connections, Branding, and the way back out.
+ * The sidebar for one client's pages — Overview, Board, Present,
+ * Connections, Branding, and the way back out. (Report is hidden; see the
+ * note in the list.)
  *
  * ── Why this is not built at each call site ───────────────────────────
  *
@@ -37,7 +38,6 @@ export function ClientSideNav({
   brandingEditable,
   warnConnections = false,
   boardHref = `/c/${slug}/board`,
-  reportHref = `/c/${slug}/report`,
   presentHref = `/c/${slug}/present`,
 }: {
   slug: string;
@@ -50,6 +50,7 @@ export function ClientSideNav({
   /** A dot on Connections when a pipe is broken rather than merely quiet. */
   warnConnections?: boolean;
   boardHref?: string;
+  /** Unused while the Report item is hidden (below); kept so callers need no change to bring it back. */
   reportHref?: string;
   presentHref?: string;
 }) {
@@ -57,12 +58,18 @@ export function ClientSideNav({
     { href: `/c/${slug}`, exact: true, label: "Overview", icon: "chart" },
     // Prefix-matched, so the editor at /board/edit keeps it lit.
     { href: boardHref, match: `/c/${slug}/board`, label: "Board", icon: "board" },
-    {
-      href: reportHref,
-      match: `/c/${slug}/report`,
-      label: "Report",
-      icon: "fileText",
-    },
+    /*
+     * Hidden on request (27 Oct 2026): the Board is the client document now.
+     * The report page itself stays — emailed and shared report links open it.
+     * To bring the item back, restore this entry and destructure `reportHref`.
+     *
+     * {
+     *   href: reportHref,
+     *   match: `/c/${slug}/report`,
+     *   label: "Report",
+     *   icon: "fileText",
+     * },
+     */
     {
       href: presentHref,
       match: `/c/${slug}/present`,

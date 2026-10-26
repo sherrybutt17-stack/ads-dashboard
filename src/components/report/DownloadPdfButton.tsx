@@ -28,6 +28,7 @@ export function DownloadPdfButton({
   platform = "meta",
   view,
   kind = "report",
+  size = "toolbar",
 }: {
   slug: string;
   start: string;
@@ -37,6 +38,8 @@ export function DownloadPdfButton({
   view?: string;
   /** Which document: the report, or the client's board (every platform at once). */
   kind?: "report" | "board";
+  /** "header" matches the board page's header buttons; "toolbar" the print views' smaller row. */
+  size?: "toolbar" | "header";
 }) {
   const [state, setState] = useState<"idle" | "working" | "failed">("idle");
   const [problem, setProblem] = useState<string | null>(null);
@@ -91,14 +94,18 @@ export function DownloadPdfButton({
         onClick={download}
         disabled={state === "working"}
         aria-busy={state === "working"}
-        className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-1.5 text-[12px] font-medium transition-colors hover:opacity-80 disabled:opacity-60"
+        className={
+          size === "header"
+            ? "inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--surface-2)] disabled:opacity-60"
+            : "inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border px-3 py-1.5 text-[12px] font-medium transition-colors hover:opacity-80 disabled:opacity-60"
+        }
         style={{
           borderColor: "var(--border-strong)",
-          background: "var(--surface-1)",
+          background: size === "header" ? undefined : "var(--surface-1)",
           color: "var(--text-secondary)",
         }}
       >
-        <Icon name="download" size={12} />
+        <Icon name="download" size={size === "header" ? 13 : 12} />
         {state === "working" ? "Rendering…" : "Download PDF"}
       </button>
       {problem && (

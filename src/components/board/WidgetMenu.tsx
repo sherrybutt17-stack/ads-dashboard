@@ -5,6 +5,7 @@ import { Icon } from "@/components/Icon";
 import { Portal, useDismissOnEscape } from "@/components/Modal";
 
 export type WidgetAction =
+  | "rename"
   | "settings"
   | "duplicate"
   | "up"
@@ -20,6 +21,7 @@ export type WidgetAction =
 type Item = { action: WidgetAction; label: string } | "divider";
 
 const ITEMS: readonly Item[] = [
+  { action: "rename", label: "Rename…" },
   { action: "settings", label: "Settings…" },
   { action: "duplicate", label: "Duplicate" },
   "divider",
@@ -55,12 +57,15 @@ export function WidgetMenu({
   title,
   onAction,
   disabled = {},
+  hidden = {},
 }: {
   /** The widget's title, for the button's and menu's names. */
   title: string;
   onAction: (action: WidgetAction) => void;
   /** Actions that would do nothing — at the grid's edge, at the size limit. */
   disabled?: Partial<Record<WidgetAction, boolean>>;
+  /** Actions this widget does not have at all — a text block or a logo shows no name to rename. */
+  hidden?: Partial<Record<WidgetAction, boolean>>;
 }) {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const open = at !== null;
@@ -143,7 +148,7 @@ export function WidgetMenu({
             className="glass-panel fixed z-50 flex flex-col rounded-[var(--radius)] p-1"
             style={{ top: at.top, left: at.left, width: PANEL_W }}
           >
-            {ITEMS.map((item, i) =>
+            {ITEMS.filter((item) => item === "divider" || !hidden[item.action]).map((item, i) =>
               item === "divider" ? (
                 <div
                   key={`d${i}`}

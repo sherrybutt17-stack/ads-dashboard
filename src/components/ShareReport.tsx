@@ -98,8 +98,8 @@ export function ShareReport({
   today: string;
   /**
    * What the link opens. "board" freezes the client's board as it is now —
-   * every platform on it, so there is no platform or section choice — and is
-   * copy-only: the emailed version carries the report.
+   * every platform on it, so there is no platform or section choice. Copied or
+   * emailed, like the report: the emailed link opens the same board.
    */
   kind?: "report" | "board";
 }) {
@@ -213,8 +213,8 @@ export function ShareReport({
           to: recipients,
           rangeStart: period.start,
           rangeEnd: period.end,
-          platform: period.platform,
-          view: chosen,
+          // The board is frozen on the server from what is stored, as for a copied link.
+          ...(isBoard ? { document: "board" } : { platform: period.platform, view: chosen }),
           label: label.trim() || undefined,
           ttlDays,
           password: password.trim() || undefined,
@@ -377,7 +377,6 @@ export function ShareReport({
                 button at the bottom changes what it does, and a control that
                 changes an action's meaning should not be a detail.
               */}
-              {!isBoard && (
               <div
                 className="flex gap-1 rounded-[var(--radius-sm)] border p-1"
                 style={{ borderColor: "var(--border)" }}
@@ -413,7 +412,6 @@ export function ShareReport({
                   </button>
                 ))}
               </div>
-              )}
 
               {mode === "email" && emailCfg && !emailCfg.configured && (
                 <p
@@ -499,7 +497,11 @@ export function ShareReport({
                     <textarea
                       value={message}
                       onChange={(e) => setMessage(e.target.value)}
-                      placeholder="Here's the July report ahead of Thursday's call."
+                      placeholder={
+                        isBoard
+                          ? "Here's the July board ahead of Thursday's call."
+                          : "Here's the July report ahead of Thursday's call."
+                      }
                       maxLength={500}
                       rows={3}
                       className={INPUT_CLASS}

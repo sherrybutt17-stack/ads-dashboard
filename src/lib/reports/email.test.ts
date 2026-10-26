@@ -260,6 +260,17 @@ describe("renderReportEmail", () => {
     skipped: [],
   };
 
+  it("names a board as a board, and leaves the report's wording alone", () => {
+    const board = renderReportEmail({ ...base, document: "board" });
+    expect(board.text).toContain("Your performance board for July 2026 is ready");
+    expect(board.html).toContain(">View the board</a>");
+    const report = renderReportEmail(base);
+    expect(report.text).toContain("Your report for July 2026 is ready");
+    expect(report.html).toContain(">View the report</a>");
+    // The subject never changes with it: client and period only.
+    expect(board.subject).toBe(report.subject);
+  });
+
   describe("the ad-hoc personal message", () => {
     const withMsg = (message: string, senderName?: string) =>
       renderReportEmail({ ...base, message, senderName });
