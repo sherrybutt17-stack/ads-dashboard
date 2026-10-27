@@ -17,6 +17,7 @@ import {
 } from "@/lib/ghl/signature";
 import { normalizeWebhookPayload } from "@/lib/ghl/normalize";
 import { alertNewLead } from "@/lib/alerts/send";
+import { headersToStore } from "@/lib/webhook-headers";
 
 /**
  * App-level GHL webhook receiver.
@@ -82,12 +83,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const headers: Record<string, string> = {};
-  req.headers.forEach((v, k) => {
-    if (k.startsWith("x-") || k === "content-type" || k === "user-agent") {
-      headers[k] = v;
-    }
-  });
+  const headers = headersToStore(req.headers);
 
   const evt = normalizeWebhookPayload(payload);
   const eventType = evt.eventType;

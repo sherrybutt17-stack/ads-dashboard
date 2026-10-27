@@ -7,6 +7,7 @@ import {
   finalizeEvent,
   touchClientWebhookMarkers,
 } from "@/lib/ghl/process";
+import { headersToStore } from "@/lib/webhook-headers";
 
 /**
  * GHL webhook receiver.
@@ -48,13 +49,7 @@ export async function POST(
     payload = { __unparsed: rawText };
   }
 
-  const headers: Record<string, string> = {};
-  req.headers.forEach((v, k) => {
-    // Skip hop-by-hop noise; keep anything that helps diagnose a sender.
-    if (k.startsWith("x-") || k === "content-type" || k === "user-agent") {
-      headers[k] = v;
-    }
-  });
+  const headers = headersToStore(req.headers);
 
   const [client] = await db
     .select()
