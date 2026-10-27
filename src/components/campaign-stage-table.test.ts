@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CampaignStageTable } from "./CampaignStageTable";
+import { AdsetPanel, CampaignStageTable } from "./CampaignStageTable";
 import { buildCampaignStages } from "@/lib/metrics/campaign-stages";
 import type { CanonicalStage } from "@/db/schema";
 
@@ -61,5 +61,50 @@ describe("CampaignStageTable with ad sets", () => {
     );
     expect(plain).toContain("Search");
     expect(plain).not.toMatch(/ad sets?/i);
+  });
+});
+
+describe("the ad set panel under an opened campaign", () => {
+  const stages = buildCampaignStages(
+    [{ campaignId: "c1", campaignName: "EVO - Seattle", platform: "meta", spend: 600, impressions: 0, linkClicks: 0 }],
+    new Map([["c1", { new_lead: 4 }]]),
+    { mappedStages: new Set<CanonicalStage>(["new_lead"]), lag: {} },
+    {
+      rows: [{ campaignId: "c1", adsetId: "a1", adsetName: "EVO - FB (18-60)", spend: 500, impressions: 20000, linkClicks: 250, metaLeads: 10 }],
+      funnel: new Map([["c1", new Map([["a1", { new_lead: 3 }]])]]),
+      adLevelSince: "2026-09-25",
+    },
+  );
+  const html = renderToStaticMarkup(
+    createElement(AdsetPanel, {
+      campaignName: "EVO - Seattle",
+      adsets: stages.rows[0].adsets!,
+      color: "#e66",
+      option: stages.options[0],
+      currency: "USD",
+    }),
+  );
+
+  it("has its own headings — delivery first, then the CRM stage", () => {
+    for (const h of ["1 ad set", "Spend", "Impr.", "Link clicks", "CTR", "CPC", "CPM", "Meta leads", "Cost / Meta lead", "Leads", "CP-Lead"]) {
+      expect(html).toContain(`>${h}</th>`);
+    }
+  });
+
+  it("shows each ad set's own rates", () => {
+    expect(html).toContain(">EVO - FB (18-60)<");
+    expect(html).toContain(">20,000<"); // impressions
+    expect(html).toContain(">1.25%<"); // CTR 250 / 20,000
+    expect(html).toContain(">$2.00<"); // CPC 500 / 250
+    expect(html).toContain(">$25.00<"); // CPM 500 / 20,000 × 1,000
+    expect(html).toContain(">$50.00<"); // per Meta lead, 500 / 10
+  });
+
+  it("keeps the remainder honest: its spend and leads, no invented rates", () => {
+    // $100 of campaign spend and 1 CRM lead have no ad set.
+    expect(html).toContain("Not split by ad set");
+    const rest = html.slice(html.indexOf("Not split by ad set"));
+    expect(rest).toContain(">$100.00<");
+    expect(rest.match(/>–</g)?.length).toBe(8); // impr, clicks, CTR, CPC, CPM, Meta leads, cost/Meta lead, CP-Lead
   });
 });

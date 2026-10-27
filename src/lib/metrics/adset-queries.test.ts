@@ -52,13 +52,13 @@ beforeAll(async () => {
   harness = await createTestDb();
   q = await import("./queries");
   await run(`
-    INSERT INTO fb_daily_metrics (client_id, date, level, meta_campaign_id, meta_adset_id, meta_ad_id, adset_name, spend) VALUES
-      ('${CLIENT_A}', '2026-09-20', 'ad', 'c1', 'a1', 'ad1', 'Broad', 10),
-      ('${CLIENT_A}', '2026-10-02', 'ad', 'c1', 'a1', 'ad1', 'Broad', 100),
-      ('${CLIENT_A}', '2026-10-03', 'ad', 'c1', 'a1', 'ad2', 'Broad', 50),
-      ('${CLIENT_A}', '2026-10-03', 'ad', 'c1', 'a2', 'ad3', 'Lookalike', 25),
-      ('${CLIENT_A}', '2026-10-03', 'campaign', 'c1', '', '', NULL, 175),
-      ('${CLIENT_B}', '2026-10-03', 'ad', 'c9', 'a9', 'ad9', 'Not ours', 999);
+    INSERT INTO fb_daily_metrics (client_id, date, level, meta_campaign_id, meta_adset_id, meta_ad_id, adset_name, spend, impressions, link_clicks, leads_total) VALUES
+      ('${CLIENT_A}', '2026-09-20', 'ad', 'c1', 'a1', 'ad1', 'Broad', 10, 100, 1, 0),
+      ('${CLIENT_A}', '2026-10-02', 'ad', 'c1', 'a1', 'ad1', 'Broad', 100, 4000, 40, 2),
+      ('${CLIENT_A}', '2026-10-03', 'ad', 'c1', 'a1', 'ad2', 'Broad', 50, 1000, 10, 1),
+      ('${CLIENT_A}', '2026-10-03', 'ad', 'c1', 'a2', 'ad3', 'Lookalike', 25, 500, 5, 0),
+      ('${CLIENT_A}', '2026-10-03', 'campaign', 'c1', '', '', NULL, 175, 5500, 55, 3),
+      ('${CLIENT_B}', '2026-10-03', 'ad', 'c9', 'a9', 'ad9', 'Not ours', 999, 9, 9, 9);
   `);
   await lead(1, CLIENT_A, "c1", "a1", ["new_lead", "appointment_booked"]);
   await lead(2, CLIENT_A, "c1", "a1");
@@ -75,8 +75,8 @@ describe("getAdsetBreakdown", () => {
   it("sums each ad set's ads in the window — this client, ad rows only", async () => {
     const { rows, adLevelSince } = await q.getAdsetBreakdown(CLIENT_A, OCTOBER);
     expect([...rows].sort((a, b) => a.adsetId.localeCompare(b.adsetId))).toEqual([
-      { campaignId: "c1", adsetId: "a1", adsetName: "Broad", spend: 150 },
-      { campaignId: "c1", adsetId: "a2", adsetName: "Lookalike", spend: 25 },
+      { campaignId: "c1", adsetId: "a1", adsetName: "Broad", spend: 150, impressions: 5000, linkClicks: 50, metaLeads: 3 },
+      { campaignId: "c1", adsetId: "a2", adsetName: "Lookalike", spend: 25, impressions: 500, linkClicks: 5, metaLeads: 0 },
     ]);
     // The first ad-level day at all, not the window's — it explains a gap.
     expect(adLevelSince).toBe("2026-09-20");

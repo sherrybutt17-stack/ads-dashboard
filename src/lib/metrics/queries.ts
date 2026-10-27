@@ -1303,6 +1303,10 @@ export interface AdsetRow {
   adsetId: string;
   adsetName: string | null;
   spend: number;
+  impressions: number;
+  linkClicks: number;
+  /** Meta's own lead count (`leads_total`), not the CRM's. */
+  metaLeads: number;
 }
 
 /**
@@ -1324,6 +1328,9 @@ export async function getAdsetBreakdown(
         adsetId: fbDailyMetrics.metaAdsetId,
         adsetName: sql<string | null>`MAX(${fbDailyMetrics.adsetName})`,
         spend: sql<string>`COALESCE(SUM(${fbDailyMetrics.spend}), 0)`,
+        impressions: sql<string>`COALESCE(SUM(${fbDailyMetrics.impressions}), 0)`,
+        linkClicks: sql<string>`COALESCE(SUM(${fbDailyMetrics.linkClicks}), 0)`,
+        metaLeads: sql<string>`COALESCE(SUM(${fbDailyMetrics.leadsTotal}), 0)`,
       })
       .from(fbDailyMetrics)
       .where(
@@ -1347,6 +1354,9 @@ export async function getAdsetBreakdown(
       adsetId: r.adsetId,
       adsetName: r.adsetName ?? null,
       spend: Number(r.spend) || 0,
+      impressions: Number(r.impressions) || 0,
+      linkClicks: Number(r.linkClicks) || 0,
+      metaLeads: Number(r.metaLeads) || 0,
     })),
     adLevelSince: first?.since ?? null,
   };

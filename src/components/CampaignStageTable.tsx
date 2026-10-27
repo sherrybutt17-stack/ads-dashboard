@@ -3,12 +3,13 @@
 import { Fragment, useState } from "react";
 import {
   COST_STAGES,
+  type AdsetStageRow,
   type CampaignStages,
   type CostAtStage,
   type CostStage,
   type StageOption,
 } from "@/lib/metrics/campaign-stages";
-import { formatCurrency, formatNumber, DASH } from "@/lib/metrics/compute";
+import { costPer, formatCurrency, formatNumber, formatPercent, DASH } from "@/lib/metrics/compute";
 import { DataState, PipeNotice, type DataStateProps } from "@/components/DataState";
 import { CategoryChart } from "@/components/CategoryChart";
 
@@ -267,7 +268,10 @@ export function CampaignStageTable({
                     : [];
                   return (
                     <Fragment key={key}>
-                    <tr className="row-hover border-t" style={{ borderColor: "var(--border)" }}>
+                    <tr
+                      className="row-hover border-t"
+                      style={{ borderColor: "var(--border)", background: isOpen ? "var(--surface-2)" : undefined }}
+                    >
                       <td
                         className="px-4 py-3"
                         style={{
@@ -333,47 +337,19 @@ export function CampaignStageTable({
                         options={data.options}
                       />
                     </tr>
-                    {adsets.map((a) => (
-                      <tr
-                        key={`${key}:${a.adsetId || "rest"}`}
-                        className="border-t"
-                        style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
-                      >
-                        <td
-                          className="py-2 pr-4 pl-14"
-                          style={{ color: a.adsetId ? "var(--text-secondary)" : "var(--text-muted)" }}
-                        >
-                          <span className="flex items-center gap-2">
-                            <span
-                              className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                              style={{ background: colorFor(r.campaignId), opacity: a.adsetId ? 1 : 0.4 }}
-                              aria-hidden="true"
-                            />
-                            <span
-                              className="max-w-[240px] truncate"
-                              title={
-                                a.adsetId
-                                  ? a.adsetName
-                                  : "Spend from days without ad-level detail, and leads whose ad set wasn't recorded"
-                              }
-                            >
-                              {a.adsetName}
-                            </span>
-                          </span>
+                    {isOpen && (
+                      <tr>
+                        <td colSpan={5} className="px-4 pt-1 pb-4" style={{ background: "var(--surface-2)" }}>
+                          <AdsetPanel
+                            campaignName={r.campaignName}
+                            adsets={adsets}
+                            color={colorFor(r.campaignId)}
+                            option={option}
+                            currency={currency}
+                          />
                         </td>
-                        <StageCells
-                          spend={a.spend}
-                          counts={a.counts}
-                          cost={a.costs[stage]}
-                          stage={stage}
-                          max={max}
-                          color={colorFor(r.campaignId)}
-                          currency={currency}
-                          options={data.options}
-                          child
-                        />
                       </tr>
-                    ))}
+                    )}
                     </Fragment>
                   );
                 })}
@@ -432,7 +408,6 @@ function StageCells({
   color,
   currency,
   options,
-  child = false,
 }: {
   spend: number;
   counts: Record<CostStage, number>;
@@ -442,19 +417,17 @@ function StageCells({
   color: string;
   currency: string;
   options: StageOption[];
-  child?: boolean;
 }) {
-  const py = child ? "py-2" : "py-3";
   return (
     <>
-      <td className={`tnum px-4 ${py} text-right`} style={{ color: "var(--text-secondary)" }}>
+      <td className="tnum px-4 py-3 text-right" style={{ color: "var(--text-secondary)" }}>
         {formatCurrency(spend, currency)}
       </td>
 
       {/* Every stage at once, so the selector de-emphasises rather than hides —
           and the drop-off is where the eye already is. */}
       <td
-        className={`tnum hidden px-4 ${py} whitespace-nowrap md:table-cell`}
+        className="tnum hidden px-4 py-3 whitespace-nowrap md:table-cell"
         style={{ color: "var(--text-muted)" }}
       >
         {COST_STAGES.map((s, i) => (
@@ -473,10 +446,10 @@ function StageCells({
         ))}
       </td>
 
-      <td className={`px-4 ${py}`}>
+      <td className="px-4 py-3">
         <span className="flex items-center gap-2">
           <span
-            className={`tnum w-6 shrink-0 text-right ${child ? "font-medium" : "font-semibold"}`}
+            className="tnum w-6 shrink-0 text-right font-semibold"
             style={{ color: "var(--text-primary)" }}
           >
             {formatNumber(counts[stage])}
@@ -489,14 +462,13 @@ function StageCells({
                   max > 0 ? Math.max((counts[stage] / max) * 100, counts[stage] > 0 ? 4 : 0) : 0
                 }%`,
                 background: color,
-                opacity: child ? 0.6 : 1,
               }}
             />
           </span>
         </span>
       </td>
 
-      <td className={`tnum px-4 ${py} text-right`}>
+      <td className="tnum px-4 py-3 text-right">
         {cost.cost === null ? (
           <span style={{ color: "var(--text-muted)" }}>{DASH}</span>
         ) : (
@@ -515,5 +487,103 @@ function StageCells({
         )}
       </td>
     </>
+  );
+}
+
+/** `n / d`, or null when it is undefined. */
+const ratio = (n: number | null, d: number | null) => (n !== null && d ? n / d : null);
+
+/**
+ * A campaign's ad sets, opened under it.
+ *
+ * Its own table, not rows squeezed into the campaign's columns: an ad set is
+ * judged on what it delivered — spend, reach into the feed, clicks, Meta's
+ * leads — before the CRM stage the table is showing, and those need their own
+ * headings. Framed in the campaign's colour so it reads as belonging to the
+ * row above.
+ */
+export function AdsetPanel({
+  campaignName,
+  adsets,
+  color,
+  option,
+  currency,
+}: {
+  campaignName: string;
+  adsets: AdsetStageRow[];
+  color: string;
+  option: StageOption;
+  currency: string;
+}) {
+  const count = adsets.filter((a) => a.adsetId).length;
+  const head = "px-3 py-2 text-[10.5px] font-semibold tracking-wider uppercase whitespace-nowrap";
+  const num = "tnum px-3 py-2 text-right whitespace-nowrap";
+  const money = (v: number | null) => (v === null ? DASH : formatCurrency(v, currency));
+  return (
+    <div
+      className="overflow-hidden rounded-[var(--radius-sm)] border"
+      style={{ borderColor: "var(--border)", borderLeftColor: color, borderLeftWidth: 3, background: "var(--surface-1)" }}
+    >
+      <div className="table-scroll">
+        <table className="w-full text-[12.5px]" aria-label={`Ad sets in ${campaignName}`}>
+          <thead>
+            <tr style={{ color: "var(--text-muted)" }}>
+              <th className={`${head} text-left`}>
+                {count} ad set{count === 1 ? "" : "s"}
+              </th>
+              <th className={`${head} text-right`}>Spend</th>
+              <th className={`${head} text-right`}>Impr.</th>
+              <th className={`${head} text-right`}>Link clicks</th>
+              <th className={`${head} text-right`}>CTR</th>
+              <th className={`${head} text-right`}>CPC</th>
+              <th className={`${head} text-right`}>CPM</th>
+              <th className={`${head} text-right`}>Meta leads</th>
+              <th className={`${head} text-right`}>Cost / Meta lead</th>
+              <th className={`${head} text-right`}>{option.label}</th>
+              <th className={`${head} text-right`}>{option.costLabel}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {adsets.map((a) => {
+              const rest = a.adsetId === "";
+              const cpm = ratio(a.spend, a.impressions);
+              return (
+                <tr
+                  key={a.adsetId || "rest"}
+                  className="border-t"
+                  style={{ borderColor: "var(--border)", color: rest ? "var(--text-muted)" : "var(--text-secondary)" }}
+                >
+                  <td className="px-3 py-2 text-left">
+                    <span
+                      className="block max-w-[260px] truncate"
+                      style={{ color: rest ? "var(--text-muted)" : "var(--text-primary)", fontStyle: rest ? "italic" : undefined }}
+                      title={
+                        rest
+                          ? "Spend from days without ad-level detail, and leads whose ad set wasn't recorded"
+                          : a.adsetName
+                      }
+                    >
+                      {a.adsetName}
+                    </span>
+                  </td>
+                  <td className={num} style={{ color: "var(--text-primary)" }}>{formatCurrency(a.spend, currency)}</td>
+                  <td className={num}>{formatNumber(a.impressions)}</td>
+                  <td className={num}>{formatNumber(a.linkClicks)}</td>
+                  <td className={num}>{formatPercent(ratio(a.linkClicks, a.impressions))}</td>
+                  <td className={num}>{money(a.linkClicks === null ? null : costPer(a.spend, a.linkClicks))}</td>
+                  <td className={num}>{money(cpm === null ? null : cpm * 1000)}</td>
+                  <td className={num}>{formatNumber(a.metaLeads)}</td>
+                  <td className={num}>{money(a.metaLeads === null ? null : costPer(a.spend, a.metaLeads))}</td>
+                  <td className={num} style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                    {formatNumber(a.counts[option.stage])}
+                  </td>
+                  <td className={num}>{money(a.costs[option.stage].cost)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

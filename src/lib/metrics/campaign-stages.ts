@@ -119,6 +119,10 @@ export interface AdsetStageRow {
   adsetId: string;
   adsetName: string;
   spend: number;
+  /** Meta delivery, summed from the ad rows. Null on the remainder: no ad rows behind it. */
+  impressions: number | null;
+  linkClicks: number | null;
+  metaLeads: number | null;
   counts: Record<CostStage, number>;
   costs: Record<CostStage, CostAtStage>;
 }
@@ -128,6 +132,9 @@ export interface AdsetInput {
   adsetId: string;
   adsetName: string | null;
   spend: number;
+  impressions?: number;
+  linkClicks?: number;
+  metaLeads?: number;
 }
 
 export interface StageOption {
@@ -307,6 +314,9 @@ function splitByAdset(
       adsetId: id,
       adsetName: spendRow?.adsetName || `Ad set ${id}`,
       spend,
+      impressions: spendRow?.impressions ?? 0,
+      linkClicks: spendRow?.linkClicks ?? 0,
+      metaLeads: spendRow?.metaLeads ?? 0,
       counts: n,
       costs: Object.fromEntries(
         COST_STAGES.map((s) => [s, { cost: costPer(spend, n[s]), conversions: n[s] }]),
@@ -324,6 +334,9 @@ function splitByAdset(
       adsetId: "",
       adsetName: "Not split by ad set",
       spend: restSpend,
+      impressions: null,
+      linkClicks: null,
+      metaLeads: null,
       counts: rest,
       costs: Object.fromEntries(
         COST_STAGES.map((s) => [s, { cost: null, conversions: rest[s] }]),
