@@ -3312,7 +3312,7 @@ function BackfillStep({
             color: "var(--text-secondary)",
           }}
         >
-          {busy === "meta_adlevel_backfill" ? "Importing ad-level detail…" : "Import ad-level detail (creative cards)"}
+          {busy === "meta_adlevel_backfill" ? "Importing ad-level detail…" : "Import ad-level detail (creative cards, ad sets)"}
         </button>
         {(busy === "meta_adlevel_backfill" || busy === "tiktok_adlevel_backfill" || busy === "ghl_backfill") && (
           <button

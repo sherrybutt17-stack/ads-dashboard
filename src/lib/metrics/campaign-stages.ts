@@ -100,6 +100,34 @@ export interface CampaignStageRow {
   /** Ledger counts for this campaign, paid-filtered, for the window. */
   counts: Record<CostStage, number>;
   costs: Record<CostStage, CostAtStage>;
+  /**
+   * Its ad sets (Meta), plus the remainder they can't account for. Empty or
+   * absent when not split — absent in data built before ad sets existed.
+   */
+  adsets?: AdsetStageRow[];
+}
+
+/**
+ * One ad set inside a campaign row.
+ *
+ * `adsetId` is "" for the remainder: campaign spend from days before ad-level
+ * history, and leads whose ad set wasn't recorded. Its costs are always null —
+ * that spend and those leads describe different things, so dividing one by
+ * the other would print a cost nobody paid.
+ */
+export interface AdsetStageRow {
+  adsetId: string;
+  adsetName: string;
+  spend: number;
+  counts: Record<CostStage, number>;
+  costs: Record<CostStage, CostAtStage>;
+}
+
+export interface AdsetInput {
+  campaignId: string;
+  adsetId: string;
+  adsetName: string | null;
+  spend: number;
 }
 
 export interface StageOption {
@@ -131,6 +159,16 @@ export interface CampaignStages {
   options: StageOption[];
   /** Deepest stage with any conversions — the sensible default to show. */
   defaultStage: CostStage;
+  /**
+   * Whether rows were split by ad set, and how completely. Null when they
+   * weren't (Google, TikTok, or the ad-set queries failed).
+   */
+  adsetSplit: {
+    /** First day of ad-level history, `YYYY-MM-DD`. */
+    since: string | null;
+    /** Some campaign spend in the window has no ad set to go to. */
+    partial: boolean;
+  } | null;
 }
 
 /** Median days from lead to each deeper stage, measured over the window. */
@@ -160,7 +198,14 @@ export function buildCampaignStages(
     mappedStages: ReadonlySet<CanonicalStage>;
     lag: StageLag;
   },
+  /** Meta only: spend and funnel per ad set, keyed campaign → ad set. */
+  adsets?: {
+    rows: readonly AdsetInput[];
+    funnel: ReadonlyMap<string, ReadonlyMap<string, Partial<Record<CanonicalStage, number>>>>;
+    adLevelSince: string | null;
+  },
 ): CampaignStages {
+  let partial = false;
   const rows: CampaignStageRow[] = campaigns.map((c) => {
     const funnel = funnelByCampaign.get(c.campaignId) ?? {};
     const counts: Record<CostStage, number> = { ...EMPTY_COUNTS };
@@ -178,6 +223,11 @@ export function buildCampaignStages(
       costs[stage] = { cost: costPer(c.spend, n), conversions: n };
     }
 
+    const split = adsets && c.campaignId ? splitByAdset(c, counts, adsets) : [];
+    // Spend no ad set accounts for — including a campaign with no ad-level rows at all.
+    const covered = split.reduce((t, a) => t + (a.adsetId ? a.spend : 0), 0);
+    if (adsets && c.campaignId && c.spend - covered > Math.max(1, c.spend * 0.005)) partial = true;
+
     return {
       campaignId: c.campaignId,
       campaignName: c.campaignName,
@@ -187,6 +237,7 @@ export function buildCampaignStages(
       linkClicks: c.linkClicks,
       counts,
       costs,
+      adsets: split,
     };
   });
 
@@ -219,5 +270,65 @@ export function buildCampaignStages(
    */
   const withData = [...options].reverse().find((o) => o.total > 0);
 
-  return { rows, options, defaultStage: withData?.stage ?? "new_lead" };
+  return {
+    rows,
+    options,
+    defaultStage: withData?.stage ?? "new_lead",
+    adsetSplit: adsets ? { since: adsets.adLevelSince, partial } : null,
+  };
+}
+
+const countsOf = (funnel: Partial<Record<CanonicalStage, number>>) =>
+  Object.fromEntries(COST_STAGES.map((s) => [s, funnel[s] ?? 0])) as Record<CostStage, number>;
+
+/**
+ * A campaign's ad sets, plus what they can't account for.
+ *
+ * The remainder row exists so the ad sets always add up to the campaign: spend
+ * from before ad-level history (beyond a 0.5% rounding allowance) and leads
+ * whose ad set wasn't recorded. A campaign whose ad sets account for
+ * everything gets no remainder; one with no ad-set data at all gets nothing.
+ */
+function splitByAdset(
+  c: CampaignInput,
+  counts: Record<CostStage, number>,
+  adsets: NonNullable<Parameters<typeof buildCampaignStages>[3]>,
+): AdsetStageRow[] {
+  const spendRows = adsets.rows.filter((r) => r.campaignId === c.campaignId);
+  const funnel = adsets.funnel.get(c.campaignId);
+  const ids = new Set([...spendRows.map((r) => r.adsetId), ...(funnel?.keys() ?? [])]);
+  if (ids.size === 0) return [];
+
+  const out: AdsetStageRow[] = [...ids].map((id) => {
+    const spendRow = spendRows.find((r) => r.adsetId === id);
+    const spend = spendRow?.spend ?? 0;
+    const n = countsOf(funnel?.get(id) ?? {});
+    return {
+      adsetId: id,
+      adsetName: spendRow?.adsetName || `Ad set ${id}`,
+      spend,
+      counts: n,
+      costs: Object.fromEntries(
+        COST_STAGES.map((s) => [s, { cost: costPer(spend, n[s]), conversions: n[s] }]),
+      ) as Record<CostStage, CostAtStage>,
+    };
+  });
+
+  const spendGap = c.spend - out.reduce((t, a) => t + a.spend, 0);
+  const restSpend = spendGap > Math.max(1, c.spend * 0.005) ? spendGap : 0;
+  const rest = Object.fromEntries(
+    COST_STAGES.map((s) => [s, Math.max(0, counts[s] - out.reduce((t, a) => t + a.counts[s], 0))]),
+  ) as Record<CostStage, number>;
+  if (restSpend > 0 || COST_STAGES.some((s) => rest[s] > 0)) {
+    out.push({
+      adsetId: "",
+      adsetName: "Not split by ad set",
+      spend: restSpend,
+      counts: rest,
+      costs: Object.fromEntries(
+        COST_STAGES.map((s) => [s, { cost: null, conversions: rest[s] }]),
+      ) as Record<CostStage, CostAtStage>,
+    });
+  }
+  return out;
 }

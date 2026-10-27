@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   COST_STAGES,
   type CampaignStages,
+  type CostAtStage,
   type CostStage,
   type StageOption,
 } from "@/lib/metrics/campaign-stages";
@@ -88,6 +89,22 @@ export function CampaignStageTable({
   const colorFor = (id: string) =>
     id ? (campaignColors[id] ?? "var(--series-1)") : "var(--text-muted)";
 
+  /*
+   * Ad sets open under their campaign, one campaign at a time or all at once.
+   * The chart stays per campaign: ad sets are the drill-down, not the summary.
+   */
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const splittable = (r: (typeof rows)[number]) => (r.adsets ?? []).some((a) => a.adsetId !== "");
+  const anySplit = rows.some(splittable);
+  const allOpen = anySplit && rows.filter(splittable).every((r) => open.has(r.campaignId));
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   return (
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2 px-5 py-4">
@@ -106,6 +123,18 @@ export function CampaignStageTable({
           </p>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+        {anySplit && (
+          <button
+            type="button"
+            onClick={() => setOpen(allOpen ? new Set() : new Set(rows.filter(splittable).map((r) => r.campaignId)))}
+            aria-pressed={allOpen}
+            className="rounded-[var(--radius-sm)] px-2.5 py-1 text-[12px] font-medium"
+            style={{ background: "var(--surface-2)", color: "var(--text-secondary)" }}
+          >
+            {allOpen ? "Hide ad sets" : "Show all ad sets"}
+          </button>
+        )}
         <div
           className="flex flex-wrap gap-1 rounded-[var(--radius-sm)] p-0.5"
           style={{ background: "var(--surface-2)" }}
@@ -147,6 +176,7 @@ export function CampaignStageTable({
               </button>
             );
           })}
+        </div>
         </div>
       </div>
 
@@ -225,13 +255,19 @@ export function CampaignStageTable({
               </thead>
               <tbody>
                 {rows.map((r) => {
-                  const cost = r.costs[stage];
+                  const key = r.campaignId || "unattributed";
+                  const canOpen = splittable(r);
+                  const isOpen = canOpen && open.has(r.campaignId);
+                  const adsets = isOpen
+                    ? [...(r.adsets ?? [])].sort((a, b) =>
+                        // Same order as the campaigns, the remainder always last.
+                        a.adsetId === "" ? 1 : b.adsetId === "" ? -1 :
+                        b.counts[stage] - a.counts[stage] || b.spend - a.spend,
+                      )
+                    : [];
                   return (
-                    <tr
-                      key={r.campaignId || "unattributed"}
-                      className="row-hover border-t"
-                      style={{ borderColor: "var(--border)" }}
-                    >
+                    <Fragment key={key}>
+                    <tr className="row-hover border-t" style={{ borderColor: "var(--border)" }}>
                       <td
                         className="px-4 py-3"
                         style={{
@@ -241,6 +277,29 @@ export function CampaignStageTable({
                         }}
                       >
                         <span className="flex items-center gap-2">
+                          {anySplit &&
+                            (canOpen ? (
+                              <button
+                                type="button"
+                                onClick={() => toggle(r.campaignId)}
+                                aria-expanded={isOpen}
+                                aria-label={`${isOpen ? "Hide" : "Show"} ad sets for ${r.campaignName}`}
+                                className="-ml-1 grid h-5 w-5 shrink-0 place-items-center rounded-[var(--radius-xs)]"
+                                style={{ color: "var(--text-muted)" }}
+                              >
+                                <svg
+                                  width="10"
+                                  height="10"
+                                  viewBox="0 0 10 10"
+                                  aria-hidden="true"
+                                  style={{ transform: isOpen ? "rotate(90deg)" : undefined, transition: "transform 120ms" }}
+                                >
+                                  <path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              </button>
+                            ) : (
+                              <span className="-ml-1 inline-block h-5 w-5 shrink-0" aria-hidden="true" />
+                            ))}
                           <span
                             className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
                             style={{ background: colorFor(r.campaignId) }}
@@ -263,94 +322,59 @@ export function CampaignStageTable({
                           </span>
                         </span>
                       </td>
-
-                      <td
-                        className="tnum px-4 py-3 text-right"
-                        style={{ color: "var(--text-secondary)" }}
+                      <StageCells
+                        spend={r.spend}
+                        counts={r.counts}
+                        cost={r.costs[stage]}
+                        stage={stage}
+                        max={max}
+                        color={colorFor(r.campaignId)}
+                        currency={currency}
+                        options={data.options}
+                      />
+                    </tr>
+                    {adsets.map((a) => (
+                      <tr
+                        key={`${key}:${a.adsetId || "rest"}`}
+                        className="border-t"
+                        style={{ borderColor: "var(--border)", background: "var(--surface-2)" }}
                       >
-                        {formatCurrency(r.spend, currency)}
-                      </td>
-
-                      {/* Every stage at once, so the selector de-emphasises
-                          rather than hides — and the drop-off is where the eye
-                          already is. */}
-                      <td
-                        className="tnum hidden px-4 py-3 whitespace-nowrap md:table-cell"
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        {COST_STAGES.map((s, i) => (
-                          <span key={s}>
-                            {i > 0 && <span aria-hidden> › </span>}
+                        <td
+                          className="py-2 pr-4 pl-14"
+                          style={{ color: a.adsetId ? "var(--text-secondary)" : "var(--text-muted)" }}
+                        >
+                          <span className="flex items-center gap-2">
                             <span
-                              style={{
-                                color:
-                                  s === stage
-                                    ? "var(--text-primary)"
-                                    : "var(--text-muted)",
-                                fontWeight: s === stage ? 600 : 400,
-                              }}
+                              className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{ background: colorFor(r.campaignId), opacity: a.adsetId ? 1 : 0.4 }}
+                              aria-hidden="true"
+                            />
+                            <span
+                              className="max-w-[240px] truncate"
                               title={
-                                data.options.find((o) => o.stage === s)!.label
+                                a.adsetId
+                                  ? a.adsetName
+                                  : "Spend from days without ad-level detail, and leads whose ad set wasn't recorded"
                               }
                             >
-                              {formatNumber(r.counts[s])}
+                              {a.adsetName}
                             </span>
                           </span>
-                        ))}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <span className="flex items-center gap-2">
-                          <span
-                            className="tnum w-6 shrink-0 text-right font-semibold"
-                            style={{ color: "var(--text-primary)" }}
-                          >
-                            {formatNumber(r.counts[stage])}
-                          </span>
-                          <span className="hidden min-w-0 flex-1 sm:block">
-                            <span
-                              className="block h-2 rounded-full"
-                              style={{
-                                width: `${
-                                  max > 0
-                                    ? Math.max(
-                                        (r.counts[stage] / max) * 100,
-                                        r.counts[stage] > 0 ? 4 : 0,
-                                      )
-                                    : 0
-                                }%`,
-                                background: colorFor(r.campaignId),
-                              }}
-                            />
-                          </span>
-                        </span>
-                      </td>
-
-                      <td className="tnum px-4 py-3 text-right">
-                        {cost.cost === null ? (
-                          <span style={{ color: "var(--text-muted)" }}>{DASH}</span>
-                        ) : (
-                          <>
-                            <span style={{ color: "var(--text-primary)" }}>
-                              {formatCurrency(cost.cost, currency)}
-                            </span>
-                            {/*
-                             * 🔴 The denominator, always, never suppressed.
-                             * "$1,345" from one deal is not a rate; "$1,345
-                             * from 1" is a fact the reader can weigh. Hiding
-                             * small samples instead would make the tool look
-                             * like it knows less than it does.
-                             */}
-                            <span
-                              className="ml-1.5 text-[11px]"
-                              style={{ color: "var(--text-muted)" }}
-                            >
-                              from {formatNumber(cost.conversions)}
-                            </span>
-                          </>
-                        )}
-                      </td>
-                    </tr>
+                        </td>
+                        <StageCells
+                          spend={a.spend}
+                          counts={a.counts}
+                          cost={a.costs[stage]}
+                          stage={stage}
+                          max={max}
+                          color={colorFor(r.campaignId)}
+                          currency={currency}
+                          options={data.options}
+                          child
+                        />
+                      </tr>
+                    ))}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -367,9 +391,129 @@ export function CampaignStageTable({
               </p>
             )}
             <LagNote option={option} unmeasurable={lagUnmeasurable} />
+            {data.adsetSplit && rows.some((r) => r.campaignId) && (
+              data.adsetSplit.since === null ? (
+                <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
+                  No ad-level history yet, so campaigns can&rsquo;t be split by ad set. Import
+                  ad-level detail on the Connections page to add it.
+                </p>
+              ) : data.adsetSplit.partial ? (
+                <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
+                  Some spend isn&rsquo;t split by ad set — days without ad-level detail (it starts{" "}
+                  {dayLabel(data.adsetSplit.since)}). Import ad-level detail on the Connections page
+                  to fill them in.
+                </p>
+              ) : null
+            )}
           </div>
         </>
       )}
     </section>
+  );
+}
+
+/** `2026-10-03` → `Oct 3, 2026`, without a timezone shift. */
+function dayLabel(key: string): string {
+  return new Date(`${key}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** Spend, funnel, selected stage and its cost — the same four cells for a campaign or an ad set. */
+function StageCells({
+  spend,
+  counts,
+  cost,
+  stage,
+  max,
+  color,
+  currency,
+  options,
+  child = false,
+}: {
+  spend: number;
+  counts: Record<CostStage, number>;
+  cost: CostAtStage;
+  stage: CostStage;
+  max: number;
+  color: string;
+  currency: string;
+  options: StageOption[];
+  child?: boolean;
+}) {
+  const py = child ? "py-2" : "py-3";
+  return (
+    <>
+      <td className={`tnum px-4 ${py} text-right`} style={{ color: "var(--text-secondary)" }}>
+        {formatCurrency(spend, currency)}
+      </td>
+
+      {/* Every stage at once, so the selector de-emphasises rather than hides —
+          and the drop-off is where the eye already is. */}
+      <td
+        className={`tnum hidden px-4 ${py} whitespace-nowrap md:table-cell`}
+        style={{ color: "var(--text-muted)" }}
+      >
+        {COST_STAGES.map((s, i) => (
+          <span key={s}>
+            {i > 0 && <span aria-hidden> › </span>}
+            <span
+              style={{
+                color: s === stage ? "var(--text-primary)" : "var(--text-muted)",
+                fontWeight: s === stage ? 600 : 400,
+              }}
+              title={options.find((o) => o.stage === s)!.label}
+            >
+              {formatNumber(counts[s])}
+            </span>
+          </span>
+        ))}
+      </td>
+
+      <td className={`px-4 ${py}`}>
+        <span className="flex items-center gap-2">
+          <span
+            className={`tnum w-6 shrink-0 text-right ${child ? "font-medium" : "font-semibold"}`}
+            style={{ color: "var(--text-primary)" }}
+          >
+            {formatNumber(counts[stage])}
+          </span>
+          <span className="hidden min-w-0 flex-1 sm:block">
+            <span
+              className="block h-2 rounded-full"
+              style={{
+                width: `${
+                  max > 0 ? Math.max((counts[stage] / max) * 100, counts[stage] > 0 ? 4 : 0) : 0
+                }%`,
+                background: color,
+                opacity: child ? 0.6 : 1,
+              }}
+            />
+          </span>
+        </span>
+      </td>
+
+      <td className={`tnum px-4 ${py} text-right`}>
+        {cost.cost === null ? (
+          <span style={{ color: "var(--text-muted)" }}>{DASH}</span>
+        ) : (
+          <>
+            <span style={{ color: "var(--text-primary)" }}>{formatCurrency(cost.cost, currency)}</span>
+            {/*
+             * 🔴 The denominator, always, never suppressed. "$1,345" from one
+             * deal is not a rate; "$1,345 from 1" is a fact the reader can
+             * weigh. Hiding small samples instead would make the tool look like
+             * it knows less than it does.
+             */}
+            <span className="ml-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+              from {formatNumber(cost.conversions)}
+            </span>
+          </>
+        )}
+      </td>
+    </>
   );
 }

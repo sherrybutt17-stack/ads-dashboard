@@ -1298,6 +1298,107 @@ export async function getFunnelByCampaign(
   return out;
 }
 
+export interface AdsetRow {
+  campaignId: string;
+  adsetId: string;
+  adsetName: string | null;
+  spend: number;
+}
+
+/**
+ * Per-ad-set spend for a window — Meta only, summed from the ad-level rows.
+ *
+ * No separate ad-set pull: every ad row already carries its ad set's id and
+ * name, and spend is additive. What the ad rows cannot do is reach back before
+ * ad-level history began, so `adLevelSince` comes with them — a window opening
+ * earlier has campaign spend no ad set accounts for, and the table says why.
+ */
+export async function getAdsetBreakdown(
+  clientId: string,
+  window: DateWindow,
+): Promise<{ rows: AdsetRow[]; adLevelSince: string | null }> {
+  const [rows, [first]] = await Promise.all([
+    db
+      .select({
+        campaignId: fbDailyMetrics.metaCampaignId,
+        adsetId: fbDailyMetrics.metaAdsetId,
+        adsetName: sql<string | null>`MAX(${fbDailyMetrics.adsetName})`,
+        spend: sql<string>`COALESCE(SUM(${fbDailyMetrics.spend}), 0)`,
+      })
+      .from(fbDailyMetrics)
+      .where(
+        and(
+          eq(fbDailyMetrics.clientId, clientId),
+          gte(fbDailyMetrics.date, window.startKey),
+          lte(fbDailyMetrics.date, window.endKey),
+          eq(fbDailyMetrics.level, "ad"),
+          sql`${fbDailyMetrics.metaAdsetId} <> ''`,
+        ),
+      )
+      .groupBy(fbDailyMetrics.metaCampaignId, fbDailyMetrics.metaAdsetId),
+    db
+      .select({ since: sql<string | null>`MIN(${fbDailyMetrics.date})::text` })
+      .from(fbDailyMetrics)
+      .where(and(eq(fbDailyMetrics.clientId, clientId), eq(fbDailyMetrics.level, "ad"))),
+  ]);
+  return {
+    rows: rows.map((r) => ({
+      campaignId: r.campaignId,
+      adsetId: r.adsetId,
+      adsetName: r.adsetName ?? null,
+      spend: Number(r.spend) || 0,
+    })),
+    adLevelSince: first?.since ?? null,
+  };
+}
+
+/**
+ * Every funnel stage per (campaign, ad set) — `getFunnelByCampaign`, one level
+ * down, Meta only. Keyed campaign → ad set → stage.
+ *
+ * Only leads carrying both ids: a lead with a campaign but no recorded ad set
+ * is the difference between its campaign's count and its ad sets' sum, and the
+ * table shows it as such rather than inventing an ad set for it.
+ */
+export async function getFunnelByAdset(
+  clientId: string,
+  window: DateWindow,
+  filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
+): Promise<Map<string, Map<string, Partial<Record<CanonicalStage, number>>>>> {
+  const paid = platformLeadPredicate("meta", filter);
+  const clauses: SQL[] = [
+    sql`st.client_id = ${clientId}`,
+    sql`st.to_canonical IS NOT NULL`,
+    sql`st.changed_at >= ${window.startUtc}`,
+    sql`st.changed_at < ${window.endUtc}`,
+    sql`c.meta_campaign_id <> ''`,
+    sql`c.meta_adset_id <> ''`,
+  ];
+  if (paid) clauses.push(paid);
+
+  type Row = { campaign_id: string; adset_id: string; stage: string; count: number };
+  const rows = await db.execute<Row>(sql`
+    SELECT c.meta_campaign_id AS campaign_id,
+           c.meta_adset_id AS adset_id,
+           st.to_canonical AS stage,
+           COUNT(DISTINCT st.opportunity_id)::int AS count
+    FROM stage_transitions st
+    JOIN contacts c ON c.id = st.contact_id
+    WHERE ${sql.join(clauses, sql` AND `)}
+    GROUP BY c.meta_campaign_id, c.meta_adset_id, st.to_canonical
+  `);
+
+  const out = new Map<string, Map<string, Partial<Record<CanonicalStage, number>>>>();
+  for (const r of resultRows<Row>(rows)) {
+    const adsets = out.get(r.campaign_id) ?? new Map<string, Partial<Record<CanonicalStage, number>>>();
+    const entry = adsets.get(r.adset_id) ?? {};
+    entry[r.stage as CanonicalStage] = Number(r.count) || 0;
+    adsets.set(r.adset_id, entry);
+    out.set(r.campaign_id, adsets);
+  }
+  return out;
+}
+
 /**
  * Campaigns holding at least one ad Meta still reports as learning.
  *

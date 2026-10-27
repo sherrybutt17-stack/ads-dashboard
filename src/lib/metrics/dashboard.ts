@@ -69,6 +69,8 @@ import {
   getProvisionalCoverage,
   getAdDataDays,
   getFunnelByCampaign,
+  getFunnelByAdset,
+  getAdsetBreakdown,
   getLearningCampaigns,
   getStageLag,
   getMappedStages,
@@ -496,6 +498,8 @@ export async function loadDashboard(
     leadSourceCohort,
     forecastResult,
     duplicateCandidates,
+    adsetBreakdown,
+    funnelByAdset,
   ] = await Promise.all([
     // Only these two pass `includeRevenue` — they feed the headline tiles and
     // the deltas. The trailing-window and month-on-month rows below do not
@@ -623,6 +627,22 @@ export async function loadDashboard(
           return { rows: [], total: 0 };
         })
       : Promise.resolve({ rows: [], total: 0 }),
+    /*
+     * The campaign table's ad sets — Meta only, and guarded: a failure leaves
+     * the campaigns unsplit rather than costing the page.
+     */
+    platform === "meta"
+      ? getAdsetBreakdown(client.id, range).catch((err) => {
+          console.error("[dashboard] ad set spend unavailable:", err);
+          return null;
+        })
+      : Promise.resolve(null),
+    platform === "meta"
+      ? getFunnelByAdset(client.id, range, filter).catch((err) => {
+          console.error("[dashboard] ad set funnel unavailable:", err);
+          return null;
+        })
+      : Promise.resolve(null),
   ]);
 
   /*
@@ -772,10 +792,14 @@ export async function loadDashboard(
    * whole reason `getFunnelByCampaign` returns every stage rather than the one
    * keep/kill happened to need.
    */
-  const campaignStages = buildCampaignStages(campaigns, funnelByCampaign, {
-    mappedStages,
-    lag: stageLag.lag,
-  });
+  const campaignStages = buildCampaignStages(
+    campaigns,
+    funnelByCampaign,
+    { mappedStages, lag: stageLag.lag },
+    adsetBreakdown && funnelByAdset
+      ? { rows: adsetBreakdown.rows, funnel: funnelByAdset, adLevelSince: adsetBreakdown.adLevelSince }
+      : undefined,
+  );
 
   /*
    * `asOf` is now, not the end of the selected range, and the distinction is

@@ -272,3 +272,78 @@ describe("the stage list", () => {
     expect(b.options.find((o) => o.stage === "closed_won")!.total).toBe(5);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * Ad sets
+ * ------------------------------------------------------------------ */
+
+describe("ad sets under each campaign", () => {
+  const nested = (
+    entries: Record<string, Record<string, Partial<Record<CanonicalStage, number>>>>,
+  ) => new Map(Object.entries(entries).map(([c, a]) => [c, new Map(Object.entries(a))]));
+  const withAdsets = (
+    campaigns: CampaignInput[],
+    f: Map<string, Partial<Record<CanonicalStage, number>>>,
+    adsets: Parameters<typeof buildCampaignStages>[3],
+  ) => buildCampaignStages(campaigns, f, { mappedStages: ALL_MAPPED, lag: {} }, adsets);
+
+  it("splits spend, counts and cost by ad set — and adds up to the campaign", () => {
+    const b = withAdsets(
+      [campaign({ campaignId: "c1", spend: 300 })],
+      funnel({ c1: { new_lead: 6, appointment_booked: 2 } }),
+      {
+        rows: [
+          { campaignId: "c1", adsetId: "a1", adsetName: "Lookalike", spend: 200 },
+          { campaignId: "c1", adsetId: "a2", adsetName: "Broad", spend: 100 },
+        ],
+        funnel: nested({ c1: { a1: { new_lead: 4, appointment_booked: 2 }, a2: { new_lead: 2 } } }),
+        adLevelSince: "2026-10-03",
+      },
+    );
+    const [a1, a2] = b.rows[0].adsets!;
+    expect(a1).toMatchObject({ adsetName: "Lookalike", spend: 200, counts: { new_lead: 4, appointment_booked: 2 } });
+    expect(a1.costs.new_lead).toEqual({ cost: 50, conversions: 4 });
+    expect(a2.costs.new_lead).toEqual({ cost: 50, conversions: 2 });
+    expect(b.rows[0].adsets).toHaveLength(2); // nothing left over → no remainder row
+    expect(b.adsetSplit).toEqual({ since: "2026-10-03", partial: false });
+  });
+
+  it("shows what the ad sets can't account for — spend before ad-level history, leads with no ad set", () => {
+    const b = withAdsets(
+      [campaign({ campaignId: "c1", spend: 500 })],
+      funnel({ c1: { new_lead: 5 } }),
+      {
+        rows: [{ campaignId: "c1", adsetId: "a1", adsetName: "Broad", spend: 300 }],
+        funnel: nested({ c1: { a1: { new_lead: 3 } } }),
+        adLevelSince: "2026-10-03",
+      },
+    );
+    const rest = b.rows[0].adsets!.find((a) => a.adsetId === "")!;
+    expect(rest).toMatchObject({ adsetName: "Not split by ad set", spend: 200, counts: { new_lead: 2 } });
+    // Different things on each side of the division, so never a cost.
+    expect(rest.costs.new_lead).toEqual({ cost: null, conversions: 2 });
+    expect(b.adsetSplit).toEqual({ since: "2026-10-03", partial: true });
+  });
+
+  it("ignores rounding, splits nothing it has no data for, and says so", () => {
+    const b = withAdsets(
+      [campaign({ campaignId: "c1", spend: 1000 }), campaign({ campaignId: "c2", spend: 50 }), campaign({ campaignId: "", spend: 0 })],
+      funnel({ "": { new_lead: 3 } }),
+      {
+        rows: [{ campaignId: "c1", adsetId: "a1", adsetName: null, spend: 997 }],
+        funnel: nested({}),
+        adLevelSince: "2026-10-03",
+      },
+    );
+    expect(b.rows[0].adsets).toEqual([expect.objectContaining({ adsetId: "a1", adsetName: "Ad set a1", spend: 997 })]);
+    expect(b.rows[1].adsets).toEqual([]); // no ad-level rows for c2…
+    expect(b.rows[2].adsets).toEqual([]); // "Unattributed" never splits
+    expect(b.adsetSplit?.partial).toBe(true); // …so its spend is reported as not split
+  });
+
+  it("is absent when not asked for (Google, TikTok, or a failed query)", () => {
+    const b = build([campaign({ campaignId: "c1", spend: 100 })], funnel({}));
+    expect(b.rows[0].adsets).toEqual([]);
+    expect(b.adsetSplit).toBeNull();
+  });
+});
