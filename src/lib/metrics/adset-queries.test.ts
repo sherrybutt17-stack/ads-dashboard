@@ -30,11 +30,18 @@ const run = async (text: string) =>
 const lit = (v: string | null) => (v === null ? "NULL" : `'${v}'`);
 
 /** One lead: a contact carrying these ids, entering each stage in October. */
-async function lead(n: number, clientId: string, campaign: string | null, adset: string | null, stages = ["new_lead"]) {
+async function lead(
+  n: number,
+  clientId: string,
+  campaign: string | null,
+  adset: string | null,
+  stages = ["new_lead"],
+  ad: string | null = null,
+) {
   const contact = (
     await run(
-      `INSERT INTO contacts (client_id, ghl_contact_id, meta_campaign_id, meta_adset_id)
-       VALUES ('${clientId}', 'ct-${n}', ${lit(campaign)}, ${lit(adset)}) RETURNING id`,
+      `INSERT INTO contacts (client_id, ghl_contact_id, meta_campaign_id, meta_adset_id, meta_ad_id)
+       VALUES ('${clientId}', 'ct-${n}', ${lit(campaign)}, ${lit(adset)}, ${lit(ad)}) RETURNING id`,
     )
   ).rows[0].id;
   const opp = (
@@ -60,7 +67,7 @@ beforeAll(async () => {
       ('${CLIENT_A}', '2026-10-03', 'campaign', 'c1', '', '', NULL, 175, 5500, 55, 3),
       ('${CLIENT_B}', '2026-10-03', 'ad', 'c9', 'a9', 'ad9', 'Not ours', 999, 9, 9, 9);
   `);
-  await lead(1, CLIENT_A, "c1", "a1", ["new_lead", "appointment_booked"]);
+  await lead(1, CLIENT_A, "c1", "a1", ["new_lead", "appointment_booked"], "ad1");
   await lead(2, CLIENT_A, "c1", "a1");
   await lead(3, CLIENT_A, "c1", "a2");
   await lead(4, CLIENT_A, "c1", null); // campaign known, ad set not recorded
@@ -84,7 +91,23 @@ describe("getAdsetBreakdown", () => {
 
   it("knows when a client has no ad-level history", async () => {
     const empty = await q.getAdsetBreakdown("55555555-5555-5555-5555-555555555555", OCTOBER);
-    expect(empty).toEqual({ rows: [], adLevelSince: null });
+    expect(empty).toEqual({ rows: [], ads: [], adLevelSince: null });
+  });
+});
+
+describe("ads", () => {
+  it("lists each ad with its ad set, summed over the window", async () => {
+    const { ads } = await q.getAdsetBreakdown(CLIENT_A, OCTOBER);
+    expect([...ads].sort((a, b) => a.adId.localeCompare(b.adId))).toEqual([
+      expect.objectContaining({ adsetId: "a1", adId: "ad1", spend: 100, impressions: 4000, linkClicks: 40, metaLeads: 2 }),
+      expect.objectContaining({ adsetId: "a1", adId: "ad2", spend: 50 }),
+      expect.objectContaining({ adsetId: "a2", adId: "ad3", spend: 25 }),
+    ]);
+  });
+
+  it("counts leads per ad, only where the ad was recorded", async () => {
+    const f = await q.getFunnelByAd(CLIENT_A, OCTOBER);
+    expect(Object.fromEntries(f)).toEqual({ ad1: { new_lead: 1, appointment_booked: 1 } });
   });
 });
 

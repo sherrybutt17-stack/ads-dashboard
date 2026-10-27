@@ -10,6 +10,7 @@ import {
   type StageOption,
 } from "@/lib/metrics/campaign-stages";
 import { costPer, formatCurrency, formatNumber, formatPercent, DASH } from "@/lib/metrics/compute";
+import { formatResultCount } from "@/lib/metrics/results";
 import { DataState, PipeNotice, type DataStateProps } from "@/components/DataState";
 import { CategoryChart } from "@/components/CategoryChart";
 
@@ -493,14 +494,18 @@ function StageCells({
 /** `n / d`, or null when it is undefined. */
 const ratio = (n: number | null, d: number | null) => (n !== null && d ? n / d : null);
 
+/** The figures a panel row shows — an ad set's or an ad's. */
+type PanelStats = Pick<AdsetStageRow, "spend" | "impressions" | "linkClicks" | "result" | "counts" | "costs">;
+
 /**
- * A campaign's ad sets, opened under it.
+ * A campaign's ad sets, opened under it — and each ad set's ads, opened under
+ * that.
  *
- * Its own table, not rows squeezed into the campaign's columns: an ad set is
- * judged on what it delivered — spend, reach into the feed, clicks, Meta's
- * leads — before the CRM stage the table is showing, and those need their own
- * headings. Framed in the campaign's colour so it reads as belonging to the
- * row above.
+ * Its own table, not rows squeezed into the campaign's columns: an ad set or
+ * an ad is judged first on what Ads Manager says it did — spend, Results in
+ * their own type, delivery — then on the CRM stage the table is showing, and
+ * those need their own headings. Framed in the campaign's colour so it reads
+ * as belonging to the row above.
  */
 export function AdsetPanel({
   campaignName,
@@ -515,10 +520,18 @@ export function AdsetPanel({
   option: StageOption;
   currency: string;
 }) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const count = adsets.filter((a) => a.adsetId).length;
+  const hasAds = (a: AdsetStageRow) => (a.ads ?? []).some((ad) => ad.adId);
+  const anyAds = adsets.some(hasAds);
   const head = "px-3 py-2 text-[10.5px] font-semibold tracking-wider uppercase whitespace-nowrap";
-  const num = "tnum px-3 py-2 text-right whitespace-nowrap";
-  const money = (v: number | null) => (v === null ? DASH : formatCurrency(v, currency));
   return (
     <div
       className="overflow-hidden rounded-[var(--radius-sm)] border"
@@ -532,58 +545,168 @@ export function AdsetPanel({
                 {count} ad set{count === 1 ? "" : "s"}
               </th>
               <th className={`${head} text-right`}>Spend</th>
+              <th className={`${head} text-right`}>Results</th>
+              <th className={`${head} text-right`}>Cost / result</th>
               <th className={`${head} text-right`}>Impr.</th>
               <th className={`${head} text-right`}>Link clicks</th>
               <th className={`${head} text-right`}>CTR</th>
               <th className={`${head} text-right`}>CPC</th>
               <th className={`${head} text-right`}>CPM</th>
-              <th className={`${head} text-right`}>Meta leads</th>
-              <th className={`${head} text-right`}>Cost / Meta lead</th>
               <th className={`${head} text-right`}>{option.label}</th>
               <th className={`${head} text-right`}>{option.costLabel}</th>
             </tr>
           </thead>
           <tbody>
             {adsets.map((a) => {
-              const rest = a.adsetId === "";
-              const cpm = ratio(a.spend, a.impressions);
+              const canOpen = hasAds(a);
+              const isOpen = canOpen && open.has(a.adsetId);
+              const ads = isOpen
+                ? [...(a.ads ?? [])].sort((x, y) =>
+                    // Ranked like the ad sets; the remainder always last.
+                    x.adId === "" ? 1 : y.adId === "" ? -1 :
+                    y.counts[option.stage] - x.counts[option.stage] || y.spend - x.spend,
+                  )
+                : [];
               return (
-                <tr
-                  key={a.adsetId || "rest"}
-                  className="border-t"
-                  style={{ borderColor: "var(--border)", color: rest ? "var(--text-muted)" : "var(--text-secondary)" }}
-                >
-                  <td className="px-3 py-2 text-left">
-                    <span
-                      className="block max-w-[260px] truncate"
-                      style={{ color: rest ? "var(--text-muted)" : "var(--text-primary)", fontStyle: rest ? "italic" : undefined }}
-                      title={
-                        rest
-                          ? "Spend from days without ad-level detail, and leads whose ad set wasn't recorded"
-                          : a.adsetName
-                      }
-                    >
-                      {a.adsetName}
-                    </span>
-                  </td>
-                  <td className={num} style={{ color: "var(--text-primary)" }}>{formatCurrency(a.spend, currency)}</td>
-                  <td className={num}>{formatNumber(a.impressions)}</td>
-                  <td className={num}>{formatNumber(a.linkClicks)}</td>
-                  <td className={num}>{formatPercent(ratio(a.linkClicks, a.impressions))}</td>
-                  <td className={num}>{money(a.linkClicks === null ? null : costPer(a.spend, a.linkClicks))}</td>
-                  <td className={num}>{money(cpm === null ? null : cpm * 1000)}</td>
-                  <td className={num}>{formatNumber(a.metaLeads)}</td>
-                  <td className={num}>{money(a.metaLeads === null ? null : costPer(a.spend, a.metaLeads))}</td>
-                  <td className={num} style={{ color: "var(--text-primary)", fontWeight: 600 }}>
-                    {formatNumber(a.counts[option.stage])}
-                  </td>
-                  <td className={num}>{money(a.costs[option.stage].cost)}</td>
-                </tr>
+                <Fragment key={a.adsetId || "rest"}>
+                  <PanelRow
+                    name={a.adsetName}
+                    rest={a.adsetId === ""}
+                    restTitle="Spend from days without ad-level detail, and leads whose ad set wasn't recorded"
+                    stats={a}
+                    option={option}
+                    currency={currency}
+                    lead={
+                      anyAds ? (
+                        canOpen ? (
+                          <button
+                            type="button"
+                            onClick={() => toggle(a.adsetId)}
+                            aria-expanded={isOpen}
+                            aria-label={`${isOpen ? "Hide" : "Show"} ads in ${a.adsetName}`}
+                            className="grid h-5 w-5 shrink-0 place-items-center rounded-[var(--radius-xs)]"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            <Chevron open={isOpen} />
+                          </button>
+                        ) : (
+                          <span className="inline-block h-5 w-5 shrink-0" aria-hidden="true" />
+                        )
+                      ) : null
+                    }
+                  />
+                  {ads.map((ad) => (
+                    <PanelRow
+                      key={ad.adId || "rest"}
+                      name={ad.adName}
+                      rest={ad.adId === ""}
+                      restTitle="Leads in this ad set whose ad wasn't recorded"
+                      stats={ad}
+                      option={option}
+                      currency={currency}
+                      nested
+                    />
+                  ))}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 10 10"
+      aria-hidden="true"
+      style={{ transform: open ? "rotate(90deg)" : undefined, transition: "transform 120ms" }}
+    >
+      <path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** One ad set or ad in the panel: the same eleven cells either way. */
+function PanelRow({
+  name,
+  rest,
+  restTitle,
+  stats: r,
+  option,
+  currency,
+  lead = null,
+  nested = false,
+}: {
+  name: string;
+  /** The remainder row: spend and CRM counts only, no rates. */
+  rest: boolean;
+  restTitle: string;
+  stats: PanelStats;
+  option: StageOption;
+  currency: string;
+  /** The ad-set row's open/close button, or a spacer that keeps names aligned. */
+  lead?: React.ReactNode;
+  /** An ad, under its ad set. */
+  nested?: boolean;
+}) {
+  const num = "tnum px-3 py-2 text-right whitespace-nowrap";
+  const money = (v: number | null) => (v === null ? DASH : formatCurrency(v, currency));
+  const cpm = ratio(r.spend, r.impressions);
+  return (
+    <tr
+      className="border-t"
+      style={{
+        borderColor: "var(--border)",
+        color: rest ? "var(--text-muted)" : "var(--text-secondary)",
+        background: nested ? "var(--surface-2)" : undefined,
+        fontSize: nested ? 12 : undefined,
+      }}
+    >
+      <td className="py-2 pr-3 text-left" style={{ paddingLeft: nested ? 44 : 12 }}>
+        <span className="flex items-center gap-1.5">
+          {lead}
+          <span
+            className="block max-w-[260px] truncate"
+            style={{
+              color: rest ? "var(--text-muted)" : nested ? "var(--text-secondary)" : "var(--text-primary)",
+              fontStyle: rest ? "italic" : undefined,
+            }}
+            title={rest ? restTitle : name}
+          >
+            {name}
+          </span>
+        </span>
+      </td>
+      <td className={num} style={{ color: rest ? undefined : "var(--text-primary)" }}>
+        {rest && r.spend === 0 ? DASH : formatCurrency(r.spend, currency)}
+      </td>
+      <td className={num}>
+        {r.result ? (
+          <>
+            <span style={{ color: "var(--text-primary)" }}>{formatResultCount(r.result.count, r.result)}</span>
+            <span className="block text-[10px] leading-tight" style={{ color: "var(--text-muted)" }}>
+              {r.result.label}
+            </span>
+          </>
+        ) : (
+          DASH
+        )}
+      </td>
+      <td className={num}>{money(r.result?.costPer ?? null)}</td>
+      <td className={num}>{formatNumber(r.impressions)}</td>
+      <td className={num}>{formatNumber(r.linkClicks)}</td>
+      <td className={num}>{formatPercent(ratio(r.linkClicks, r.impressions))}</td>
+      <td className={num}>{money(r.linkClicks === null ? null : costPer(r.spend, r.linkClicks))}</td>
+      <td className={num}>{money(cpm === null ? null : cpm * 1000)}</td>
+      <td className={num} style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+        {formatNumber(r.counts[option.stage])}
+      </td>
+      <td className={num}>{money(r.costs[option.stage].cost)}</td>
+    </tr>
   );
 }

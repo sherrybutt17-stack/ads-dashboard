@@ -1309,6 +1309,11 @@ export interface AdsetRow {
   metaLeads: number;
 }
 
+export interface AdRow extends AdsetRow {
+  adId: string;
+  adName: string | null;
+}
+
 /**
  * Per-ad-set spend for a window — Meta only, summed from the ad-level rows.
  *
@@ -1320,13 +1325,15 @@ export interface AdsetRow {
 export async function getAdsetBreakdown(
   clientId: string,
   window: DateWindow,
-): Promise<{ rows: AdsetRow[]; adLevelSince: string | null }> {
-  const [rows, [first]] = await Promise.all([
+): Promise<{ rows: AdsetRow[]; ads: AdRow[]; adLevelSince: string | null }> {
+  const [adRows, [first]] = await Promise.all([
     db
       .select({
         campaignId: fbDailyMetrics.metaCampaignId,
         adsetId: fbDailyMetrics.metaAdsetId,
         adsetName: sql<string | null>`MAX(${fbDailyMetrics.adsetName})`,
+        adId: fbDailyMetrics.metaAdId,
+        adName: sql<string | null>`MAX(${fbDailyMetrics.adName})`,
         spend: sql<string>`COALESCE(SUM(${fbDailyMetrics.spend}), 0)`,
         impressions: sql<string>`COALESCE(SUM(${fbDailyMetrics.impressions}), 0)`,
         linkClicks: sql<string>`COALESCE(SUM(${fbDailyMetrics.linkClicks}), 0)`,
@@ -1342,24 +1349,88 @@ export async function getAdsetBreakdown(
           sql`${fbDailyMetrics.metaAdsetId} <> ''`,
         ),
       )
-      .groupBy(fbDailyMetrics.metaCampaignId, fbDailyMetrics.metaAdsetId),
+      .groupBy(fbDailyMetrics.metaCampaignId, fbDailyMetrics.metaAdsetId, fbDailyMetrics.metaAdId),
     db
       .select({ since: sql<string | null>`MIN(${fbDailyMetrics.date})::text` })
       .from(fbDailyMetrics)
       .where(and(eq(fbDailyMetrics.clientId, clientId), eq(fbDailyMetrics.level, "ad"))),
   ]);
-  return {
-    rows: rows.map((r) => ({
-      campaignId: r.campaignId,
-      adsetId: r.adsetId,
-      adsetName: r.adsetName ?? null,
-      spend: Number(r.spend) || 0,
-      impressions: Number(r.impressions) || 0,
-      linkClicks: Number(r.linkClicks) || 0,
-      metaLeads: Number(r.metaLeads) || 0,
-    })),
-    adLevelSince: first?.since ?? null,
-  };
+  const ads: AdRow[] = adRows.map((r) => ({
+    campaignId: r.campaignId,
+    adsetId: r.adsetId,
+    adsetName: r.adsetName ?? null,
+    adId: r.adId,
+    adName: r.adName ?? null,
+    spend: Number(r.spend) || 0,
+    impressions: Number(r.impressions) || 0,
+    linkClicks: Number(r.linkClicks) || 0,
+    metaLeads: Number(r.metaLeads) || 0,
+  }));
+
+  // Each ad set is the sum of its ads — one query serves both levels.
+  const sets = new Map<string, AdsetRow>();
+  for (const a of ads) {
+    const k = `${a.campaignId}|${a.adsetId}`;
+    const s = sets.get(k);
+    if (!s) {
+      sets.set(k, {
+        campaignId: a.campaignId,
+        adsetId: a.adsetId,
+        adsetName: a.adsetName,
+        spend: a.spend,
+        impressions: a.impressions,
+        linkClicks: a.linkClicks,
+        metaLeads: a.metaLeads,
+      });
+      continue;
+    }
+    // MAX, as SQL would: the same name the ad set's own query would give.
+    if (a.adsetName && (!s.adsetName || a.adsetName > s.adsetName)) s.adsetName = a.adsetName;
+    s.spend += a.spend;
+    s.impressions += a.impressions;
+    s.linkClicks += a.linkClicks;
+    s.metaLeads += a.metaLeads;
+  }
+  return { rows: [...sets.values()], ads, adLevelSince: first?.since ?? null };
+}
+
+/**
+ * Every funnel stage per ad — the ad set's `getFunnelByAdset`, one level down.
+ * Ad ids are unique across an account, so the ad id alone is the key.
+ */
+export async function getFunnelByAd(
+  clientId: string,
+  window: DateWindow,
+  filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
+): Promise<Map<string, Partial<Record<CanonicalStage, number>>>> {
+  const paid = platformLeadPredicate("meta", filter);
+  const clauses: SQL[] = [
+    sql`st.client_id = ${clientId}`,
+    sql`st.to_canonical IS NOT NULL`,
+    sql`st.changed_at >= ${window.startUtc}`,
+    sql`st.changed_at < ${window.endUtc}`,
+    sql`c.meta_ad_id <> ''`,
+  ];
+  if (paid) clauses.push(paid);
+
+  type Row = { ad_id: string; stage: string; count: number };
+  const rows = await db.execute<Row>(sql`
+    SELECT c.meta_ad_id AS ad_id,
+           st.to_canonical AS stage,
+           COUNT(DISTINCT st.opportunity_id)::int AS count
+    FROM stage_transitions st
+    JOIN contacts c ON c.id = st.contact_id
+    WHERE ${sql.join(clauses, sql` AND `)}
+    GROUP BY c.meta_ad_id, st.to_canonical
+  `);
+
+  const out = new Map<string, Partial<Record<CanonicalStage, number>>>();
+  for (const r of resultRows<Row>(rows)) {
+    const entry = out.get(r.ad_id) ?? {};
+    entry[r.stage as CanonicalStage] = Number(r.count) || 0;
+    out.set(r.ad_id, entry);
+  }
+  return out;
 }
 
 /**

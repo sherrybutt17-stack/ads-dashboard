@@ -70,9 +70,15 @@ describe("the ad set panel under an opened campaign", () => {
     new Map([["c1", { new_lead: 4 }]]),
     { mappedStages: new Set<CanonicalStage>(["new_lead"]), lag: {} },
     {
-      rows: [{ campaignId: "c1", adsetId: "a1", adsetName: "EVO - FB (18-60)", spend: 500, impressions: 20000, linkClicks: 250, metaLeads: 10 }],
+      rows: [
+        {
+          campaignId: "c1", adsetId: "a1", adsetName: "EVO - FB (18-60)", spend: 500, impressions: 20000, linkClicks: 250, metaLeads: 10,
+          result: { label: "Website leads", count: 10, costPer: 50, decimals: 0 },
+        },
+      ],
       funnel: new Map([["c1", new Map([["a1", { new_lead: 3 }]])]]),
       adLevelSince: "2026-09-25",
+      ads: [{ adsetId: "a1", adId: "ad1", adName: "Video ad", spend: 500 }],
     },
   );
   const html = renderToStaticMarkup(
@@ -86,7 +92,7 @@ describe("the ad set panel under an opened campaign", () => {
   );
 
   it("has its own headings — delivery first, then the CRM stage", () => {
-    for (const h of ["1 ad set", "Spend", "Impr.", "Link clicks", "CTR", "CPC", "CPM", "Meta leads", "Cost / Meta lead", "Leads", "CP-Lead"]) {
+    for (const h of ["1 ad set", "Spend", "Results", "Cost / result", "Impr.", "Link clicks", "CTR", "CPC", "CPM", "Leads", "CP-Lead"]) {
       expect(html).toContain(`>${h}</th>`);
     }
   });
@@ -97,7 +103,13 @@ describe("the ad set panel under an opened campaign", () => {
     expect(html).toContain(">1.25%<"); // CTR 250 / 20,000
     expect(html).toContain(">$2.00<"); // CPC 500 / 250
     expect(html).toContain(">$25.00<"); // CPM 500 / 20,000 × 1,000
-    expect(html).toContain(">$50.00<"); // per Meta lead, 500 / 10
+    expect(html).toContain(">$50.00<"); // cost per result
+    expect(html).toContain(">Website leads<"); // the result's type, under its count
+  });
+
+  it("opens each ad set onto its ads", () => {
+    expect(html).toContain('aria-label="Show ads in EVO - FB (18-60)"');
+    expect(html).not.toContain(">Video ad<"); // collapsed until asked
   });
 
   it("keeps the remainder honest: its spend and leads, no invented rates", () => {

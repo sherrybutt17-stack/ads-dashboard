@@ -123,8 +123,37 @@ export interface AdsetStageRow {
   impressions: number | null;
   linkClicks: number | null;
   metaLeads: number | null;
+  /** Ads Manager's Results for the ad set, in its main type. */
+  result: RowResult | null;
   counts: Record<CostStage, number>;
   costs: Record<CostStage, CostAtStage>;
+  /** Its ads, plus a remainder for leads whose ad wasn't recorded. */
+  ads: AdStageRow[];
+}
+
+/** One ad inside an ad set. `adId` is "" for the remainder (CRM leads only). */
+export interface AdStageRow {
+  adId: string;
+  adName: string;
+  spend: number;
+  impressions: number | null;
+  linkClicks: number | null;
+  metaLeads: number | null;
+  result: RowResult | null;
+  counts: Record<CostStage, number>;
+  costs: Record<CostStage, CostAtStage>;
+}
+
+/**
+ * A row's Results the way Ads Manager shows them: one type, its count and cost
+ * per result. See `resultsHeadline` — never a sum across types.
+ */
+export interface RowResult {
+  /** "Website leads". */
+  label: string;
+  count: number;
+  costPer: number | null;
+  decimals: 0 | 2;
 }
 
 export interface AdsetInput {
@@ -135,6 +164,18 @@ export interface AdsetInput {
   impressions?: number;
   linkClicks?: number;
   metaLeads?: number;
+  result?: RowResult | null;
+}
+
+export interface AdInput {
+  adsetId: string;
+  adId: string;
+  adName: string | null;
+  spend: number;
+  impressions?: number;
+  linkClicks?: number;
+  metaLeads?: number;
+  result?: RowResult | null;
 }
 
 export interface StageOption {
@@ -205,11 +246,14 @@ export function buildCampaignStages(
     mappedStages: ReadonlySet<CanonicalStage>;
     lag: StageLag;
   },
-  /** Meta only: spend and funnel per ad set, keyed campaign → ad set. */
+  /** Meta only: spend and funnel per ad set, keyed campaign → ad set, and per ad. */
   adsets?: {
     rows: readonly AdsetInput[];
     funnel: ReadonlyMap<string, ReadonlyMap<string, Partial<Record<CanonicalStage, number>>>>;
     adLevelSince: string | null;
+    ads?: readonly AdInput[];
+    /** Keyed by ad id. */
+    adFunnel?: ReadonlyMap<string, Partial<Record<CanonicalStage, number>>>;
   },
 ): CampaignStages {
   let partial = false;
@@ -288,6 +332,64 @@ export function buildCampaignStages(
 const countsOf = (funnel: Partial<Record<CanonicalStage, number>>) =>
   Object.fromEntries(COST_STAGES.map((s) => [s, funnel[s] ?? 0])) as Record<CostStage, number>;
 
+const costsOf = (spend: number, n: Record<CostStage, number>) =>
+  Object.fromEntries(
+    COST_STAGES.map((s) => [s, { cost: costPer(spend, n[s]), conversions: n[s] }]),
+  ) as Record<CostStage, CostAtStage>;
+
+/** No cost at any stage — for remainders, whose spend and leads describe different things. */
+const uncosted = (n: Record<CostStage, number>) =>
+  Object.fromEntries(COST_STAGES.map((s) => [s, { cost: null, conversions: n[s] }])) as Record<
+    CostStage,
+    CostAtStage
+  >;
+
+/** What the parts don't account for, per stage, never below zero. */
+const leftOver = (whole: Record<CostStage, number>, parts: readonly { counts: Record<CostStage, number> }[]) =>
+  Object.fromEntries(
+    COST_STAGES.map((s) => [s, Math.max(0, whole[s] - parts.reduce((t, p) => t + p.counts[s], 0))]),
+  ) as Record<CostStage, number>;
+
+/** An ad set's ads, plus a remainder for its leads with no ad recorded. */
+function splitByAd(
+  adsetId: string,
+  counts: Record<CostStage, number>,
+  adsets: NonNullable<Parameters<typeof buildCampaignStages>[3]>,
+): AdStageRow[] {
+  const ads: AdStageRow[] = (adsets.ads ?? [])
+    .filter((a) => a.adsetId === adsetId)
+    .map((a) => {
+      const n = countsOf(adsets.adFunnel?.get(a.adId) ?? {});
+      return {
+        adId: a.adId,
+        adName: a.adName || `Ad ${a.adId}`,
+        spend: a.spend,
+        impressions: a.impressions ?? 0,
+        linkClicks: a.linkClicks ?? 0,
+        metaLeads: a.metaLeads ?? 0,
+        result: a.result ?? null,
+        counts: n,
+        costs: costsOf(a.spend, n),
+      };
+    });
+  if (ads.length === 0) return [];
+  const rest = leftOver(counts, ads);
+  if (COST_STAGES.some((s) => rest[s] > 0)) {
+    ads.push({
+      adId: "",
+      adName: "Ad not recorded",
+      spend: 0,
+      impressions: null,
+      linkClicks: null,
+      metaLeads: null,
+      result: null,
+      counts: rest,
+      costs: uncosted(rest),
+    });
+  }
+  return ads;
+}
+
 /**
  * A campaign's ad sets, plus what they can't account for.
  *
@@ -317,18 +419,16 @@ function splitByAdset(
       impressions: spendRow?.impressions ?? 0,
       linkClicks: spendRow?.linkClicks ?? 0,
       metaLeads: spendRow?.metaLeads ?? 0,
+      result: spendRow?.result ?? null,
       counts: n,
-      costs: Object.fromEntries(
-        COST_STAGES.map((s) => [s, { cost: costPer(spend, n[s]), conversions: n[s] }]),
-      ) as Record<CostStage, CostAtStage>,
+      costs: costsOf(spend, n),
+      ads: splitByAd(id, n, adsets),
     };
   });
 
   const spendGap = c.spend - out.reduce((t, a) => t + a.spend, 0);
   const restSpend = spendGap > Math.max(1, c.spend * 0.005) ? spendGap : 0;
-  const rest = Object.fromEntries(
-    COST_STAGES.map((s) => [s, Math.max(0, counts[s] - out.reduce((t, a) => t + a.counts[s], 0))]),
-  ) as Record<CostStage, number>;
+  const rest = leftOver(counts, out);
   if (restSpend > 0 || COST_STAGES.some((s) => rest[s] > 0)) {
     out.push({
       adsetId: "",
@@ -337,10 +437,10 @@ function splitByAdset(
       impressions: null,
       linkClicks: null,
       metaLeads: null,
+      result: null,
       counts: rest,
-      costs: Object.fromEntries(
-        COST_STAGES.map((s) => [s, { cost: null, conversions: rest[s] }]),
-      ) as Record<CostStage, CostAtStage>,
+      costs: uncosted(rest),
+      ads: [],
     });
   }
   return out;

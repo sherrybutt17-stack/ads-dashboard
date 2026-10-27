@@ -13,7 +13,7 @@ import {
 } from "@/lib/dates";
 import { detectAnomalies, BASELINE_DAYS, type AnomalyReport } from "./anomaly";
 import { getPlatformResults } from "./board-queries";
-import { EMPTY_RESULTS_SUMMARY, summarizeResults, type ResultsSummary } from "./results";
+import { EMPTY_RESULTS_SUMMARY, resultsHeadline, summarizeResults, type ResultsSummary } from "./results";
 import { assessCandidates, type Candidate, type KeepKillReport } from "./keepkill";
 import { buildCampaignStages, type CampaignStages } from "./campaign-stages";
 import { buildSpeedOutcome, type SpeedOutcome } from "./speed-outcome";
@@ -70,6 +70,7 @@ import {
   getAdDataDays,
   getFunnelByCampaign,
   getFunnelByAdset,
+  getFunnelByAd,
   getAdsetBreakdown,
   getLearningCampaigns,
   getStageLag,
@@ -500,6 +501,9 @@ export async function loadDashboard(
     duplicateCandidates,
     adsetBreakdown,
     funnelByAdset,
+    funnelByAd,
+    adsetResults,
+    adResults,
   ] = await Promise.all([
     // Only these two pass `includeRevenue` — they feed the headline tiles and
     // the deltas. The trailing-window and month-on-month rows below do not
@@ -643,6 +647,26 @@ export async function loadDashboard(
           return null;
         })
       : Promise.resolve(null),
+    // The ads inside each ad set, and Ads Manager's Results at both levels.
+    // Guarded the same way: a failure leaves those columns empty, not the page.
+    platform === "meta"
+      ? getFunnelByAd(client.id, range, filter).catch((err) => {
+          console.error("[dashboard] ad funnel unavailable:", err);
+          return null;
+        })
+      : Promise.resolve(null),
+    platform === "meta"
+      ? getPlatformResults("meta", client.id, range, "adset").catch((err) => {
+          console.error("[dashboard] ad set results unavailable:", err);
+          return [];
+        })
+      : Promise.resolve([]),
+    platform === "meta"
+      ? getPlatformResults("meta", client.id, range, "ad").catch((err) => {
+          console.error("[dashboard] ad results unavailable:", err);
+          return [];
+        })
+      : Promise.resolve([]),
   ]);
 
   /*
@@ -792,12 +816,34 @@ export async function loadDashboard(
    * whole reason `getFunnelByCampaign` returns every stage rather than the one
    * keep/kill happened to need.
    */
+  /*
+   * Each ad set's and ad's Results in its main type, the way Ads Manager's
+   * Results column reads — from the same query as every Results tile.
+   */
+  const rowResults = (rows: Awaited<ReturnType<typeof getPlatformResults>>) =>
+    new Map(
+      rows.flatMap((r) => {
+        const h = resultsHeadline(r.byType);
+        return h.type
+          ? [[r.key, { label: h.type.label, count: h.count, costPer: h.costPer, decimals: h.type.decimals }] as const]
+          : [];
+      }),
+    );
+  const adsetResult = rowResults(adsetResults);
+  const adResult = rowResults(adResults);
+
   const campaignStages = buildCampaignStages(
     campaigns,
     funnelByCampaign,
     { mappedStages, lag: stageLag.lag },
     adsetBreakdown && funnelByAdset
-      ? { rows: adsetBreakdown.rows, funnel: funnelByAdset, adLevelSince: adsetBreakdown.adLevelSince }
+      ? {
+          rows: adsetBreakdown.rows.map((r) => ({ ...r, result: adsetResult.get(r.adsetId) ?? null })),
+          funnel: funnelByAdset,
+          adLevelSince: adsetBreakdown.adLevelSince,
+          ads: adsetBreakdown.ads.map((a) => ({ ...a, result: adResult.get(a.adId) ?? null })),
+          adFunnel: funnelByAd ?? undefined,
+        }
       : undefined,
   );
 

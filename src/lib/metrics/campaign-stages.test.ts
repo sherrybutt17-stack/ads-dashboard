@@ -341,6 +341,35 @@ describe("ad sets under each campaign", () => {
     expect(b.adsetSplit?.partial).toBe(true); // …so its spend is reported as not split
   });
 
+  it("puts each ad under its ad set, with Results, and owns up to leads with no ad", () => {
+    const leads = { label: "Website leads", count: 9, costPer: 20, decimals: 0 as const };
+    const b = withAdsets(
+      [campaign({ campaignId: "c1", spend: 300 })],
+      funnel({ c1: { new_lead: 4 } }),
+      {
+        rows: [{ campaignId: "c1", adsetId: "a1", adsetName: "Broad", spend: 300, result: leads }],
+        funnel: nested({ c1: { a1: { new_lead: 4 } } }),
+        adLevelSince: "2026-10-03",
+        ads: [
+          { adsetId: "a1", adId: "ad1", adName: "Video", spend: 200, result: { ...leads, count: 7 } },
+          { adsetId: "a1", adId: "ad2", adName: null, spend: 100 },
+          { adsetId: "zz", adId: "ad9", adName: "Elsewhere", spend: 5 },
+        ],
+        adFunnel: new Map([["ad1", { new_lead: 3 }]]),
+      },
+    );
+    const set = b.rows[0].adsets![0];
+    expect(set.result).toEqual(leads);
+    expect(set.ads.map((a) => [a.adId, a.adName, a.counts.new_lead])).toEqual([
+      ["ad1", "Video", 3],
+      ["ad2", "Ad ad2", 0],
+      ["", "Ad not recorded", 1],
+    ]);
+    expect(set.ads[0].costs.new_lead).toEqual({ cost: 200 / 3, conversions: 3 });
+    expect(set.ads[0].result?.count).toBe(7);
+    expect(set.ads[2].costs.new_lead.cost).toBeNull();
+  });
+
   it("is absent when not asked for (Google, TikTok, or a failed query)", () => {
     const b = build([campaign({ campaignId: "c1", spend: 100 })], funnel({}));
     expect(b.rows[0].adsets).toEqual([]);
