@@ -45,7 +45,7 @@ import {
 const DAYS_UNTIL_DUE = 7;
 /** Noon UTC: already the 1st in the US, and still the 1st in Pakistan. */
 const BILL_HOUR_UTC = 12;
-const PRODUCT_NAME = "Ads dashboard — per client";
+const PRODUCT_NAME = "Ads dashboard - per client";
 /**
  * The simulation's customer. Never the real address: a sandbox invoice should
  * not reach the agency, and `send_invoice` refuses a customer with no email.
