@@ -154,16 +154,51 @@ describe("every ad platform reconciles", () => {
     // count that has outgrown one invocation becomes visible.
     const src = read(CRON, route);
     expect(src).toContain("DISPATCH_BUDGET_MS");
-    expect(src).toMatch(/status: "deferred"/);
+    // Its own loop defers, or it hands its queue to the shared dispatcher,
+    // which does (tested in `@/lib/reconcile`).
+    expect(src).toMatch(/status: "deferred"|dispatchReconciles\(/);
     expect(src).toContain("reapAbandonedSyncRuns");
+  });
+});
+
+describe("Vercel's cron slots", () => {
+  /*
+   * GitHub's scheduler started only about three of this workflow's eight daily
+   * runs (Nov 2026), late by up to an hour, so Meta clients fell due faster than
+   * they were reconciled. Vercel's crons fired on time every day, so each
+   * platform now has at least one there, Meta one per hour that clients' local
+   * reconcile hour falls in, and the workflow is the extra trigger rather than
+   * the only one.
+   */
+  const crons: Array<{ path: string; schedule: string }> =
+    JSON.parse(read(SRC, "..", "vercel.json")).crons ?? [];
+
+  it.each(RECONCILERS)("$platform has a Vercel cron", ({ endpoint }) => {
+    expect(crons.map((c) => c.path)).toContain(endpoint);
+  });
+
+  it("🔴 every one runs at most once a day, or a Hobby deploy fails", () => {
+    // The Hobby plan rejects, at deploy time, any expression that would run
+    // more than once a day — so a frequent schedule here does not merely run
+    // less often, it stops every deploy until it is removed.
+    expect(crons.length).toBeGreaterThan(0);
+    for (const { path, schedule } of crons) {
+      expect(schedule, path).toMatch(/^\d{1,2} \d{1,2} \* \* \*$/);
+    }
+  });
+
+  it("never repeats a slot", () => {
+    const slots = crons.map((c) => `${c.path} ${c.schedule}`);
+    expect(new Set(slots).size).toBe(slots.length);
   });
 });
 
 describe("the schedule actually calls them", () => {
   /*
-   * The routes above can all be perfect and still never run. Vercel's Hobby tier
-   * allows two cron jobs, which Meta and Google occupy, so TikTok's ONLY trigger
-   * is this workflow — a fact invisible from any TypeScript file.
+   * The routes above can all be perfect and still never run. This workflow is
+   * the second trigger for every platform, beside Vercel's daily slots — and,
+   * until Nov 2026, it was TikTok's ONLY one — a fact invisible from any
+   * TypeScript file.
    */
   it.each(RECONCILERS)("$platform is curled by the reconcile workflow", ({ endpoint }) => {
     expect(WORKFLOW).toContain(endpoint);
@@ -190,9 +225,9 @@ describe("the schedule actually calls them", () => {
   it("🔴 one platform's failure does not skip the others", () => {
     /*
      * A failed step skips everything after it unless told otherwise, and this
-     * schedule is TikTok's ONLY reconciliation — a Meta timeout must not cost
-     * TikTok its night. Every step after the secret check runs on
-     * `!cancelled()`, gated on that check alone.
+     * schedule carries pacing and billing as well as the three reconciles — a
+     * Meta timeout must not cost the others their run. Every step after the
+     * secret check runs on `!cancelled()`, gated on that check alone.
      */
     const steps = WORKFLOW_CODE.split(/\n\s*- name: /).slice(1);
     expect(steps.length).toBeGreaterThan(RECONCILERS.length);

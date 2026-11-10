@@ -1,4 +1,4 @@
-import { and, eq, lt, sql, type SQL } from "drizzle-orm";
+import { and, eq, gt, lt, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clients,
@@ -1154,6 +1154,33 @@ export async function reapAbandonedSyncRuns(
     .where(and(eq(syncRuns.status, "running"), lt(syncRuns.startedAt, cutoff)))
     .returning({ id: syncRuns.id });
   return reaped.length;
+}
+
+/**
+ * Is another run reconciling this client right now?
+ *
+ * Several triggers can fire close together — Vercel's daily slots, GitHub's
+ * schedule, a cron Vercel occasionally delivers twice — and every run serves
+ * the same longest-waiting-first queue, so two overlapping runs would work down
+ * it in step and pull each client twice. A `running` row is another run's claim
+ * on the client. Ten minutes, not the reaper's thirty: no run outlives its
+ * 300 s `maxDuration`, so an older row belongs to a killed run and must not
+ * keep the client waiting.
+ */
+export async function metaReconcileInProgress(clientId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: syncRuns.id })
+    .from(syncRuns)
+    .where(
+      and(
+        eq(syncRuns.clientId, clientId),
+        eq(syncRuns.kind, "meta_daily"),
+        eq(syncRuns.status, "running"),
+        gt(syncRuns.startedAt, new Date(Date.now() - 10 * 60_000)),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
 }
 
 /**

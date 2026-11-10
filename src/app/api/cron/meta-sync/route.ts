@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { clients } from "@/db/schema";
+import { clients, type Client } from "@/db/schema";
 import {
   syncClientMetrics,
   reapAbandonedSyncRuns,
+  metaReconcileInProgress,
   usualMetaRunMs,
   RECONCILE_DAYS,
 } from "@/lib/meta/sync";
@@ -12,8 +13,9 @@ import { activeAdAccounts } from "@/lib/meta/accounts";
 import { trailingWindowInclusive } from "@/lib/dates";
 import {
   isReconcileOverdue,
-  fitsBeforeDeadline,
+  dispatchReconciles,
   DEFAULT_RECONCILE_HOUR,
+  type ReconcileStatus,
 } from "@/lib/reconcile";
 import { safeEqual } from "@/lib/crypto";
 
@@ -26,9 +28,10 @@ import { safeEqual } from "@/lib/crypto";
  *
  * Safe to call at ANY cadence. Each client is picked up only once its local
  * reconcile hour has passed without a reconcile since (see `@/lib/reconcile`),
- * so this is idempotent and several triggers can coexist: a frequent external
- * schedule for timeliness, plus Vercel's once-daily cron as a backstop. Whichever
- * fires first does the work; the other finds nothing to do.
+ * so this is idempotent and several triggers can coexist: Vercel's daily cron
+ * slots (vercel.json, one per hour that clients' local reconcile hour falls in)
+ * plus the GitHub schedule. Whichever fires first does the work; the others
+ * find nothing to do, and a client one run is reconciling is left to it.
  *
  * Query params:
  *   ?force=1  — ignore the overdue gate and reconcile every active client.
@@ -46,6 +49,13 @@ export const maxDuration = 300;
  * truncation at `maxDuration`.
  */
 const DISPATCH_BUDGET_MS = 240_000;
+
+/**
+ * Clients reconciled at once. Three, not more: separate ad accounts do not share
+ * a rate limit, but Meta also meters the app as a whole, and the client already
+ * eases off as that climbs — three roughly triples a run without leaning on it.
+ */
+const CONCURRENCY = 3;
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") ?? "";
@@ -85,43 +95,38 @@ export async function GET(req: NextRequest) {
 
   const results: Array<{
     slug: string;
-    status: "synced" | "skipped" | "deferred" | "failed";
+    status: ReconcileStatus;
     rows?: number;
     error?: string;
   }> = [];
 
-  let started = 0;
+  const due: Client[] = [];
   for (const client of active) {
     const accounts = await activeAdAccounts(client.id);
-    if (accounts.length === 0) {
-      results.push({ slug: client.slug, status: "skipped" });
-      continue;
-    }
     if (
-      !force &&
-      !isReconcileOverdue(
-        client.timezone,
-        client.lastMetaReconciledAt,
-        targetHour,
-      )
+      accounts.length === 0 ||
+      (!force &&
+        !isReconcileOverdue(
+          client.timezone,
+          client.lastMetaReconciledAt,
+          targetHour,
+        ))
     ) {
       results.push({ slug: client.slug, status: "skipped" });
       continue;
     }
+    due.push(client);
+  }
 
-    const elapsed = Date.now() - startedAt;
-    if (
-      elapsed > DISPATCH_BUDGET_MS ||
-      (started > 0 && !fitsBeforeDeadline(elapsed, usualMs.get(client.id)))
-    ) {
-      // Out of time for this one. Say so rather than appearing to have covered
-      // everyone; a smaller client further down may still fit.
-      results.push({ slug: client.slug, status: "deferred" });
-      continue;
-    }
-    started++;
-
-    try {
+  // Out of time for a client → "deferred": said rather than appearing to have
+  // covered everyone, and it leads the next run's queue.
+  const dispatched = await dispatchReconciles(due, {
+    concurrency: CONCURRENCY,
+    budgetMs: DISPATCH_BUDGET_MS,
+    usualMs,
+    startedAt,
+    busy: (client) => metaReconcileInProgress(client.id),
+    sync: async (client) => {
       const window = trailingWindowInclusive(RECONCILE_DAYS, client.timezone);
       const { rowsWritten } = await syncClientMetrics(client, {
         since: window.startKey,
@@ -135,15 +140,11 @@ export async function GET(req: NextRequest) {
         includeAdLevel: true,
         includeBreakdowns: true,
       });
-      results.push({ slug: client.slug, status: "synced", rows: rowsWritten });
-    } catch (err) {
-      // One client's bad token must not abort the whole run.
-      results.push({
-        slug: client.slug,
-        status: "failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+      return rowsWritten;
+    },
+  });
+  for (const r of dispatched) {
+    results.push({ slug: r.item.slug, status: r.status, rows: r.rows, error: r.error });
   }
 
   const deferred = results.filter((r) => r.status === "deferred").length;

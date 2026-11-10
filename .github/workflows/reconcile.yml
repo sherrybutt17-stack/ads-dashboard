@@ -3,12 +3,13 @@ name: Nightly reconcile
 # Trues the dashboard up against each Ads Manager as Meta, Google and TikTok
 # restate spend and conversions over the following ~28 days.
 #
-# Why this lives here and not only in vercel.json: clients are NOT all in one
+# Why this lives here as well as in vercel.json: clients are NOT all in one
 # timezone, and each one's day closes at a different instant (all three platforms
-# bucket days in the ad account's timezone). Vercel's Hobby tier permits only one
-# cron run per day, which cannot land near every client's local reconcile hour —
-# and only two cron jobs at all, which Meta and Google already occupy, so this
-# schedule is TikTok's only reconciliation rather than a redundant backstop.
+# bucket days in the ad account's timezone). Vercel's Hobby tier runs each cron
+# at most once a day, somewhere within its hour, so vercel.json holds one daily
+# slot per hour that clients' local reconcile hour falls in. This schedule is the
+# second trigger for all three platforms and billing, and the only one for the
+# budget pacing alerts.
 #
 # Cadence is deliberately loose. The endpoints gate each client on "has its local
 # reconcile hour passed without a reconcile since" rather than "is it that hour
@@ -22,17 +23,21 @@ name: Nightly reconcile
 
 on:
   schedule:
-    # Every 3 hours (UTC). Each client is reconciled within 3h of its local 3am.
+    # Every 3 hours (UTC), at 23 past.
     #
     # GitHub's scheduler is best-effort and drifts — observed up to an hour late
     # on this repo. That is fine here and is the reason the endpoint gates on
     # "reconciled since local 3am?" rather than "is it 3am now?": a late run
     # still picks up every overdue client instead of silently skipping them.
     #
+    # Not on the hour: GitHub's docs name the start of every hour as the busiest
+    # time, when scheduled runs are delayed and some are dropped. On the hour,
+    # this schedule started about three of its eight daily runs (Nov 2026).
+    #
     # Requires the CRON_SECRET repo secret. Without it every run fails on the
     # guard step below — correct, but noisy. Remove the secret and you should
     # comment these two lines out again.
-    - cron: "0 */3 * * *"
+    - cron: "23 */3 * * *"
   workflow_dispatch: # manual run from the Actions tab
 
 # Never let two reconciles overlap; a slow run should delay the next, not race it.
@@ -95,9 +100,9 @@ jobs:
       # 🔴 Each step below runs even when one before it failed.
       #
       # By default a failed step skips every step after it, so a Meta timeout
-      # would also skip Google, TikTok and the pacing alerts — and for TikTok
-      # this workflow is the ONLY reconciliation there is, so one platform's bad
-      # night would leave another's history uncorrected. `!cancelled()` keeps
+      # would also skip Google, TikTok, billing and the pacing alerts — and the
+      # pacing alerts have no other trigger, so one platform's bad night would
+      # cost the others their run. `!cancelled()` keeps
       # them running past a failure (but not past a manual cancel or the job
       # timeout), and the secret check still gates them all: without it, every
       # call is a guaranteed 401. Any failed step still fails the run.
@@ -129,10 +134,9 @@ jobs:
       - name: Reconcile TikTok
         if: ${{ !cancelled() && steps.secret.outcome == 'success' }}
         run: |
-          # TikTok has no Vercel cron slot — the Hobby tier allows two and Meta
-          # and Google hold both — so this schedule is its ONLY reconciliation.
-          # Every client with no TikTok advertiser is reported "skipped", making
-          # this a no-op until one is connected.
+          # Also runs from its daily Vercel slot (vercel.json). Every client
+          # with no TikTok advertiser is reported "skipped", making this a
+          # no-op until one is connected.
           curl -fsS --max-time 300 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -o /tmp/tiktok.json \
@@ -166,7 +170,9 @@ jobs:
           # safe. A subscription it could not update returns 502, which fails
           # this step: a wrong count is a wrong bill. Which one, and why, is in
           # the Vercel function logs, not here. Until STRIPE_SECRET_KEY is set
-          # on the deployment it answers "billing not configured".
+          # on the deployment it answers "billing not configured". Vercel also
+          # runs it daily at 11:00 UTC, the hour before the 12:00 UTC billing
+          # time, so a client added or archived that morning is still counted.
           curl -fsS --max-time 60 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -o /tmp/billing.json \

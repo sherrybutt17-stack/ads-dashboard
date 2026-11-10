@@ -18,9 +18,9 @@ import { lastLocalHourBoundary } from "./dates";
  *     catches up automatically once the trigger resumes — a multi-day outage
  *     costs nothing beyond latency.
  *
- * It is also idempotent, which is what lets several triggers coexist (a
- * 3-hourly external schedule plus Vercel's once-daily cron as a backstop):
- * whichever fires first does the work, the other finds nothing to do.
+ * It is also idempotent, which is what lets several triggers coexist (Vercel's
+ * daily cron slots plus a 3-hourly GitHub schedule): whichever fires first does
+ * the work, the others find nothing to do.
  */
 
 /**
@@ -73,4 +73,88 @@ export function isReconcileOverdue(
   if (!lastReconciledAt) return true;
   const boundary = lastLocalHourBoundary(targetHour, timezone, now);
   return lastReconciledAt.getTime() < boundary.getTime();
+}
+
+/** How one client fared in a reconcile run. */
+export type ReconcileStatus = "synced" | "skipped" | "deferred" | "failed";
+
+export interface DispatchResult<T> {
+  item: T;
+  status: ReconcileStatus;
+  rows?: number;
+  error?: string;
+}
+
+/**
+ * Work through a run's overdue clients, up to `concurrency` at a time.
+ *
+ * One at a time, a Meta run got through about seven clients before its
+ * dispatch budget ran out. GitHub's scheduler skipped most of the runs meant to
+ * share the load, so fewer clients were reconciled each day than fell due, and
+ * the backlog showed on dashboards as recent days with part of their spend
+ * missing (Nov 2026). A client's reconcile is nearly all waiting on the ad
+ * platform, and the platforms' rate limits are per ad account, so separate
+ * clients overlap without competing for one quota.
+ *
+ * Every rule of the one-at-a-time loop still holds for each start: queue order
+ * (longest waiting first), the dispatch budget, `fitsBeforeDeadline`, and the
+ * run's first client always starting. `busy` is asked before a client is
+ * started, so one that another run is already reconciling is left to that run
+ * rather than pulled twice at once; a failed `busy` check counts as not busy.
+ */
+export async function dispatchReconciles<T extends { id: string }>(
+  queue: readonly T[],
+  opts: {
+    concurrency: number;
+    budgetMs: number;
+    usualMs: ReadonlyMap<string, number>;
+    startedAt: number;
+    busy: (item: T) => Promise<boolean>;
+    sync: (item: T) => Promise<number>;
+    now?: () => number;
+  },
+): Promise<DispatchResult<T>[]> {
+  const now = opts.now ?? Date.now;
+  const results: DispatchResult<T>[] = [];
+  let next = 0;
+  let started = 0;
+
+  async function worker() {
+    while (next < queue.length) {
+      const item = queue[next++];
+      // Out of time entirely: no need to ask whether anyone else has it.
+      if (now() - opts.startedAt > opts.budgetMs) {
+        results.push({ item, status: "deferred" });
+        continue;
+      }
+      if (await opts.busy(item).catch(() => false)) {
+        results.push({ item, status: "skipped" });
+        continue;
+      }
+      // Checked and counted with no await in between, so two workers cannot
+      // both take the first-client exemption.
+      const elapsed = now() - opts.startedAt;
+      if (
+        elapsed > opts.budgetMs ||
+        (started > 0 && !fitsBeforeDeadline(elapsed, opts.usualMs.get(item.id)))
+      ) {
+        results.push({ item, status: "deferred" });
+        continue;
+      }
+      started++;
+      try {
+        results.push({ item, status: "synced", rows: await opts.sync(item) });
+      } catch (err) {
+        // One client's bad token must not abort the whole run.
+        results.push({
+          item,
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.max(1, opts.concurrency) }, worker));
+  return results;
 }
