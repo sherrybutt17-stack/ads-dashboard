@@ -138,6 +138,23 @@ describe("🔴 each client's window is built in its own timezone", () => {
   });
 });
 
+describe("whether a client's CRM counts as connected", () => {
+  /*
+   * The book printed "CRM not connected" beside a client whose app was
+   * installed, stages mapped and history imported, for as long as no live
+   * webhook had landed yet — the one screen disagreeing with every other.
+   */
+  it("counts an installed CRM before its first live event", async () => {
+    const res = await loadBook([client({ ghlLocationId: "loc_1", firstWebhookAt: null })]);
+    expect(res.rollup.rows[0].connected).toBe(true);
+  });
+
+  it("does not count a client with no CRM at all", async () => {
+    const res = await loadBook([client({ ghlLocationId: null, firstWebhookAt: null })]);
+    expect(res.rollup.rows[0].connected).toBe(false);
+  });
+});
+
 describe("a failure costs the panel, not the page", () => {
   it("returns an empty roll-up and the reason", async () => {
     /*

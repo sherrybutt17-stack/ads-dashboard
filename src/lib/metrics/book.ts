@@ -1,4 +1,5 @@
 import type { Client } from "@/db/schema";
+import { crmConnected } from "@/lib/crm-connected";
 import {
   previousWindow,
   shiftDateKey,
@@ -143,12 +144,17 @@ export async function loadBook(
     slug: c.slug,
     currency: c.metaCurrency ?? "USD",
     /*
-     * "Has a webhook ever landed", not "did this client have leads this month".
-     * A client that genuinely produced nothing in June still has a working pipe
+     * "Is a CRM wired up", not "did this client have leads this month". A
+     * client that genuinely produced nothing in June still has a working pipe
      * and belongs in the book's cost per lead; a client whose CRM was never
      * wired does not, because its zero is about the wiring.
+     *
+     * The same test as every other screen (`crmConnected`). "Has a webhook
+     * ever landed" flagged a freshly installed app as "CRM not connected"
+     * until its first live event, though the history import had already
+     * filled its leads.
      */
-    connected: c.firstWebhookAt !== null,
+    connected: crmConnected(c),
     leadMode: c.paidLeadFilter,
     googleCurrencies: googleCurrencies.get(c.id) ?? [],
     tiktokCurrencies: tiktokCurrencies.get(c.id) ?? [],
