@@ -206,7 +206,11 @@ export function buildBrief(
    */
   const rev = c.revenue;
   const revenueUnknown = Boolean(rev && rev.wonOpps > 0 && rev.wonWithValue === 0);
-  if (rev) {
+  if (data.client.revenueTracked === false) {
+    // A fourth state: counted by tags, which carry no deal value. Not a number.
+    facts.push({ label: "Revenue", display: `${DASH} (not tracked: leads are counted by tags)`, change: null });
+    facts.push({ label: "Return on ad spend", display: `${DASH} (not tracked)`, change: null });
+  } else if (rev) {
     if (revenueUnknown) {
       facts.push({ label: "Revenue", display: `${DASH} (deal values not recorded)`, change: null });
       facts.push({ label: "Return on ad spend", display: `${DASH} (needs deal values)`, change: null });
@@ -313,7 +317,11 @@ function buildCaveats(data: DashboardData): string[] {
    * safeguard, it is a second story the model can choose between.
    */
   const rev = c.revenue;
-  if (!rev || rev.wonOpps === 0) {
+  if (data.client.revenueTracked === false) {
+    out.push(
+      "Revenue and return on ad spend are NOT TRACKED for this client: its leads are counted from GoHighLevel tags, which carry no deal value. Do not state, imply or estimate any revenue or return on ad spend, and do not describe it as zero.",
+    );
+  } else if (!rev || rev.wonOpps === 0) {
     out.push(
       "No deal reached closed-won in this period, so its revenue is genuinely zero — but deals from these leads can still close later, and a period's revenue keeps growing after the period ends. Do not present zero revenue as a final verdict on the advertising.",
     );

@@ -18,6 +18,12 @@ import {
   suggestCanonicalStage,
   type CanonicalStage,
 } from "@/lib/stages";
+import {
+  CountByControl,
+  SwitchToPipeline,
+  TagMappingPanel,
+  type CrmMode,
+} from "@/components/TagMapping";
 
 /**
  * Connection wizard.
@@ -245,6 +251,12 @@ interface Props {
   /** Set when the browser has just come back from TikTok's authorization screen. */
   tiktokStash: string | null;
   stages: StageRow[];
+  /**
+   * Counting leads by tags instead of pipeline stages — offered only where the
+   * server allows it (Reflexion Digital, and test clients). Absent or not
+   * allowed: the step is exactly the pipeline mapping it always was.
+   */
+  tagMapping?: { allowed: boolean; mode: CrmMode };
 }
 
 export interface MetaAccountRow {
@@ -299,6 +311,7 @@ export function SetupWizard({
   tiktokConfigured,
   tiktokStash,
   stages: initialStages,
+  tagMapping,
 }: Props) {
   const router = useRouter();
   const usingOauth = initial.ghlAuthMethod === "oauth" || oauthAvailable;
@@ -351,6 +364,7 @@ export function SetupWizard({
       <StageStep
         clientId={clientId}
         stages={initialStages}
+        tagMapping={tagMapping}
         onDone={() => router.refresh()}
       />
       <MetaAccountsStep
@@ -1085,15 +1099,31 @@ function groupStagesByPipeline(rows: StageRow[]) {
 function StageStep({
   clientId,
   stages,
+  tagMapping,
   onDone,
 }: {
   clientId: string;
   stages: StageRow[];
+  tagMapping?: { allowed: boolean; mode: CrmMode };
   onDone: () => void;
 }) {
   const [rows, setRows] = useState(stages);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  /*
+   * Which editor is open — pipeline stages or tags. Opening one changes
+   * nothing; only its own save (after a before/after confirmation) switches
+   * how the client is counted. Follows the saved mode after a refresh.
+   */
+  const tagsAllowed = Boolean(tagMapping?.allowed);
+  const savedMode: CrmMode = tagMapping?.mode ?? "pipeline";
+  const [view, setView] = useState<CrmMode>(savedMode);
+  const [seenMode, setSeenMode] = useState(savedMode);
+  if (savedMode !== seenMode) {
+    setSeenMode(savedMode);
+    setView(savedMode);
+  }
 
   /*
    * Reset local edits when the server sends a new stage list (after a
@@ -1227,10 +1257,33 @@ function StageStep({
     <Card
       step={2}
       anchor={SETUP_SECTION.stages}
-      title="Map pipeline stages"
-      description="Your GHL stage names, mapped onto the seven canonical funnel stages."
-      done={rows.length > 0 && missing.length === 0}
+      title={tagsAllowed ? "Map pipeline stages or tags" : "Map pipeline stages"}
+      description={
+        tagsAllowed
+          ? "Choose how this client's leads are counted: by GoHighLevel pipeline stages, or by the tags on its contacts."
+          : "Your GHL stage names, mapped onto the seven canonical funnel stages."
+      }
+      done={savedMode === "tags" || (rows.length > 0 && missing.length === 0)}
     >
+      {tagsAllowed && (
+        <CountByControl value={view} saved={savedMode} onChange={setView} />
+      )}
+
+      {view === "tags" ? (
+        <TagMappingPanel clientId={clientId} savedMode={savedMode} onSaved={onDone} />
+      ) : (
+      <>
+      {savedMode === "tags" && (
+        <SwitchToPipeline
+          clientId={clientId}
+          onSaved={() => {
+            // This notice goes away once the client is back on pipeline, so the
+            // confirmation is shown by the step itself.
+            setMsg({ ok: true, msg: "Saved. This client's leads are counted by pipeline stages again." });
+            onDone();
+          }}
+        />
+      )}
       <button
         onClick={importStages}
         disabled={busy}
@@ -1428,6 +1481,8 @@ function StageStep({
       )}
 
       {msg && <Result ok={msg.ok}>{msg.msg}</Result>}
+      </>
+      )}
     </Card>
   );
 }

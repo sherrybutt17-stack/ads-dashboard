@@ -74,6 +74,9 @@ CREATE TABLE clients (
   meta_timezone text,
   paid_lead_filter text NOT NULL DEFAULT 'all',
   paid_lead_tag text NOT NULL DEFAULT 'facebook-lead',
+  crm_mapping_mode text NOT NULL DEFAULT 'pipeline',
+  tag_lead_every_contact boolean NOT NULL DEFAULT false,
+  tag_mapping_allowed boolean NOT NULL DEFAULT false,
   last_synced_at timestamptz,
   last_meta_reconciled_at timestamptz,
   last_google_reconciled_at timestamptz,
@@ -171,6 +174,7 @@ CREATE TABLE opportunities (
   monetary_value numeric(14,2),
   ghl_created_at timestamptz,
   last_stage_change_at timestamptz,
+  from_tags boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT opportunities_client_ghl_key UNIQUE (client_id, ghl_opportunity_id)
@@ -222,6 +226,24 @@ CREATE TABLE stage_transitions (
   source text NOT NULL DEFAULT 'webhook',
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT stage_transitions_dedupe_key UNIQUE (dedupe_key)
+);
+
+CREATE TABLE tag_stage_mappings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  tag text NOT NULL,
+  canonical_stage canonical_stage NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT tag_stage_mappings_client_tag_key UNIQUE (client_id, tag)
+);
+
+CREATE TABLE contact_tag_history (
+  contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  client_id uuid NOT NULL,
+  tag text NOT NULL,
+  first_seen_at timestamptz NOT NULL,
+  exact boolean NOT NULL DEFAULT false,
+  CONSTRAINT contact_tag_history_pkey PRIMARY KEY (contact_id, tag)
 );
 
 
@@ -653,6 +675,7 @@ CREATE TABLE agencies (
   name text NOT NULL,
   slug text NOT NULL,
   status text NOT NULL DEFAULT 'active',
+  tag_mapping_enabled boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT agencies_slug_key UNIQUE (slug)

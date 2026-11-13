@@ -176,11 +176,14 @@ export async function ReportDocument({
   const wonOpps = current.revenue?.wonOpps ?? 0;
   const wonWithValue = current.revenue?.wonWithValue ?? 0;
   const valuesMissing = wonOpps > 0 && wonWithValue === 0;
-  const revenueFootnote = valuesMissing
-    ? `${formatNumber(wonOpps)} closed, no deal value set`
-    : wonWithValue > 0 && wonWithValue < wonOpps
-      ? `${formatNumber(wonWithValue)} of ${formatNumber(wonOpps)} deals valued`
-      : undefined;
+  // A client counted by tags has no deal values at all (see getRevenue).
+  const revenueFootnote = client.crmMappingMode === "tags"
+    ? "Not tracked: leads are counted by tags"
+    : valuesMissing
+      ? `${formatNumber(wonOpps)} closed, no deal value set`
+      : wonWithValue > 0 && wonWithValue < wonOpps
+        ? `${formatNumber(wonWithValue)} of ${formatNumber(wonOpps)} deals valued`
+        : undefined;
 
   /*
    * The brand colour reaches the report regardless of

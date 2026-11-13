@@ -288,7 +288,9 @@ export function buildDeck(
    * is worse than presenting nothing.
    */
   const noDealValues =
-    wonWithValue === 0
+    data.client.revenueTracked === false
+      ? "not tracked — this client's leads are counted by tags, which carry no deal value"
+      : wonWithValue === 0
       ? wonOpps > 0
         ? `${formatNumber(wonOpps)} closed, but no deal value is set on any of them in the CRM`
         : "no closed deals in this period"

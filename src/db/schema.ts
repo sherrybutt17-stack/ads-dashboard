@@ -12,6 +12,7 @@ import {
   date,
   uniqueIndex,
   index,
+  primaryKey,
   customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -96,6 +97,14 @@ export const transitionSourceEnum = pgEnum("transition_source", [
   "webhook",
   "backfill_snapshot",
   "manual",
+  /**
+   * Built from a contact's GoHighLevel tags for a client counted by tags
+   * (`clients.crmMappingMode = 'tags'`). Unlike every other source these rows
+   * are DERIVED — `src/lib/tag-funnel` rebuilds them from `contact_tag_history`
+   * and `tag_stage_mappings` — so they may be replaced; the append-only rule
+   * protects the pipeline rows, which cannot be re-fetched.
+   */
+  "tag",
 ]);
 
 export const webhookStatusEnum = pgEnum("webhook_status", [
@@ -257,6 +266,23 @@ export const paidLeadFilterEnum = pgEnum("paid_lead_filter", [
   "either",
 ]);
 
+/**
+ * Where a client's funnel comes from.
+ *
+ * `pipeline` — the original design: a lead is a GoHighLevel opportunity
+ * entering a stage mapped to New lead, and every later step is a stage move.
+ *
+ * `tags` — for sub-accounts whose leads mostly never get a pipeline card. A
+ * lead is a contact carrying a mapped tag (or every new contact, or one that
+ * came from an ad), counted on the day it arrived; later steps are tags mapped
+ * onto them. Pipeline rows keep being recorded either way, so switching back
+ * loses nothing. See `src/lib/tag-funnel`.
+ */
+export const crmMappingModeEnum = pgEnum("crm_mapping_mode", [
+  "pipeline",
+  "tags",
+]);
+
 /* ------------------------------------------------------------------ *
  * agencies — the tenant
  * ------------------------------------------------------------------ *
@@ -291,6 +317,11 @@ export const agencies = pgTable(
      */
     slug: text("slug").notNull(),
     status: agencyStatusEnum("status").notNull().default("active"),
+    /**
+     * Offer "Map by tag" on every client of this agency. Off by default, so a
+     * new agency sees exactly the pipeline setup it always did.
+     */
+    tagMappingEnabled: boolean("tag_mapping_enabled").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -403,6 +434,20 @@ export const clients = pgTable(
       .default("either"),
     /** GHL tag marking a lead as Facebook-sourced. Compared case-insensitively. */
     paidLeadTag: text("paid_lead_tag").notNull().default("facebook-lead"),
+
+    // --- Where the funnel comes from (see crmMappingModeEnum) ---
+    crmMappingMode: crmMappingModeEnum("crm_mapping_mode")
+      .notNull()
+      .default("pipeline"),
+    /** Tags mode: every new contact is a lead, tagged or not. */
+    tagLeadEveryContact: boolean("tag_lead_every_contact")
+      .notNull()
+      .default(false),
+    /**
+     * Offer "Map by tag" for this client even though its agency does not have
+     * it (`agencies.tagMappingEnabled`) — how a single test client gets it.
+     */
+    tagMappingAllowed: boolean("tag_mapping_allowed").notNull().default(false),
 
     // --- Real-time new-lead alerts ---
     /**
@@ -933,6 +978,14 @@ export const opportunities = pgTable(
       withTimezone: true,
     }),
 
+    /**
+     * True for the stand-in opportunity a tags-mode client gets per lead
+     * (`ghlOpportunityId` = `tag:<ghl contact id>`), which carries that lead's
+     * tag funnel rows. Never a GoHighLevel record, and never read for a client
+     * counted by pipeline — see `src/lib/metrics/ledger.ts`.
+     */
+    fromTags: boolean("from_tags").notNull().default(false),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -946,6 +999,9 @@ export const opportunities = pgTable(
       t.ghlOpportunityId,
     ),
     index("opportunities_client_stage_idx").on(t.clientId, t.currentStageId),
+    index("opportunities_client_from_tags_idx")
+      .on(t.clientId)
+      .where(sql`${t.fromTags}`),
   ],
 );
 
@@ -1028,6 +1084,64 @@ export const stageTransitions = pgTable(
       t.changedAt,
     ),
     index("stage_transitions_opportunity_idx").on(t.opportunityId, t.changedAt),
+  ],
+);
+
+/* ------------------------------------------------------------------ *
+ * Tags mode — what each tag means, and when each tag appeared
+ * ------------------------------------------------------------------ */
+
+/**
+ * Which GoHighLevel tag means which funnel step, for a client counted by tags.
+ *
+ * One step per tag (a tag cannot be both "booked" and "won"), several tags per
+ * step. Stored lowercased, like `contacts.tags`, so matching is exact.
+ */
+export const tagStageMappings = pgTable(
+  "tag_stage_mappings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    tag: text("tag").notNull(),
+    canonicalStage: canonicalStageEnum("canonical_stage").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [uniqueIndex("tag_stage_mappings_client_tag_key").on(t.clientId, t.tag)],
+);
+
+/**
+ * When each tag was first seen on each contact — the dates a tag funnel is
+ * built from.
+ *
+ * GoHighLevel keeps no record of when a tag was added, so this is ours.
+ * `exact` is true when we saw the tag arrive (a tag-update webhook, after we
+ * already knew the contact's earlier tags); otherwise the tag was already there
+ * when we first looked, and `firstSeenAt` is the contact's own creation time —
+ * the honest floor, and the date its lead is counted on anyway.
+ *
+ * Rows are only ever added: a tag that is later removed keeps its row, so a
+ * step once reached stays counted, as a pipeline stage once entered does.
+ */
+export const contactTagHistory = pgTable(
+  "contact_tag_history",
+  {
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    tag: text("tag").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    exact: boolean("exact").notNull().default(false),
+  },
+  (t) => [
+    primaryKey({ name: "contact_tag_history_pkey", columns: [t.contactId, t.tag] }),
+    index("contact_tag_history_client_tag_idx").on(t.clientId, t.tag),
   ],
 );
 
@@ -1970,6 +2084,8 @@ export type PipelineStage = typeof pipelineStages.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
 export type Opportunity = typeof opportunities.$inferSelect;
 export type StageTransition = typeof stageTransitions.$inferSelect;
+export type CrmMappingMode = (typeof crmMappingModeEnum.enumValues)[number];
+export type TagStageMapping = typeof tagStageMappings.$inferSelect;
 export type WebhookEvent = typeof webhookEvents.$inferSelect;
 export type FbDailyMetric = typeof fbDailyMetrics.$inferSelect;
 export type MetaAdCreative = typeof metaAdCreatives.$inferSelect;

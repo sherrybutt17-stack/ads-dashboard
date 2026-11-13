@@ -110,6 +110,13 @@ export interface ClientInput {
    * with no pointer to where is a dead end for whoever has to fix it.
    */
   tiktokCurrencies: string[];
+  /**
+   * False for a client counted by tags: a tag says "won", never for how much,
+   * so its return is unknown rather than zero. Its ROAS is a dash, and its
+   * spend stays out of the book's ROAS so it cannot drag that figure down.
+   * Absent means tracked, as every pipeline client is.
+   */
+  revenueTracked?: boolean;
   current: ClientPeriod;
   previous: ClientPeriod;
 }
@@ -137,6 +144,8 @@ export interface ClientRow {
   roas: number | null;
   /** At least one won deal has a value, so revenue means something. */
   revenueKnown: boolean;
+  /** False for a client counted by tags — its revenue is not tracked at all. */
+  revenueTracked: boolean;
   spendChange: number | null;
   leadsChange: number | null;
   /** Spend was added across platforms priced in different currencies. */
@@ -157,6 +166,8 @@ export interface CurrencyTotals {
   cpAppt: number | null;
   roas: number | null;
   revenueKnown: boolean;
+  /** False when no client in the group tracks revenue (all counted by tags). */
+  revenueTracked: boolean;
   spendChange: number | null;
   leadsChange: number | null;
   /** Clients whose CRM has never delivered, left out of the ratios above. */
@@ -246,8 +257,9 @@ export function buildRollup(inputs: readonly ClientInput[]): BookRollup {
       revenue: cur.revenue,
       cpLead: costPer(cur.spend, cur.leads),
       cpAppt: costPer(cur.spend, cur.appointments),
-      roas: roasOf(cur),
-      revenueKnown: cur.wonWithValue > 0,
+      roas: c.revenueTracked === false ? null : roasOf(cur),
+      revenueKnown: c.revenueTracked !== false && cur.wonWithValue > 0,
+      revenueTracked: c.revenueTracked !== false,
       spendChange: pctChange(cur.spend, c.previous.spend),
       leadsChange: pctChange(cur.leads, c.previous.leads),
       mixedCurrency,
@@ -289,6 +301,12 @@ export function buildRollup(inputs: readonly ClientInput[]): BookRollup {
         (a, c) => addInto(a, c.current),
         { ...EMPTY_CLIENT_PERIOD },
       );
+      // ROAS only over clients whose deal values are recorded at all.
+      const valued = comparable.filter((c) => c.revenueTracked !== false);
+      const roasBase = valued.reduce(
+        (a, c) => addInto(a, c.current),
+        { ...EMPTY_CLIENT_PERIOD },
+      );
 
       return {
         currency,
@@ -301,8 +319,10 @@ export function buildRollup(inputs: readonly ClientInput[]): BookRollup {
         revenue: total.revenue,
         cpLead: costPer(ratioBase.spend, ratioBase.leads),
         cpAppt: costPer(ratioBase.spend, ratioBase.appointments),
-        roas: roasOf(ratioBase),
-        revenueKnown: ratioBase.wonWithValue > 0,
+        roas: valued.length > 0 ? roasOf(roasBase) : null,
+        revenueKnown: roasBase.wonWithValue > 0,
+        // A group of connected clients that are all counted by tags.
+        revenueTracked: valued.length > 0 || comparable.length === 0,
         spendChange: pctChange(total.spend, prevTotal.spend),
         leadsChange: pctChange(total.leads, prevTotal.leads),
         excluded: members

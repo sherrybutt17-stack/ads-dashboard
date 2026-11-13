@@ -44,11 +44,14 @@ export function LeadSourceSettings({
   initialMode,
   initialTag,
   breakdown,
+  countedByTags = false,
 }: {
   clientId: string;
   initialMode: "all" | "attributed" | "tagged" | "either";
   initialTag: string;
   breakdown?: { total: number; attributed: number; tagged: number; paid: number };
+  /** The client's leads come from tags, so they are not "in pipeline". */
+  countedByTags?: boolean;
 }) {
   const router = useRouter();
   const [mode, setMode] = useState(initialMode);
@@ -173,7 +176,7 @@ export function LeadSourceSettings({
             In the current range
           </div>
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
-            <Stat label="Leads in pipeline" value={breakdown.total} />
+            <Stat label={countedByTags ? "Leads (counted by tags)" : "Leads in pipeline"} value={breakdown.total} />
             <Stat label="With campaign ID" value={breakdown.attributed} />
             <Stat label="With tag" value={breakdown.tagged} />
             <Stat label="Counted as paid" value={breakdown.paid} emphasis />

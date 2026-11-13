@@ -427,11 +427,14 @@ export default async function ClientDashboard({
   const wonOpps = current.revenue?.wonOpps ?? 0;
   const wonWithValue = current.revenue?.wonWithValue ?? 0;
   const valuesMissing = wonOpps > 0 && wonWithValue === 0;
-  const revenueFootnote = valuesMissing
-    ? `${formatNumber(wonOpps)} closed, no deal value set`
-    : wonWithValue > 0 && wonWithValue < wonOpps
-      ? `${formatNumber(wonWithValue)} of ${formatNumber(wonOpps)} deals valued`
-      : undefined;
+  // A client counted by tags has no deal values at all (see getRevenue).
+  const revenueFootnote = client.crmMappingMode === "tags"
+    ? "Not tracked: leads are counted by tags"
+    : valuesMissing
+      ? `${formatNumber(wonOpps)} closed, no deal value set`
+      : wonWithValue > 0 && wonWithValue < wonOpps
+        ? `${formatNumber(wonWithValue)} of ${formatNumber(wonOpps)} deals valued`
+        : undefined;
 
   // Per-client accent + the "what changed" headline. The accent is scoped to the
   // dashboard subtree via CSS vars, so this client's data-identity (hero glow,

@@ -358,3 +358,40 @@ describe("an empty book", () => {
     expect(book.leadBases).toEqual([]);
   });
 });
+
+describe("a client counted by tags", () => {
+  /*
+   * Tags carry no deal values, so that client's return is unknown — a dash,
+   * not 0.0x — and its spend stays out of the book's ROAS, which would
+   * otherwise read as if that money had earned nothing.
+   */
+  const piped = client({
+    clientId: "piped",
+    name: "Piped",
+    current: period({ spend: 1_000, leads: 10, closedWon: 2, wonWithValue: 2, revenue: 5_000 }),
+  });
+  const tagged = client({
+    clientId: "tagged",
+    name: "Tagged",
+    revenueTracked: false,
+    current: period({ spend: 4_000, leads: 90 }),
+  });
+  const book = buildRollup([piped, tagged]);
+
+  it("shows no ROAS for it, and keeps its leads in cost per lead", () => {
+    const row = book.rows.find((r) => r.clientId === "tagged")!;
+    expect(row.roas).toBeNull();
+    expect(row.revenueKnown).toBe(false);
+    expect(row.revenueTracked).toBe(false);
+    expect(book.rows.find((r) => r.clientId === "piped")!.revenueTracked).toBe(true);
+    expect(row.cpLead).toBeCloseTo(4_000 / 90);
+    expect(usd(book).cpLead).toBeCloseTo(5_000 / 100);
+  });
+
+  it("works out the book's ROAS from the clients whose deals carry values", () => {
+    expect(usd(book).roas).toBeCloseTo(5_000 / 1_000);
+    expect(buildRollup([tagged]).byCurrency[0].roas).toBeNull();
+    expect(buildRollup([tagged]).byCurrency[0].revenueTracked).toBe(false);
+    expect(usd(book).revenueTracked).toBe(true);
+  });
+});

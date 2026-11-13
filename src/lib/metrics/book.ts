@@ -156,6 +156,7 @@ export async function loadBook(
      */
     connected: crmConnected(c),
     leadMode: c.paidLeadFilter,
+    revenueTracked: c.crmMappingMode !== "tags",
     googleCurrencies: googleCurrencies.get(c.id) ?? [],
     tiktokCurrencies: tiktokCurrencies.get(c.id) ?? [],
     current: periodFrom(byKey.get(`${c.id}:current`)),

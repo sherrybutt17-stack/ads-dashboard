@@ -10,6 +10,7 @@ import { listAdAccounts } from "@/lib/meta/accounts";
 import { listGoogleAccounts } from "@/lib/google/accounts";
 import { isGoogleConfigured } from "@/lib/google/oauth";
 import { HealthChecklist } from "@/components/HealthChecklist";
+import { tagMappingAllowed } from "@/lib/tag-funnel";
 import { SetupWizard } from "@/components/SetupWizard";
 import { BrandingSettings } from "@/components/BrandingSettings";
 import { getClientBranding } from "@/lib/branding-store";
@@ -89,6 +90,7 @@ export default async function SetupPage({
     tiktokAccounts,
     branding,
     alertDestination,
+    tagsAllowed,
   ] = await Promise.all([
     // Raw upstream errors are superadmin-only — an agency owner legitimately
     // reads this page and still must not read our infrastructure back off it.
@@ -107,6 +109,7 @@ export default async function SetupPage({
     activeTiktokAccountsForDisplay(client.id),
     getClientBranding(client.id),
     describeDestination(client.id),
+    tagMappingAllowed(client),
   ]);
 
   return (
@@ -131,6 +134,7 @@ export default async function SetupPage({
           initialMode={client.paidLeadFilter}
           initialTag={client.paidLeadTag}
           breakdown={leadBreakdown}
+          countedByTags={client.crmMappingMode === "tags"}
         />
 
         <BrandingSettings
@@ -196,6 +200,7 @@ export default async function SetupPage({
             timezone: a.timezone,
             status: a.status as "active" | "paused" | "removed",
           }))}
+          tagMapping={{ allowed: tagsAllowed, mode: client.crmMappingMode }}
           stages={stages.map((s) => ({
             id: s.id,
             name: s.ghlStageName,

@@ -14,6 +14,7 @@ import {
   pipelineStages,
   stageTransitions,
   syncRuns,
+  tagStageMappings,
   REQUIRED_CANONICAL_STAGES,
   type Client,
 } from "@/db/schema";
@@ -110,8 +111,17 @@ export async function runHealthChecks(
   const checks: HealthCheck[] = [];
 
   checks.push(await checkGhlToken(client));
-  checks.push(await checkStageMapping(client));
-  checks.push(await checkUnmappedStages(client));
+  /*
+   * A client counted by tags has no use for its pipeline mapping — an empty
+   * one is not a fault there, and a stage seen in a webhook changes nothing it
+   * counts. What it needs instead is a tag mapping that can find leads.
+   */
+  if (client.crmMappingMode === "tags") {
+    checks.push(await checkTagMapping(client));
+  } else {
+    checks.push(await checkStageMapping(client));
+    checks.push(await checkUnmappedStages(client));
+  }
   checks.push(await checkWebhookAlive(client));
 
   /*
@@ -339,6 +349,45 @@ async function checkStageMapping(client: Client): Promise<HealthCheck> {
     level: "amber",
     message: `${missing.length} unmapped: ${missing.join(", ")}`,
     hint: "Any stage left unmapped will read as zero in the funnel forever.",
+  };
+}
+
+/**
+ * Tags mode: is there a mapping that can find leads at all?
+ *
+ * With no tag mapped and "every new contact" off, only contacts that came from
+ * an ad (a campaign or click id) count — usually far fewer than the real
+ * number, which is the very gap tags mode exists to close.
+ */
+async function checkTagMapping(client: Client): Promise<HealthCheck> {
+  const base = { id: "tag_mapping", label: "Tag mapping" };
+  const rows = await db
+    .select({ tag: tagStageMappings.tag, canonical: tagStageMappings.canonicalStage })
+    .from(tagStageMappings)
+    .where(eq(tagStageMappings.clientId, client.id));
+
+  const leadTags = rows.filter((r) => r.canonical === "new_lead").map((r) => `"${r.tag}"`);
+  const steps = new Set(rows.map((r) => r.canonical).filter((s) => s !== "new_lead"));
+  const stepNote = steps.size > 0 ? ` · ${steps.size} later step${steps.size === 1 ? "" : "s"} mapped` : "";
+
+  if (client.tagLeadEveryContact) {
+    return { ...base, level: "green", message: `Every new contact counts as a lead${stepNote}` };
+  }
+  if (rows.length === 0) {
+    return {
+      ...base,
+      level: "amber",
+      message: "No tags mapped — only contacts with an ad campaign or click ID count as leads",
+      hint: "Pick the tags that mark a lead in step 2, Map pipeline stages or tags (Count leads by: Tags).",
+    };
+  }
+  return {
+    ...base,
+    level: "green",
+    message:
+      leadTags.length > 0
+        ? `Leads counted by ${leadTags.slice(0, 3).join(", ")}${leadTags.length > 3 ? ` +${leadTags.length - 3}` : ""}${stepNote}`
+        : `${rows.length} tag${rows.length === 1 ? "" : "s"} mapped`,
   };
 }
 
@@ -995,6 +1044,10 @@ async function checkSpendLeadCoherence(client: Client): Promise<HealthCheck> {
           eq(stageTransitions.clientId, client.id),
           eq(stageTransitions.toCanonical, "new_lead"),
           gte(stageTransitions.changedAt, window.startUtc),
+          // This client's own funnel only: tag rows or pipeline rows, never both.
+          client.crmMappingMode === "tags"
+            ? sql`${stageTransitions.source}::text = 'tag'`
+            : sql`${stageTransitions.source}::text <> 'tag'`,
         ),
       ),
   ]);
@@ -1237,6 +1290,15 @@ async function checkAdAttribution(client: Client): Promise<HealthCheck> {
 async function checkDealValues(client: Client): Promise<HealthCheck> {
   const base = { id: "deal_values", label: "Deal values recorded" };
   const window = trailingWindowInclusive(90, client.timezone);
+
+  // A tag says "won", never for how much — so there is nothing to check.
+  if (client.crmMappingMode === "tags") {
+    return {
+      ...base,
+      level: "green",
+      message: "Not tracked — this client counts leads by tags, which carry no deal value",
+    };
+  }
 
   const [row] = await db
     .select({

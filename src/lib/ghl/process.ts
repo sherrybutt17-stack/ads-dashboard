@@ -13,6 +13,7 @@ import { decryptNullable } from "@/lib/crypto";
 import { GhlClient } from "./client";
 import { normalizeWebhookPayload, normalizeStatus, parseDate } from "./normalize";
 import { parseAttribution } from "./attribution";
+import { recordContactTags } from "@/lib/tag-funnel";
 import type { GhlContact } from "./types";
 
 export interface ProcessResult {
@@ -375,6 +376,8 @@ async function upsertContactFromEvent(
         target: [contacts.clientId, contacts.ghlContactId],
       })
       .returning();
+    // A client counting every new contact as a lead counts this one too.
+    if (created) await recordContactTags(client, null, created);
     return created ?? existing ?? null;
   }
 
@@ -463,6 +466,12 @@ async function upsertContactFromEvent(
       },
     })
     .returning();
+  /*
+   * A client counted by tags: note any tag this read turned up, and rebuild
+   * this lead's funnel from it. A no-op for a pipeline client, and it never
+   * throws — the event itself must not fail over it.
+   */
+  if (row) await recordContactTags(client, existing ?? null, row);
   return row;
 }
 

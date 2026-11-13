@@ -154,6 +154,12 @@ export interface DashboardData {
     currency: string;
     lastSyncedAt: string | null;
     firstWebhookAt: string | null;
+    /**
+     * False for a client counted by GoHighLevel tags: tags carry no deal
+     * value, so revenue and ROAS are NOT TRACKED — unknown, never zero. Absent
+     * means tracked, as for every pipeline client.
+     */
+    revenueTracked?: boolean;
   };
   range: { startKey: string; endKey: string; label: string };
   /** Headline period + its immediately preceding period, for deltas. */
@@ -1076,6 +1082,7 @@ export async function loadDashboard(
       currency,
       lastSyncedAt: adSyncedAt?.toISOString() ?? null,
       firstWebhookAt: client.firstWebhookAt?.toISOString() ?? null,
+      revenueTracked: client.crmMappingMode !== "tags",
     },
     range: {
       startKey: range.startKey,

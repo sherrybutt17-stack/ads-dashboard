@@ -1,6 +1,7 @@
 import { and, eq, inArray, lt, sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
+import { rebuildTagFunnel } from "@/lib/tag-funnel";
 import { db } from "@/db";
 import {
   contacts,
@@ -264,7 +265,19 @@ export async function importGhlHistory(
       }
     }
 
-    return finish({ done: true, phase: "done", cursor: null, totals, notes: await importNotes(client.id, totals, stages) });
+    /*
+     * A client counted by tags: the import has just refreshed every contact's
+     * tags, including ones never seen before, so its tag funnel is rebuilt. A
+     * failure leaves the import itself a success — saving the tag mapping again
+     * rebuilds the same way.
+     */
+    if (client.crmMappingMode === "tags") {
+      await rebuildTagFunnel(client.id, { seed: true }).catch((err: unknown) => {
+        console.warn(`[ghl] ${client.slug}: tag funnel not rebuilt after import —`, err instanceof Error ? err.message : err);
+      });
+    }
+
+    return finish({ done: true, phase: "done", cursor: null, totals, notes: await importNotes(client.id, totals, stages, client.crmMappingMode === "tags") });
   } catch (err) {
     /*
      * GoHighLevel busy, down, or too slow, after this request wrote pages:
@@ -798,7 +811,12 @@ async function writeOpportunities(
  * as a lead twice. The notes name what is missing and leave which stage it is
  * to the operator.
  */
-async function importNotes(clientId: string, totals: HistoryTotals, stages: StageIndex): Promise<string[]> {
+async function importNotes(
+  clientId: string,
+  totals: HistoryTotals,
+  stages: StageIndex,
+  countedByTags = false,
+): Promise<string[]> {
   const notes: string[] = [];
   const fmt = (n: number) => n.toLocaleString("en-US");
   const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
@@ -808,6 +826,13 @@ async function importNotes(clientId: string, totals: HistoryTotals, stages: Stag
       `${fmt(totals.skipped)} ${plural(totals.skipped, "record", "records")} couldn't be saved — GoHighLevel sent values the database can't store — and ${plural(totals.skipped, "was", "were")} left out.`,
     );
   }
+
+  /*
+   * A client counted by tags takes its leads from contacts, not pipelines, so
+   * every note below — all of them advice about mapping pipeline stages —
+   * would send the operator to fix something its numbers do not use.
+   */
+  if (countedByTags) return notes;
 
   // Opportunities held, per pipeline, and how many sit in a stage nobody has mapped.
   const held = (
@@ -819,7 +844,8 @@ async function importNotes(clientId: string, totals: HistoryTotals, stages: Stag
       })
       .from(opportunities)
       .leftJoin(pipelineStages, eq(pipelineStages.id, opportunities.currentStageId))
-      .where(eq(opportunities.clientId, clientId))
+      // Real GoHighLevel opportunities only, never a tag lead's stand-in.
+      .where(and(eq(opportunities.clientId, clientId), eq(opportunities.fromTags, false)))
       .groupBy(opportunities.ghlPipelineId)
   )
     .map((r) => ({ pipeline: r.pipeline, n: Number(r.n), unmapped: Number(r.unmapped) }))

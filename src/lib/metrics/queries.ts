@@ -32,6 +32,14 @@ import {
   type RevenueTotals,
 } from "./compute";
 import { orderSegments } from "./breakdown-order";
+import {
+  FUNNEL_OPPORTUNITIES,
+  FUNNEL_TRANSITIONS,
+  OPP_CANONICAL,
+  OPP_PIPELINE_NAME,
+  OPP_STAGE_NAME,
+  OPP_STAGE_ORDER,
+} from "./ledger";
 import { benchmarkSegment, type SegmentBenchmark } from "./benchmark";
 import type { CreativeTotals } from "./creative";
 import type { CreativeDay, FatigueInput } from "./fatigue";
@@ -340,7 +348,7 @@ function firstReachedCte(
   return sql`
     firsts AS (
       SELECT st.opportunity_id, ${sql.join(firsts, sql`, `)}
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       ${needsJoin ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
       WHERE ${sql.join(clauses, sql` AND `)}
       GROUP BY st.opportunity_id
@@ -412,7 +420,7 @@ export async function getFunnelCounts(
   const rows = await db.execute<{ stage: string; count: number }>(sql`
     SELECT st.to_canonical AS stage,
            COUNT(DISTINCT st.opportunity_id)::int AS count
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     ${needsJoin ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
     WHERE ${sql.join(clauses, sql` AND `)}
     GROUP BY st.to_canonical
@@ -465,12 +473,12 @@ async function countQualifiedLeads(
 ): Promise<number> {
   const rows = await db.execute<{ count: number }>(sql`
     SELECT COUNT(DISTINCT st.opportunity_id)::int AS count
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     ${needsJoin ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
     WHERE ${sql.join(clauses, sql` AND `)}
       AND st.to_canonical = 'new_lead'
       AND NOT EXISTS (
-        SELECT 1 FROM stage_transitions d
+        SELECT 1 FROM ${FUNNEL_TRANSITIONS} d
          WHERE d.opportunity_id = st.opportunity_id
            AND d.to_canonical = 'disqualified'
       )
@@ -501,7 +509,7 @@ export async function getRevenue(
   campaignIds?: string[],
   filter: PaidLeadFilter = DEFAULT_LEAD_FILTER,
   platform: AdPlatform = "meta",
-): Promise<RevenueTotals> {
+): Promise<RevenueTotals | null> {
   const paid = platformLeadPredicate(platform, filter);
   const needsJoin = paid !== null || Boolean(campaignIds?.length);
 
@@ -520,17 +528,19 @@ export async function getRevenue(
     won_opps: number;
     won_with_value: number;
     revenue: number;
+    mode: string | null;
   }>(sql`
     WITH won AS (
       SELECT DISTINCT o.id, o.monetary_value
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       JOIN opportunities o ON o.id = st.opportunity_id
       ${needsJoin ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
       WHERE ${sql.join(clauses, sql` AND `)}
     )
     SELECT COUNT(*)::int AS won_opps,
            COUNT(*) FILTER (WHERE monetary_value > 0)::int AS won_with_value,
-           COALESCE(SUM(monetary_value), 0)::float AS revenue
+           COALESCE(SUM(monetary_value), 0)::float AS revenue,
+           (SELECT crm_mapping_mode::text FROM clients WHERE id = ${clientId}) AS mode
     FROM won
   `);
 
@@ -538,7 +548,14 @@ export async function getRevenue(
     won_opps: number;
     won_with_value: number;
     revenue: number;
+    mode: string | null;
   }>(rows)[0];
+  /*
+   * A client counted by tags has no deal values to sum — a tag says "won", not
+   * for how much. Unknown, not zero: a $0 here would print as "the ads made no
+   * money" and a 0.0x ROAS beside it, so both tiles show a dash instead.
+   */
+  if (r?.mode === "tags") return null;
   if (!r) return { ...EMPTY_REVENUE };
   return {
     wonOpps: Number(r.won_opps) || 0,
@@ -1061,7 +1078,7 @@ export async function getDailySeries(
         SELECT to_char((st.changed_at AT TIME ZONE ${tz})::date, 'YYYY-MM-DD') AS "dateKey",
                st.to_canonical AS stage,
                COUNT(DISTINCT st.opportunity_id)::int AS count
-        FROM stage_transitions st
+        FROM ${FUNNEL_TRANSITIONS} st
         ${paid ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
         WHERE ${sql.join(clauses, sql` AND `)}
         GROUP BY 1, 2
@@ -1218,7 +1235,7 @@ export async function getLeadsByCampaign(
     sql`
       SELECT ${col} AS campaign_id,
              COUNT(DISTINCT st.opportunity_id)::int AS count
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       JOIN contacts c ON c.id = st.contact_id
       WHERE ${sql.join(clauses, sql` AND `)}
       GROUP BY ${col}
@@ -1276,7 +1293,7 @@ export async function getFunnelByCampaign(
     SELECT ${col} AS campaign_id,
            st.to_canonical AS stage,
            COUNT(DISTINCT st.opportunity_id)::int AS count
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     JOIN contacts c ON c.id = st.contact_id
     WHERE ${sql.join(clauses, sql` AND `)}
     GROUP BY ${col}, st.to_canonical
@@ -1418,7 +1435,7 @@ export async function getFunnelByAd(
     SELECT c.meta_ad_id AS ad_id,
            st.to_canonical AS stage,
            COUNT(DISTINCT st.opportunity_id)::int AS count
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     JOIN contacts c ON c.id = st.contact_id
     WHERE ${sql.join(clauses, sql` AND `)}
     GROUP BY c.meta_ad_id, st.to_canonical
@@ -1463,7 +1480,7 @@ export async function getFunnelByAdset(
            c.meta_adset_id AS adset_id,
            st.to_canonical AS stage,
            COUNT(DISTINCT st.opportunity_id)::int AS count
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     JOIN contacts c ON c.id = st.contact_id
     WHERE ${sql.join(clauses, sql` AND `)}
     GROUP BY c.meta_campaign_id, c.meta_adset_id, st.to_canonical
@@ -1728,16 +1745,16 @@ export async function getPipelineDistribution(
     count: number;
     value: number;
   }>(sql`
-    SELECT ps.ghl_stage_name              AS name,
-           ps.canonical_stage             AS canonical,
-           COALESCE(ps.display_order, 999) AS ord,
+    SELECT ${OPP_STAGE_NAME}              AS name,
+           ${OPP_CANONICAL}               AS canonical,
+           COALESCE(${OPP_STAGE_ORDER}, 999) AS ord,
            COUNT(*)::int                  AS count,
            COALESCE(SUM(o.monetary_value), 0)::float AS value
-    FROM opportunities o
+    FROM ${FUNNEL_OPPORTUNITIES} o
     JOIN contacts c ON c.id = o.contact_id
     LEFT JOIN pipeline_stages ps ON ps.id = o.current_stage_id
     WHERE ${sql.join(clauses, sql` AND `)}
-    GROUP BY ps.ghl_stage_name, ps.canonical_stage, ps.display_order
+    GROUP BY 1, 2, 3
     ORDER BY ord
   `);
 
@@ -1811,14 +1828,14 @@ export async function getLeads(
            o.name                         AS name,
            c.utm_campaign                 AS campaign_name,
            ${col}                         AS campaign_id,
-           ps.ghl_stage_name              AS stage_name,
-           ps.ghl_pipeline_name           AS pipeline_name,
-           ps.canonical_stage             AS canonical,
-           COALESCE(ps.display_order, 999) AS ord,
+           ${OPP_STAGE_NAME}              AS stage_name,
+           ${OPP_PIPELINE_NAME}           AS pipeline_name,
+           ${OPP_CANONICAL}               AS canonical,
+           COALESCE(${OPP_STAGE_ORDER}, 999) AS ord,
            o.ghl_created_at               AS created_at,
            COALESCE(o.monetary_value, 0)::float AS value,
            o.status                       AS status
-    FROM opportunities o
+    FROM ${FUNNEL_OPPORTUNITIES} o
     JOIN contacts c ON c.id = o.contact_id
     LEFT JOIN pipeline_stages ps ON ps.id = o.current_stage_id
     WHERE ${sql.join(clauses, sql` AND `)}
@@ -1901,7 +1918,7 @@ export async function getLeadAttributionBreakdown(
         WHERE c.tags @> ARRAY[${tag}]::text[])::int AS tagged,
       COUNT(DISTINCT st.opportunity_id) FILTER (
         WHERE ${paid ?? sql`TRUE`})::int AS paid
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     LEFT JOIN contacts c ON c.id = st.contact_id
     WHERE st.client_id = ${clientId}
       AND st.to_canonical = 'new_lead'
@@ -1957,7 +1974,7 @@ export async function getLeadArrivalHeatmap(
       extract(dow  from (st.changed_at AT TIME ZONE ${tz}))::int AS dow,
       extract(hour from (st.changed_at AT TIME ZONE ${tz}))::int AS hour,
       COUNT(DISTINCT st.opportunity_id)::int AS count
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     ${paid ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
     WHERE st.client_id = ${clientId}
       AND st.to_canonical = 'new_lead'
@@ -2430,7 +2447,7 @@ export async function getTrendAnnotations(
        WHERE a.client_id = ${clientId}
          AND a.at >= ${window.startUtc}
          AND a.at <  ${window.endUtc}
-         AND a.action IN ('stages.remap','meta_account.add','meta_account.remove',
+         AND a.action IN ('stages.remap','tags.remap','meta_account.add','meta_account.remove',
                           'google_account.add','google_account.remove')
        ORDER BY a.at ASC
     `),
@@ -2480,6 +2497,18 @@ export async function getTrendAnnotations(
             n > 0
               ? `${n} past transitions were reclassified, so funnel figures before this date may have moved.`
               : "Pipeline stages were remapped.",
+        });
+        break;
+      }
+      case "tags.remap": {
+        out.push({
+          dateKey: r.at,
+          kind: "stage_remap",
+          label: "Lead counting changed",
+          detail:
+            meta.mode === "tags"
+              ? "Leads are counted by tags from here, and past figures were recounted the same way."
+              : "Leads are counted by pipeline stages from here, and past figures were recounted the same way.",
         });
         break;
       }
@@ -2794,7 +2823,7 @@ export async function getCreativeRevenue(
              c.meta_ad_id,
              o.monetary_value,
              st.changed_at AS won_at
-        FROM stage_transitions st
+        FROM ${FUNNEL_TRANSITIONS} st
         JOIN contacts c      ON c.id = st.contact_id
         JOIN opportunities o ON o.id = st.opportunity_id
        WHERE st.client_id = ${clientId}
@@ -2805,7 +2834,7 @@ export async function getCreativeRevenue(
     ),
     lead_in AS (
       SELECT opportunity_id, MIN(changed_at) AS lead_at
-        FROM stage_transitions
+        FROM ${FUNNEL_TRANSITIONS} stage_transitions
        WHERE client_id = ${clientId} AND to_canonical = 'new_lead'
        GROUP BY opportunity_id
     ),
@@ -2844,7 +2873,7 @@ export async function getCreativeRevenue(
                FILTER (WHERE st.to_canonical = 'appointment_booked')::int AS appointments,
              COUNT(DISTINCT st.opportunity_id)
                FILTER (WHERE st.to_canonical = 'showed')::int             AS showed
-        FROM stage_transitions st
+        FROM ${FUNNEL_TRANSITIONS} st
         JOIN contacts c     ON c.id = st.contact_id
         JOIN ad_creative ac ON ac.meta_ad_id = c.meta_ad_id
        WHERE st.client_id = ${clientId}
@@ -2916,7 +2945,7 @@ async function getRevenueCoverage(
   }>(sql`
     SELECT
       (SELECT COUNT(DISTINCT st.opportunity_id)::int
-         FROM stage_transitions st
+         FROM ${FUNNEL_TRANSITIONS} st
          JOIN contacts c ON c.id = st.contact_id
         WHERE st.client_id = ${clientId}
           AND st.to_canonical = 'closed_won'
@@ -2924,7 +2953,7 @@ async function getRevenueCoverage(
           AND st.changed_at <  ${window.endUtc}${paidClause}
       ) AS total_deals,
       (SELECT COUNT(DISTINCT st.opportunity_id)::int
-         FROM stage_transitions st
+         FROM ${FUNNEL_TRANSITIONS} st
          JOIN contacts c ON c.id = st.contact_id
         WHERE st.client_id = ${clientId}
           AND st.to_canonical = 'closed_won'
@@ -3175,7 +3204,7 @@ export async function getBookAggregates(
       SELECT w.client_id, w.bucket, st.to_canonical AS stage,
              COUNT(DISTINCT st.opportunity_id)::int AS count
       FROM w
-      JOIN stage_transitions st
+      JOIN ${FUNNEL_TRANSITIONS} st
         ON st.client_id = w.client_id
        AND st.changed_at >= w.start_utc
        AND st.changed_at <  w.end_utc
@@ -3196,7 +3225,7 @@ export async function getBookAggregates(
       won AS (
         SELECT DISTINCT w.client_id, w.bucket, o.id, o.monetary_value
         FROM w
-        JOIN stage_transitions st
+        JOIN ${FUNNEL_TRANSITIONS} st
           ON st.client_id = w.client_id
          AND st.changed_at >= w.start_utc
          AND st.changed_at <  w.end_utc
@@ -3395,7 +3424,7 @@ export async function getStageLag(
        * slow query, not a leak.
        */
       SELECT opportunity_id, MIN(changed_at) AS at
-      FROM stage_transitions
+      FROM ${FUNNEL_TRANSITIONS} stage_transitions
       WHERE client_id = ${clientId}
         AND to_canonical = 'new_lead'
         AND source <> 'backfill_snapshot'
@@ -3406,7 +3435,7 @@ export async function getStageLag(
            PERCENTILE_CONT(0.5) WITHIN GROUP (
              ORDER BY EXTRACT(EPOCH FROM (st.changed_at - fl.at)) / 86400.0
            )               AS median_days
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     JOIN first_lead fl ON fl.opportunity_id = st.opportunity_id
     ${paid ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
     WHERE st.client_id = ${clientId}
@@ -3432,7 +3461,7 @@ export async function getStageLag(
 
   const [excluded] = await db.execute<{ count: number }>(sql`
     SELECT COUNT(DISTINCT opportunity_id)::int AS count
-    FROM stage_transitions
+    FROM ${FUNNEL_TRANSITIONS} stage_transitions
     WHERE client_id = ${clientId}
       AND to_canonical = 'new_lead'
       AND source = 'backfill_snapshot'
@@ -3551,7 +3580,7 @@ export async function getSpeedToLeadOutcomes(
              MIN(st.changed_at) FILTER (WHERE st.to_canonical = 'appointment_booked') AS booked_at,
              MIN(st.changed_at) FILTER (WHERE st.to_canonical = 'showed')             AS showed_at,
              MIN(st.changed_at) FILTER (WHERE st.to_canonical = 'closed_won')          AS won_at
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       JOIN cohort ch ON ch.id = st.contact_id
       WHERE st.client_id = ${clientId}
         AND st.changed_at >= ch.lead_at
@@ -3695,7 +3724,7 @@ export async function getChannelMix(
            (${paid}) AS is_paid,
            st.to_canonical AS stage,
            COUNT(DISTINCT st.opportunity_id)::int AS n
-    FROM stage_transitions st
+    FROM ${FUNNEL_TRANSITIONS} st
     JOIN contacts c ON c.id = st.contact_id
     WHERE st.client_id = ${clientId}
       AND st.changed_at >= ${first}
@@ -3839,7 +3868,7 @@ export async function getCohortMaturation(
       -- it got there. No upper bound on changed_at: the cohort is followed
       -- forward, which is the entire point.
       SELECT st.contact_id, st.to_canonical AS stage, MIN(st.changed_at) AS at
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       JOIN cohort ch ON ch.id = st.contact_id
       WHERE st.client_id = ${clientId}
         AND st.changed_at >= ch.lead_at
@@ -3900,7 +3929,7 @@ export async function getStageAging(
              LAG(st.to_canonical) OVER (
                PARTITION BY st.opportunity_id ORDER BY st.changed_at, st.id
              ) AS prev_stage
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       ${paid ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
       WHERE st.client_id = ${clientId}
         AND st.to_canonical IS NOT NULL
@@ -3958,7 +3987,7 @@ export async function getStageAging(
     ),
     last_move AS (
       SELECT opportunity_id, MAX(changed_at) AS at
-      FROM stage_transitions
+      FROM ${FUNNEL_TRANSITIONS} stage_transitions
       WHERE client_id = ${clientId}
       GROUP BY opportunity_id
     )
@@ -3969,8 +3998,8 @@ export async function getStageAging(
              c.email,
              c.phone
            ) AS name,
-           ps.canonical_stage AS canonical,
-           ps.ghl_stage_name  AS stage_name,
+           ${OPP_CANONICAL}  AS canonical,
+           ${OPP_STAGE_NAME} AS stage_name,
            /*
             * last_stage_change_at is authoritative — re-read from the REST API
             * because the webhook carries no event time — but it is nullable,
@@ -3989,7 +4018,7 @@ export async function getStageAging(
              WHEN c.ghl_created_at IS NULL OR c.ghl_created_at < t.started THEN NULL
              ELSE (c.first_call_at IS NOT NULL)
            END AS ever_called
-    FROM opportunities o
+    FROM ${FUNNEL_OPPORTUNITIES} o
     CROSS JOIN tracking t
     ${paid ? sql`JOIN` : sql`LEFT JOIN`} contacts c ON c.id = o.contact_id
     LEFT JOIN pipeline_stages ps ON ps.id = o.current_stage_id
@@ -4166,9 +4195,9 @@ export async function getUncalledLeads(
              o.id::text AS opportunity_id,
              o.name AS opp_name,
              o.monetary_value::float AS value,
-             ps.canonical_stage AS canonical,
-             ps.ghl_stage_name  AS stage_name
-      FROM opportunities o
+             ${OPP_CANONICAL}  AS canonical,
+             ${OPP_STAGE_NAME} AS stage_name
+      FROM ${FUNNEL_OPPORTUNITIES} o
       LEFT JOIN pipeline_stages ps ON ps.id = o.current_stage_id
       WHERE o.client_id = ${clientId}
       ORDER BY o.contact_id,
@@ -4188,7 +4217,7 @@ export async function getUncalledLeads(
                 * A cast costs nothing: this expression only orders rows, and
                 * the enum's own ordering is not what it wants anyway.
                 */
-               CASE ps.canonical_stage::text
+               CASE ${OPP_CANONICAL}
                  WHEN 'closed_won' THEN 6 WHEN 'lost' THEN 6 WHEN 'disqualified' THEN 6
                  WHEN 'showed' THEN 5 WHEN 'no_show' THEN 5
                  WHEN 'appointment_booked' THEN 4
@@ -4463,11 +4492,28 @@ export async function getChurnWeeks(
 export async function getMappedStages(
   clientId: string,
 ): Promise<Set<CanonicalStage>> {
+  /*
+   * The steps this client's funnel can record at all — from its pipeline
+   * mapping, or for a client counted by tags, from its tag mapping. New lead is
+   * always recorded in tags mode: every lead is one, tag or no tag.
+   */
   const rows = await db.execute<{ canonical_stage: string }>(sql`
-    SELECT DISTINCT canonical_stage
+    WITH mode AS (
+      SELECT crm_mapping_mode::text = 'tags' AS tags FROM clients WHERE id = ${clientId}
+    )
+    SELECT DISTINCT canonical_stage::text AS canonical_stage
     FROM pipeline_stages
     WHERE client_id = ${clientId}
       AND canonical_stage IS NOT NULL
+      AND NOT COALESCE((SELECT tags FROM mode), false)
+    UNION
+    SELECT DISTINCT canonical_stage::text
+    FROM tag_stage_mappings
+    WHERE client_id = ${clientId}
+      AND COALESCE((SELECT tags FROM mode), false)
+    UNION
+    SELECT 'new_lead'
+    WHERE COALESCE((SELECT tags FROM mode), false)
   `);
   return new Set(
     resultRows<{ canonical_stage: string }>(rows).map(
@@ -4622,7 +4668,7 @@ export async function getQualityCohort(
              MIN(st.changed_at) FILTER (WHERE st.to_canonical = 'appointment_booked') AS booked_at,
              MIN(st.changed_at) FILTER (WHERE st.to_canonical = 'showed')             AS showed_at,
              MIN(st.changed_at) FILTER (WHERE st.to_canonical = 'closed_won')         AS won_at
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       JOIN cohort ch ON ch.id = st.contact_id
       WHERE st.client_id = ${clientId}
         AND st.changed_at >= ch.lead_at
@@ -4702,7 +4748,7 @@ export async function getLeadSourceCohort(
       SELECT st.contact_id,
              bool_or(st.to_canonical = 'appointment_booked') AS appt,
              bool_or(st.to_canonical = 'closed_won')         AS won
-      FROM stage_transitions st
+      FROM ${FUNNEL_TRANSITIONS} st
       JOIN cohort ch ON ch.id = st.contact_id
       WHERE st.client_id = ${clientId}
         AND st.changed_at >= ch.lead_at

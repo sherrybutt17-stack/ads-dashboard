@@ -62,16 +62,29 @@ function Delta({ value }: { value: number | null }) {
  * null-ness. If a real zero also rendered as a dash, the dash would stop
  * carrying information anywhere on this page.
  */
-function Roas({ value, closedWon, revenueKnown }: { value: number | null; closedWon: number; revenueKnown: boolean }) {
+function Roas({
+  value,
+  closedWon,
+  revenueKnown,
+  revenueTracked = true,
+}: {
+  value: number | null;
+  closedWon: number;
+  revenueKnown: boolean;
+  revenueTracked?: boolean;
+}) {
   if (value !== null) return <>{value.toFixed(1)}×</>;
-  const unrecorded = closedWon > 0 && !revenueKnown;
+  // Counted by tags: tags carry no deal value, so there is no return to show.
+  const unrecorded = revenueTracked && closedWon > 0 && !revenueKnown;
   return (
     <span
       style={{ color: "var(--text-muted)" }}
       title={
-        unrecorded
-          ? `${closedWon} deal${closedWon === 1 ? "" : "s"} closed with no value recorded in GHL, so the return cannot be computed.`
-          : "No spend to compute a return against."
+        !revenueTracked
+          ? "Not tracked: leads are counted by tags, which carry no deal value."
+          : unrecorded
+            ? `${closedWon} deal${closedWon === 1 ? "" : "s"} closed with no value recorded in GHL, so the return cannot be computed.`
+            : "No spend to compute a return against."
       }
     >
       {DASH}
@@ -142,7 +155,7 @@ function Row({ r }: { r: ClientRow }) {
         <Num value={r.closedWon} currency={r.currency} />
       </td>
       <td className="hidden py-2.5 pl-3 text-right tabular-nums md:table-cell">
-        <Roas value={r.roas} closedWon={r.closedWon} revenueKnown={r.revenueKnown} />
+        <Roas value={r.roas} closedWon={r.closedWon} revenueKnown={r.revenueKnown} revenueTracked={r.revenueTracked} />
       </td>
     </tr>
   );
@@ -179,7 +192,7 @@ function Totals({ t }: { t: CurrencyTotals }) {
         {formatNumber(t.closedWon)}
       </td>
       <td className="hidden py-2.5 pl-3 text-right font-normal tabular-nums md:table-cell">
-        <Roas value={t.roas} closedWon={t.closedWon} revenueKnown={t.revenueKnown} />
+        <Roas value={t.roas} closedWon={t.closedWon} revenueKnown={t.revenueKnown} revenueTracked={t.revenueTracked} />
       </td>
     </tr>
   );
@@ -333,7 +346,7 @@ export function BookRollupPanel({
               </p>
             )}
 
-            {book.rows.some((r) => r.closedWon > 0 && !r.revenueKnown) && (
+            {book.rows.some((r) => r.revenueTracked && r.closedWon > 0 && !r.revenueKnown) && (
               <p className="text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
                 * Deals closed with no value recorded in GHL, so no return can be
                 computed. That is an operations gap, not a result — a
