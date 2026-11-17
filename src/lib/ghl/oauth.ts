@@ -1,6 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { ghlInstallations, webhookEvents, type GhlInstallation, type Client } from "@/db/schema";
+import { clients as clientsTable, ghlInstallations, webhookEvents, type GhlInstallation, type Client } from "@/db/schema";
 import { encrypt, decrypt } from "@/lib/crypto";
 import { agencyIdForClient } from "@/lib/tenancy";
 import { GhlClient } from "./client";
@@ -384,16 +384,60 @@ async function upsertInstallation(
     existing.clientId !== intendedClientId &&
     (await otherAgency(existing.clientId, intendedClientId));
 
-  const [row] = await db
-    .insert(ghlInstallations)
-    .values(values)
-    .onConflictDoUpdate({
-      target: ghlInstallations.locationId,
-      set: rebinding ? { ...values, clientId: null } : values,
-    })
-    .returning();
+  const row = await db.transaction(async (tx) => {
+    const [written] = await tx
+      .insert(ghlInstallations)
+      .values(values)
+      .onConflictDoUpdate({
+        target: ghlInstallations.locationId,
+        set: rebinding ? { ...values, clientId: null } : values,
+      })
+      .returning();
+    /*
+     * 🔴 A sub-account moving to another agency ends any share it fed, in the
+     * same transaction: the old agency's clients must never keep reading the
+     * new agency's sub-account through a share. Their copies are frozen as
+     * history — stamps nulled, flags kept, so nothing double counts and a
+     * future share of this installation cannot collide with them.
+     */
+    const dissolved = rebinding && written ? await dissolveShare(tx, written.id) : [];
+    return { written, dissolved };
+  });
+  if (row.dissolved.length > 0) {
+    const { record } = await import("@/lib/audit");
+    for (const id of row.dissolved) {
+      await record({
+        action: "ghl_share.remove",
+        targetType: "client",
+        targetId: id,
+        clientId: id,
+        metadata: { reason: "sub-account moved to another agency" },
+      });
+    }
+  }
 
-  return { installation: row, isNew: existing === null || existing.uninstalledAt !== null };
+  return { installation: row.written, isNew: existing === null || existing.uninstalledAt !== null };
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** End a share whose installation moved to another agency. See `upsertInstallation`. Returns the clients it took out. */
+async function dissolveShare(tx: Tx, installationId: string): Promise<string[]> {
+  const members = await tx
+    .update(clientsTable)
+    .set({
+      ghlShareInstallationId: null,
+      ghlShareTags: [],
+      ghlShareGetsUntagged: false,
+      ghlShareSince: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(clientsTable.ghlShareInstallationId, installationId))
+    .returning({ id: clientsTable.id });
+  if (members.length === 0) return [];
+  await tx.execute(sql`UPDATE contacts SET share_installation_id = NULL WHERE share_installation_id = ${installationId}`);
+  await tx.execute(sql`UPDATE opportunities SET share_installation_id = NULL WHERE share_installation_id = ${installationId}`);
+  return members.map((m) => m.id);
 }
 
 /** Whether two clients belong to different agencies — an unresolvable one counts as different. */
@@ -423,29 +467,50 @@ export async function getValidAccessToken(
     return decrypt(installation.accessTokenEncrypted);
   }
 
-  const token = await postToken({
-    client_id: process.env.GHL_CLIENT_ID!,
-    client_secret: process.env.GHL_CLIENT_SECRET!,
-    grant_type: "refresh_token",
-    refresh_token: decrypt(installation.refreshTokenEncrypted),
-    // Same as the exchange: a refresh must not trade a location token for a
-    // Company one that the location-scoped reads cannot use.
-    user_type: "Location",
+  /*
+   * 🔴 One renewal at a time per installation. The refresh token is spent by
+   * every renewal, so two callers renewing at once both send the same token
+   * and the loser locks the sub-account out until it is reinstalled — and a
+   * shared sub-account has several clients' paths (imports started from any
+   * of them, the hourly sweep) renewing the same row. The lock serialises
+   * them; the re-read hands the second caller the pair the first one stored.
+   */
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`ghl-refresh:${installation.id}`}, 0))`);
+    const [stored] = await tx
+      .select()
+      .from(ghlInstallations)
+      .where(eq(ghlInstallations.id, installation.id))
+      .limit(1);
+    const current = stored ?? installation;
+    if (current.expiresAt.getTime() > Date.now() + minValidityMs) {
+      return decrypt(current.accessTokenEncrypted);
+    }
+
+    const token = await postToken({
+      client_id: process.env.GHL_CLIENT_ID!,
+      client_secret: process.env.GHL_CLIENT_SECRET!,
+      grant_type: "refresh_token",
+      refresh_token: decrypt(current.refreshTokenEncrypted),
+      // Same as the exchange: a refresh must not trade a location token for a
+      // Company one that the location-scoped reads cannot use.
+      user_type: "Location",
+    });
+
+    const expiresAt = new Date(Date.now() + (token.expires_in - 60) * 1000);
+    await tx
+      .update(ghlInstallations)
+      .set({
+        accessTokenEncrypted: encrypt(token.access_token),
+        refreshTokenEncrypted: encrypt(token.refresh_token),
+        expiresAt,
+        lastRefreshedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(ghlInstallations.id, installation.id));
+
+    return token.access_token;
   });
-
-  const expiresAt = new Date(Date.now() + (token.expires_in - 60) * 1000);
-  await db
-    .update(ghlInstallations)
-    .set({
-      accessTokenEncrypted: encrypt(token.access_token),
-      refreshTokenEncrypted: encrypt(token.refresh_token),
-      expiresAt,
-      lastRefreshedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(ghlInstallations.id, installation.id));
-
-  return token.access_token;
 }
 
 export async function getInstallationByLocation(
@@ -462,10 +527,12 @@ export async function getInstallationByLocation(
 export async function getInstallationForClient(
   clientId: string,
 ): Promise<GhlInstallation | null> {
+  // A live installation before an uninstalled one, then the newest: never an arbitrary row.
   const [row] = await db
     .select()
     .from(ghlInstallations)
     .where(eq(ghlInstallations.clientId, clientId))
+    .orderBy(sql`${ghlInstallations.uninstalledAt} IS NOT NULL`, sql`${ghlInstallations.installedAt} DESC`)
     .limit(1);
   return row ?? null;
 }
@@ -548,15 +615,36 @@ export async function claimInstallation(
   installationId: string,
   client: Client,
 ): Promise<void> {
-  const [existing] = await db
+  await db.transaction(async (tx) => {
+  /*
+   * The installation row, then the clients rows involved, in id order —
+   * the same rows, in the same order, a "Share this sub-account" link locks,
+   * so a Reconnect and a link cannot interleave and leave a holder bound to
+   * two sub-accounts.
+   */
+  const [existing] = await tx
     .select()
     .from(ghlInstallations)
     .where(eq(ghlInstallations.id, installationId))
-    .limit(1);
+    .limit(1)
+    .for("update");
   if (!existing) throw new Error("Installation not found");
+  const involved = [...new Set([client.id, existing.clientId].filter((x): x is string => Boolean(x)))].sort();
+  const locked = await tx
+    .select({
+      id: clientsTable.id,
+      name: clientsTable.name,
+      share: clientsTable.ghlShareInstallationId,
+      agencyId: clientsTable.agencyId,
+    })
+    .from(clientsTable)
+    .where(inArray(clientsTable.id, involved))
+    .orderBy(clientsTable.id)
+    .for("update");
+  await assertShareAllowsClaim(tx, installationId, existing.clientId, client.id, locked);
 
   if (existing.clientId && existing.clientId !== client.id) {
-    const holder = await agencyIdForClient(existing.clientId);
+    const holder = locked.find((c) => c.id === existing.clientId)?.agencyId ?? null;
     if (holder !== client.agencyId) {
       /*
        * Deliberately says nothing about who holds it. The caller has just
@@ -569,16 +657,15 @@ export async function claimInstallation(
     }
   }
 
-  const [installation] = await db
+  const [installation] = await tx
     .update(ghlInstallations)
     .set({ clientId: client.id, updatedAt: new Date() })
     .where(eq(ghlInstallations.id, installationId))
     .returning();
   if (!installation) throw new Error("Installation not found");
 
-  const { clients } = await import("@/db/schema");
-  await db
-    .update(clients)
+  await tx
+    .update(clientsTable)
     .set({
       /*
        * The ONLY writer of `ghlLocationId` that can be trusted, because the
@@ -590,7 +677,52 @@ export async function claimInstallation(
       ghlAuthMethod: "oauth",
       updatedAt: new Date(),
     })
-    .where(eq(clients.id, client.id));
+    .where(eq(clientsTable.id, client.id));
+  });
+}
+
+/**
+ * A refusal the person must see as written — the OAuth callback shows it
+ * verbatim instead of its generic failure text.
+ */
+export class ShareGuardError extends Error {}
+
+/**
+ * The shared-sub-account rules a claim must respect. A member gets GoHighLevel
+ * only through its holder; a sharing holder can't be bound to another
+ * sub-account; a shared installation can't move to another client. Each is
+ * undone only by Stop sharing.
+ */
+async function assertShareAllowsClaim(
+  tx: Tx,
+  installationId: string,
+  boundTo: string | null,
+  claimant: string,
+  locked: readonly { id: string; name: string; share: string | null }[],
+): Promise<void> {
+  const me = locked.find((c) => c.id === claimant);
+  if (me?.share) {
+    const [holder] = await tx
+      .select({ id: clientsTable.id, name: clientsTable.name })
+      .from(ghlInstallations)
+      .innerJoin(clientsTable, eq(clientsTable.id, ghlInstallations.clientId))
+      .where(eq(ghlInstallations.id, me.share))
+      .limit(1);
+    if (holder && holder.id !== claimant) {
+      throw new ShareGuardError(
+        `This client gets GoHighLevel through ${holder.name}'s shared sub-account. Reconnect it from ${holder.name}'s Connections page.`,
+      );
+    }
+    if (me.share !== installationId) {
+      throw new ShareGuardError(
+        `${me.name}'s GoHighLevel sub-account is shared with other clients. Stop sharing before connecting it to another sub-account.`,
+      );
+    }
+  }
+  const current = boundTo ? locked.find((c) => c.id === boundTo) : undefined;
+  if (current && current.id !== claimant && current.share === installationId) {
+    throw new ShareGuardError("This sub-account is shared between clients. Stop sharing first.");
+  }
 }
 
 /**
@@ -650,6 +782,9 @@ export async function listUnclaimedInstallations(): Promise<GhlInstallation[]> {
  * 🔴 The rejection names nothing. Saying "that belongs to Acme Dental" would
  * turn this validation into the lookup service it exists to prevent.
  */
+/** A typed location id that belongs elsewhere. Our own words, safe to show as they are. */
+export class LocationTakenError extends Error {}
+
 export async function assertLocationIdAvailable(
   agencyId: string,
   locationId: string,
@@ -660,9 +795,21 @@ export async function assertLocationIdAvailable(
   if (!existing || existing.uninstalledAt || !existing.clientId) return;
   if (existing.clientId === clientId) return;
 
+  // A shared sub-account's location belongs to its holder alone; other clients join through the share.
+  const [bound] = await db
+    .select({ share: clientsTable.ghlShareInstallationId })
+    .from(clientsTable)
+    .where(eq(clientsTable.id, existing.clientId))
+    .limit(1);
+  if (bound?.share === existing.id) {
+    throw new LocationTakenError(
+      "That GoHighLevel sub-account is shared between other clients here. Ask Growth Guild to add this client to it.",
+    );
+  }
+
   const holder = await agencyIdForClient(existing.clientId);
   if (holder && holder !== agencyId) {
-    throw new Error(
+    throw new LocationTakenError(
       "That GoHighLevel location is already connected elsewhere. Disconnect it there first.",
     );
   }

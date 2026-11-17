@@ -587,6 +587,32 @@ per-client webhook URL, which then does require hand-building a workflow
 (Automation → Workflows → trigger **Pipeline Stage Changed** → action
 **Webhook** → **publish it**; a draft workflow fires nothing).
 
+### 4e · Sharing a sub-account between clients
+
+Some sub-accounts hold more than one business's leads. The client the app is
+installed on (the **holder**) can feed up to four other clients of the same
+agency. Each lead then counts on ONE dashboard, chosen by GoHighLevel tags.
+
+- **Who:** only a Growth Guild superadmin adds a client or stops sharing. The
+  agency's own logins (and Growth Guild) choose which tag belongs to which
+  client.
+- **How:** holder's Connections page → *Connect GoHighLevel* → **Share this
+  sub-account** → add the client → pick each client's tag → choose where leads
+  with no client's tag go → **Preview the split** → **Share and split leads**.
+- **The rules:** a lead counts for the client whose tag it has. With two
+  clients' tags it stays with the client it already counts for. With the keep
+  switch on, a removed tag never moves a lead. Ad accounts never move a lead;
+  the preview only warns when a lead came from another client's ads.
+- **Limits:** the client being added must have no GoHighLevel of its own; one
+  stage mapping (the holder's) serves the whole share; past months are
+  recounted after every save, so reports already sent stop matching.
+- **Under the hood:** every member keeps a full copy of the holder's rows;
+  `contacts/opportunities.share_counted` says which copy counts
+  (`src/lib/ghl/share.ts`). An hourly repair runs from `/api/cron/reports`.
+- **Rolling back** to code older than migration 0035: run
+  `scripts/unshare-all.ts` FIRST, while this code is live, or every former
+  member counts the whole sub-account.
+
 ---
 
 ## 5 · Ad URL parameters — required for per-campaign costs

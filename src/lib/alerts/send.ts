@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { clients, contacts, type Client } from "@/db/schema";
 import { decryptNullable } from "@/lib/crypto";
 import { paidLeadPredicate } from "@/lib/metrics/queries";
+import { FUNNEL_CONTACTS } from "@/lib/metrics/ledger";
 import {
   classifyWebhookUrl,
   composeBody,
@@ -112,6 +113,24 @@ async function run(
     WITH me AS (
       SELECT * FROM contacts
       WHERE client_id = ${client.id} AND ghl_contact_id = ${ghlContactId}
+        /*
+         * A shared GoHighLevel sub-account copies every person to every client
+         * in the share; only the copy that counts here may alert, and only once
+         * a client's tag placed it (decision 3 of the share design: a lead with
+         * no client's tag sends nothing, so one business's lead never pings the
+         * other's channel). Until any client in the share has a tag saved,
+         * alerts work as before. NULL — a client that doesn't share — passes.
+         */
+        AND share_counted IS NOT FALSE
+        AND (
+          share_installation_id IS NULL
+          OR share_reason IN ('tag', 'first_tag', 'kept')
+          OR NOT EXISTS (
+            SELECT 1 FROM clients s
+             WHERE s.ghl_share_installation_id = contacts.share_installation_id
+               AND cardinality(s.ghl_share_tags) > 0
+          )
+        )
       LIMIT 1
     )
     SELECT c.id::text AS id,
@@ -138,7 +157,7 @@ async function run(
            ${paid ?? sql`TRUE`} AS is_paid,
            (c.alerted_at IS NOT NULL) AS already,
            (
-             SELECT COUNT(*)::int FROM contacts o
+             SELECT COUNT(*)::int FROM ${FUNNEL_CONTACTS} o
              WHERE o.client_id = ${client.id}
                AND o.ghl_created_at IS NOT NULL
                AND c.ghl_created_at IS NOT NULL
@@ -153,7 +172,7 @@ async function run(
            ) AS nth_today,
            (
              SELECT EXTRACT(EPOCH FROM (c.ghl_created_at - MAX(p.ghl_created_at))) / 86400.0
-             FROM contacts p
+             FROM ${FUNNEL_CONTACTS} p
              WHERE p.client_id = ${client.id}
                AND p.id <> c.id
                AND p.ghl_created_at IS NOT NULL

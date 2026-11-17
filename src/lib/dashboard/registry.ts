@@ -562,6 +562,8 @@ export const SECTIONS: readonly SectionDef[] = [
     defaultVisible: true,
     cadence: "range",
     dataKeys: ["speedToLead"],
+    // Lists recent leads by name (SpeedToLead.tsx) — see the flag's contract.
+    containsLeadPii: true,
   },
   {
     id: "speed_outcome",

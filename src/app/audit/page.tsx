@@ -16,6 +16,7 @@ const CATEGORIES = [
   { key: "client", label: "Clients" },
   { key: "meta_account", label: "Meta" },
   { key: "google_account", label: "Google" },
+  { key: "ghl_share", label: "GoHighLevel sharing" },
 ] as const;
 
 /** Map an action to a display label + a severity tone for its pill. */
@@ -28,7 +29,8 @@ function eventTone(action: string): {
   if (
     action === "client.token_change" ||
     action.endsWith(".remove") ||
-    action === "client.archive"
+    action === "client.archive" ||
+    action === "ghl_share.purge"
   ) {
     return { tone: "warning" };
   }
@@ -80,9 +82,32 @@ function fmtUtc(at: Date): string {
   );
 }
 
-function metaSummary(m: unknown): string | null {
+/** A shared GoHighLevel sub-account's events, said in words. */
+function shareSummary(action: string, obj: Record<string, unknown>): string | null {
+  const s = (k: string) => (typeof obj[k] === "string" ? (obj[k] as string) : null);
+  const by = s("byEmail") ? ` · by ${s("byEmail")}` : "";
+  switch (action) {
+    case "ghl_share.add":
+      return `Shared ${s("holder") ?? "a"}'s sub-account with ${s("added") ?? "a client"}${by}`;
+    case "ghl_share.remove":
+      return s("reason")
+        ? `Stopped sharing: ${s("reason")}`
+        : `Stopped sharing ${s("holder") ?? "a"}'s sub-account with ${s("removed") ?? "a client"}${by}`;
+    case "ghl_share.tags":
+      return `Changed which tag belongs to which client on ${s("holder") ?? "a"}'s sub-account${by}`;
+    case "ghl_share.moved":
+      return `A lead moved from ${s("from") ?? "a client"} to ${s("to") ?? "another"} more than 30 days after it arrived`;
+    case "ghl_share.purge":
+      return `Removed copied GoHighLevel leads (${typeof obj.contacts === "number" ? obj.contacts : 0} contacts)${by}`;
+    default:
+      return null;
+  }
+}
+
+function metaSummary(m: unknown, action = ""): string | null {
   if (!m || typeof m !== "object") return null;
   const obj = m as Record<string, unknown>;
+  if (action.startsWith("ghl_share.")) return shareSummary(action, obj);
   const parts: string[] = [];
   if (Array.isArray(obj.fields) && obj.fields.length) {
     parts.push(obj.fields.join(", "));
@@ -205,7 +230,7 @@ function Th({ children }: { children: React.ReactNode }) {
 
 function Row({ e }: { e: AuditView }) {
   const { tone } = eventTone(e.action);
-  const meta = metaSummary(e.metadata);
+  const meta = metaSummary(e.metadata, e.action);
   return (
     <tr className="border-t" style={{ borderColor: "var(--border)" }}>
       <td

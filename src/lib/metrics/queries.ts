@@ -33,12 +33,14 @@ import {
 } from "./compute";
 import { orderSegments } from "./breakdown-order";
 import {
+  FUNNEL_CONTACTS,
   FUNNEL_OPPORTUNITIES,
   FUNNEL_TRANSITIONS,
   OPP_CANONICAL,
   OPP_PIPELINE_NAME,
   OPP_STAGE_NAME,
   OPP_STAGE_ORDER,
+  SHARE_CALL_FILTER,
 } from "./ledger";
 import { benchmarkSegment, type SegmentBenchmark } from "./benchmark";
 import type { CreativeTotals } from "./creative";
@@ -1649,7 +1651,7 @@ export async function getSpeedToLead(
       percentile_cont(0.5) WITHIN GROUP (
         ORDER BY EXTRACT(EPOCH FROM (c.first_call_at - c.ghl_created_at))
       ) FILTER (WHERE ${calledSql}) AS median_seconds
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     WHERE ${sql.join(clauses, sql` AND `)}
   `);
   const r = resultRows<Row>(rows)[0];
@@ -1672,7 +1674,7 @@ export async function getSpeedToLead(
       c.ghl_created_at AS lead_in_at,
       c.first_call_at AS first_call_at,
       CASE WHEN ${calledSql} THEN EXTRACT(EPOCH FROM (c.first_call_at - c.ghl_created_at)) END AS seconds_to_call
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     WHERE ${sql.join(clauses, sql` AND `)} AND ${trackable}
     ORDER BY
       (CASE WHEN ${calledSql} THEN 1 ELSE 0 END) ASC,               -- misses first
@@ -2448,7 +2450,8 @@ export async function getTrendAnnotations(
          AND a.at >= ${window.startUtc}
          AND a.at <  ${window.endUtc}
          AND a.action IN ('stages.remap','tags.remap','meta_account.add','meta_account.remove',
-                          'google_account.add','google_account.remove')
+                          'google_account.add','google_account.remove',
+                          'ghl_share.add','ghl_share.tags','ghl_share.remove')
        ORDER BY a.at ASC
     `),
     /*
@@ -2509,6 +2512,22 @@ export async function getTrendAnnotations(
             meta.mode === "tags"
               ? "Leads are counted by tags from here, and past figures were recounted the same way."
               : "Leads are counted by pipeline stages from here, and past figures were recounted the same way.",
+        });
+        break;
+      }
+      /*
+       * A shared sub-account was linked, its tags changed, or a client stopped
+       * sharing. Neutral on purpose: client logins and share-link readers see
+       * this marker, and it must not tell them their sub-account is shared.
+       */
+      case "ghl_share.add":
+      case "ghl_share.tags":
+      case "ghl_share.remove": {
+        out.push({
+          dateKey: r.at,
+          kind: "stage_remap",
+          label: "Lead counting changed",
+          detail: "How leads are counted for this dashboard changed, so past figures were recounted.",
         });
         break;
       }
@@ -2961,11 +2980,11 @@ async function getRevenueCoverage(
           AND st.changed_at <  ${window.endUtc}
           AND c.meta_ad_id IS NOT NULL${paidClause}
       ) AS attributed_deals,
-      (SELECT COUNT(*)::int FROM contacts c
+      (SELECT COUNT(*)::int FROM ${FUNNEL_CONTACTS} c
         WHERE c.client_id = ${clientId}
           AND c.created_at >= NOW() - INTERVAL '30 days'
       ) AS recent_contacts,
-      (SELECT COUNT(*)::int FROM contacts c
+      (SELECT COUNT(*)::int FROM ${FUNNEL_CONTACTS} c
         WHERE c.client_id = ${clientId}
           AND c.created_at >= NOW() - INTERVAL '30 days'
           AND c.meta_ad_id IS NOT NULL
@@ -3543,7 +3562,7 @@ export async function getSpeedToLeadOutcomes(
   if (!trackingStart) {
     const [n] = resultRows<{ n: number }>(
       await db.execute<{ n: number }>(sql`
-        SELECT COUNT(*)::int AS n FROM contacts c WHERE ${where}
+        SELECT COUNT(*)::int AS n FROM ${FUNNEL_CONTACTS} c WHERE ${where}
       `),
     );
     return { trackingStartedAt: null, preTracking: Number(n?.n) || 0, leads: [] };
@@ -3566,7 +3585,7 @@ export async function getSpeedToLeadOutcomes(
       SELECT c.id,
              c.ghl_created_at AS lead_at,
              c.first_call_at
-      FROM contacts c
+      FROM ${FUNNEL_CONTACTS} c
       WHERE ${where}
         AND c.ghl_created_at >= ${trackingStart}::timestamptz
     ),
@@ -3622,7 +3641,7 @@ export async function getSpeedToLeadOutcomes(
 
   const [total] = resultRows<{ n: number }>(
     await db.execute<{ n: number }>(sql`
-      SELECT COUNT(*)::int AS n FROM contacts c WHERE ${where}
+      SELECT COUNT(*)::int AS n FROM ${FUNNEL_CONTACTS} c WHERE ${where}
     `),
   );
 
@@ -3697,7 +3716,7 @@ export async function getChannelMix(
     SELECT ${monthOf(sql`c.ghl_created_at`)} AS month,
            (${paid}) AS is_paid,
            COUNT(*)::int AS n
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     WHERE c.client_id = ${clientId}
       AND c.ghl_created_at >= ${first}
       AND c.ghl_created_at <  ${last}
@@ -3849,7 +3868,7 @@ export async function getCohortMaturation(
 
   const leadRes = await db.execute<{ month: string; n: number }>(sql`
     SELECT ${monthExpr} AS month, COUNT(*)::int AS n
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     WHERE ${where}
     GROUP BY 1
   `);
@@ -3860,7 +3879,7 @@ export async function getCohortMaturation(
   const convRes = await db.execute<{ month: string; stage: string; days: number }>(sql`
     WITH cohort AS (
       SELECT c.id, c.ghl_created_at AS lead_at, ${monthExpr} AS month
-      FROM contacts c
+      FROM ${FUNNEL_CONTACTS} c
       WHERE ${where}
     ),
     reached AS (
@@ -4101,7 +4120,7 @@ export async function getUncalledLeads(
     const [n] = resultRows<{ n: number }>(
       await db.execute<{ n: number }>(sql`
         SELECT COUNT(*)::int AS n
-        FROM contacts c
+        FROM ${FUNNEL_CONTACTS} c
         WHERE c.client_id = ${clientId} ${paid ? sql`AND ${paid}` : sql``}
       `),
     );
@@ -4122,7 +4141,7 @@ export async function getUncalledLeads(
   const dowRes = await db.execute<{ dow: number; calls: number }>(sql`
     SELECT EXTRACT(ISODOW FROM c.first_call_at AT TIME ZONE ${timezone})::int AS dow,
            COUNT(*)::int AS calls
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     WHERE c.client_id = ${clientId} AND c.first_call_at IS NOT NULL
     GROUP BY 1
   `);
@@ -4139,7 +4158,7 @@ export async function getUncalledLeads(
   const [pre] = resultRows<{ n: number }>(
     await db.execute<{ n: number }>(sql`
       SELECT COUNT(*)::int AS n
-      FROM contacts c
+      FROM ${FUNNEL_CONTACTS} c
       WHERE c.client_id = ${clientId}
         AND (c.ghl_created_at IS NULL OR c.ghl_created_at < ${trackingStart}::timestamptz)
         ${paid ? sql`AND ${paid}` : sql``}
@@ -4251,7 +4270,7 @@ export async function getUncalledLeads(
            ${col} AS campaign_id,
            c.utm_campaign AS campaign_name,
            opp.value AS value
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     LEFT JOIN opp  ON opp.contact_id = c.id
     LEFT JOIN msgs ON msgs.ghl_id = c.ghl_contact_id
     WHERE c.client_id = ${clientId}
@@ -4313,7 +4332,7 @@ export async function getUncalledLeads(
   const [leadRow] = resultRows<{ n: number }>(
     await db.execute<{ n: number }>(sql`
       SELECT COUNT(*)::int AS n
-      FROM contacts c
+      FROM ${FUNNEL_CONTACTS} c
       WHERE c.client_id = ${clientId}
         AND c.ghl_created_at >= ${trackingStart}::timestamptz
         ${paid ? sql`AND ${paid}` : sql``}
@@ -4415,7 +4434,7 @@ export async function getChurnWeeks(
       UNION ALL
       SELECT w.client_id, w.idx, 0::float, COUNT(c.id)::int
       FROM w
-      LEFT JOIN contacts c
+      LEFT JOIN ${FUNNEL_CONTACTS} c
         ON c.client_id = w.client_id
        AND c.ghl_created_at >= w.start_utc
        AND c.ghl_created_at <  w.end_utc
@@ -4571,6 +4590,7 @@ export async function getCallTiming(
         AND w.payload->>'direction' = 'outbound'
         AND w.received_at >= ${window.startUtc}
         AND w.received_at < ${window.endUtc}
+        ${SHARE_CALL_FILTER(sql`w`)}
       GROUP BY 1
     ),
     arrivals AS (
@@ -4579,7 +4599,7 @@ export async function getCallTiming(
         0 AS attempts,
         0 AS connected,
         COUNT(*)::int AS arrivals
-      FROM contacts c
+      FROM ${FUNNEL_CONTACTS} c
       WHERE c.client_id = ${clientId}
         AND c.ghl_created_at IS NOT NULL
         AND c.ghl_created_at >= ${window.startUtc}
@@ -4653,7 +4673,7 @@ export async function getQualityCohort(
       SELECT c.id,
              c.ghl_created_at AS lead_at,
              COALESCE(c.meta_campaign_id, c.google_campaign_id) AS campaign_id
-      FROM contacts c
+      FROM ${FUNNEL_CONTACTS} c
       WHERE ${where}
     ),
     reached AS (
@@ -4739,7 +4759,7 @@ export async function getLeadSourceCohort(
   const res = await db.execute<Row>(sql`
     WITH cohort AS (
       SELECT c.id, c.ghl_created_at AS lead_at, c.raw_attribution AS raw
-      FROM contacts c
+      FROM ${FUNNEL_CONTACTS} c
       WHERE c.client_id = ${clientId}
         AND c.ghl_created_at >= ${window.startUtc}
         AND c.ghl_created_at <  ${window.endUtc}
@@ -4835,7 +4855,7 @@ export async function getDuplicateCandidates(
            f.campaign_name,
            (c.ghl_created_at >= ${window.startUtc}
             AND c.ghl_created_at < ${window.endUtc}) AS in_range
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     LEFT JOIN LATERAL (
       /*
        * Any one row's name for this campaign id. A LATERAL rather than a join
@@ -4868,7 +4888,7 @@ export async function getDuplicateCandidates(
 
   const totalRes = await db.execute<{ count: number }>(sql`
     SELECT COUNT(*)::int AS count
-    FROM contacts c
+    FROM ${FUNNEL_CONTACTS} c
     WHERE ${sql.join(base, sql` AND `)}
       AND c.ghl_created_at >= ${window.startUtc}
       AND c.ghl_created_at < ${window.endUtc}

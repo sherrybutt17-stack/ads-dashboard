@@ -6,6 +6,7 @@ import { safeEqual } from "@/lib/crypto";
 import { emailConfigured } from "@/lib/reports/email";
 import { dueSchedules, sendScheduledReport } from "@/lib/reports/send";
 import { refreshDomains, type RefreshSummary } from "@/lib/email-domains/refresh";
+import { sweepShares, type SweepSummary } from "@/lib/ghl/share-sweep";
 
 /**
  * Scheduled report delivery.
@@ -36,6 +37,8 @@ export const maxDuration = 300;
 const BUDGET_MS = 240_000;
 /** The share of it the sending-domain pass may use. */
 const DOMAIN_BUDGET_MS = 15_000;
+/** The shared-sub-account repair's share of it. */
+const SHARE_SWEEP_BUDGET_MS = 20_000;
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") ?? "";
@@ -61,6 +64,18 @@ export async function GET(req: NextRequest) {
     },
   );
 
+  /*
+   * Shared GoHighLevel sub-accounts: the hourly repair (`share-sweep.ts`), also
+   * before the early returns — it has nothing to do with email. Bounded, never
+   * throws, and reports counts only: this output lands in public workflow logs.
+   */
+  const shares: SweepSummary | { errors: number } = await sweepShares({ budgetMs: SHARE_SWEEP_BUDGET_MS }).catch(
+    (err) => {
+      console.error("[cron/reports] share sweep failed:", err);
+      return { errors: 1 };
+    },
+  );
+
   if (!emailConfigured()) {
     /*
      * 200, not an error. An unconfigured deployment is a supported state, and a
@@ -72,6 +87,7 @@ export async function GET(req: NextRequest) {
       skipped: "email not configured",
       hint: "Set RESEND_API_KEY and REPORT_FROM (or RESEND_FROM) to enable scheduled reports.",
       domains,
+      shares,
     });
   }
 
@@ -79,7 +95,7 @@ export async function GET(req: NextRequest) {
 
   const schedules = await dueSchedules();
   if (schedules.length === 0) {
-    return NextResponse.json({ ok: true, schedules: 0, sent: 0, domains });
+    return NextResponse.json({ ok: true, schedules: 0, sent: 0, domains, shares });
   }
 
   const clientRows = await db
@@ -179,5 +195,6 @@ export async function GET(req: NextRequest) {
     ms: Date.now() - startedAt,
     results,
     domains,
+    shares,
   });
 }

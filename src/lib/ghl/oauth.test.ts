@@ -106,6 +106,14 @@ const clientRow = async (id: string) =>
     )
   ).rows[0];
 
+/** Store a token pair on the seeded installation, as a renewal would have left it. */
+async function storeTokens(access: string, refresh: string, expiresAt: Date, id = INSTALL) {
+  await harness.db.execute(sql`
+    UPDATE ghl_installations
+       SET access_token_encrypted = ${access}, refresh_token_encrypted = ${refresh}, expires_at = ${expiresAt}
+     WHERE id = ${id}`);
+}
+
 /** Seed an installation directly, so a claim test does not depend on exchange. */
 async function seedInstall(opts: {
   id?: string;
@@ -626,13 +634,15 @@ describe("getValidAccessToken", () => {
     // The history import calls GoHighLevel for minutes; a token with one left fails every call after it.
     const { encrypt } = await import("@/lib/crypto");
     await seedInstall({ clientId: CLIENT_A1 });
+    const soon = new Date(Date.now() + 60_000);
+    await storeTokens(encrypt("one-minute-left"), encrypt("refresh-1"), soon);
     const fetchMock = mockToken({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 86400 });
     const value = await mod.getValidAccessToken(
       {
         id: INSTALL,
         accessTokenEncrypted: encrypt("one-minute-left"),
         refreshTokenEncrypted: encrypt("refresh-1"),
-        expiresAt: new Date(Date.now() + 60_000),
+        expiresAt: soon,
       } as never,
       { minValidityMs: 6 * 60_000 },
     );
@@ -659,6 +669,7 @@ describe("getValidAccessToken", () => {
   it("🔴 persists the new pair before returning it", async () => {
     const { encrypt, decrypt } = await import("@/lib/crypto");
     await seedInstall({ clientId: CLIENT_A1 });
+    await storeTokens(encrypt("expired"), encrypt("refresh-1"), new Date(Date.now() - 60_000));
     mockToken({
       access_token: "access-2",
       refresh_token: "refresh-2",
@@ -687,6 +698,7 @@ describe("getValidAccessToken", () => {
   it("🔴 refreshes as a Location token", async () => {
     const { encrypt } = await import("@/lib/crypto");
     await seedInstall({ clientId: CLIENT_A1 });
+    await storeTokens(encrypt("expired"), encrypt("refresh-1"), new Date(Date.now() - 60_000));
     const fetchMock = mockToken({
       access_token: "access-2",
       refresh_token: "refresh-2",
@@ -704,6 +716,67 @@ describe("getValidAccessToken", () => {
       (fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body,
     );
     expect(body.get("user_type")).toBe("Location");
+  });
+
+  it("🔴 hands a caller holding a stale copy the pair another renewal stored, spending nothing", async () => {
+    // Two clients of a shared sub-account renew the same row; the second must
+    // not send the refresh token the first one already spent.
+    const { encrypt } = await import("@/lib/crypto");
+    await seedInstall({ clientId: CLIENT_A1 });
+    await storeTokens(encrypt("renewed-by-the-other"), encrypt("refresh-2"), new Date(Date.now() + 86_400_000));
+    const fetchMock = mockToken({ access_token: "never", refresh_token: "never", expires_in: 86400 });
+    const value = await mod.getValidAccessToken({
+      id: INSTALL,
+      accessTokenEncrypted: encrypt("expired"),
+      refreshTokenEncrypted: encrypt("refresh-1"),
+      expiresAt: new Date(Date.now() - 60_000),
+    } as never);
+    expect(value).toBe("renewed-by-the-other");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Shared sub-accounts — the connect paths respect the share
+ * ------------------------------------------------------------------ */
+
+describe("a shared sub-account", () => {
+  const OTHER_INSTALL = "88888888-8888-4888-8888-888888888888";
+
+  beforeEach(async () => {
+    await seedInstall({ clientId: CLIENT_A1 });
+    await run(`UPDATE clients SET ghl_location_id = 'loc-1', ghl_auth_method = 'oauth' WHERE id = '${CLIENT_A1}'`);
+    await run(`UPDATE clients SET ghl_share_installation_id = '${INSTALL}' WHERE id IN ('${CLIENT_A1}', '${CLIENT_A2}')`);
+  });
+
+  it("won't let a member claim the holder's installation, or any other", async () => {
+    await expect(mod.claimInstallation(INSTALL, asClient(CLIENT_A2, AGENCY_A, "acme-two"))).rejects.toThrow(
+      "gets GoHighLevel through acme's shared sub-account",
+    );
+    await seedInstall({ id: OTHER_INSTALL, locationId: "loc-2" });
+    await expect(mod.claimInstallation(OTHER_INSTALL, asClient(CLIENT_A2, AGENCY_A, "acme-two"))).rejects.toBeInstanceOf(
+      mod.ShareGuardError,
+    );
+    expect((await installRow()).client_id).toBe(CLIENT_A1);
+  });
+
+  it("won't bind the holder to another sub-account while it shares", async () => {
+    await seedInstall({ id: OTHER_INSTALL, locationId: "loc-2" });
+    await expect(mod.claimInstallation(OTHER_INSTALL, asClient(CLIENT_A1, AGENCY_A, "acme"))).rejects.toThrow(
+      "Stop sharing before connecting it to another sub-account",
+    );
+  });
+
+  it("lets the holder reconnect its own installation", async () => {
+    await mod.claimInstallation(INSTALL, asClient(CLIENT_A1, AGENCY_A, "acme"));
+    expect((await installRow()).client_id).toBe(CLIENT_A1);
+  });
+
+  it("refuses the shared location typed on another client", async () => {
+    await expect(mod.assertLocationIdAvailable(AGENCY_A, "loc-1", CLIENT_A2)).rejects.toThrow(
+      "shared between other clients here",
+    );
+    await mod.assertLocationIdAvailable(AGENCY_A, "loc-1", CLIENT_A1);
   });
 });
 

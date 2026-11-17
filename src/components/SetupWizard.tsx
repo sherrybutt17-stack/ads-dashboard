@@ -24,6 +24,8 @@ import {
   TagMappingPanel,
   type CrmMode,
 } from "@/components/TagMapping";
+import { GhlSharePanel } from "@/components/GhlSharePanel";
+import type { SharePanelState } from "@/lib/ghl/share-panel";
 
 /**
  * Connection wizard.
@@ -257,6 +259,11 @@ interface Props {
    * allowed: the step is exactly the pipeline mapping it always was.
    */
   tagMapping?: { allowed: boolean; mode: CrmMode };
+  /**
+   * "Share this sub-account": this client's place in a shared GoHighLevel
+   * sub-account, or what it could share. Absent: the steps are as they were.
+   */
+  share?: SharePanelState | null;
 }
 
 export interface MetaAccountRow {
@@ -312,6 +319,7 @@ export function SetupWizard({
   tiktokStash,
   stages: initialStages,
   tagMapping,
+  share = null,
 }: Props) {
   const router = useRouter();
   const usingOauth = initial.ghlAuthMethod === "oauth" || oauthAvailable;
@@ -353,6 +361,7 @@ export function SetupWizard({
           oauthAvailable={oauthAvailable}
           connectedLocationName={initial.ghlLocationName}
           webhookAlive={Boolean(initial.firstWebhookAt)}
+          share={share}
         />
       ) : (
         <GhlStep
@@ -365,6 +374,7 @@ export function SetupWizard({
         clientId={clientId}
         stages={initialStages}
         tagMapping={tagMapping}
+        share={share}
         onDone={() => router.refresh()}
       />
       <MetaAccountsStep
@@ -406,6 +416,7 @@ export function SetupWizard({
         step={usingOauth ? 6 : 7}
         hasTiktok={tiktokAccounts.some((a) => a.status !== "removed")}
         hasGoogle={googleAccounts.some((a) => a.status !== "removed")}
+        sharedFrom={share?.role === "member" ? (share.holder?.name ?? null) : share?.role === "holder" ? "" : null}
       />
     </div>
   );
@@ -427,13 +438,58 @@ function InstallStep({
   oauthAvailable,
   connectedLocationName,
   webhookAlive,
+  share,
 }: {
   clientId: string;
   installation: Props["installation"];
   oauthAvailable: boolean;
   connectedLocationName: string | null;
   webhookAlive: boolean;
+  share: SharePanelState | null;
 }) {
+  /*
+   * A member of a shared sub-account has no connection of its own: no Install
+   * or Reconnect here — those belong to the holder's page.
+   */
+  if (share?.role === "member" && share.holder) {
+    const me = share.clients.find((c) => c.id === clientId);
+    const tags = me?.tags ?? [];
+    const takesUntagged = share.untagged === clientId;
+    const holder = share.holder;
+    return (
+      <Card
+        step={1}
+        anchor={SETUP_SECTION.ghl}
+        title="Connect GoHighLevel"
+        description="This client's leads come from another client's GoHighLevel sub-account."
+        done={share.installationLive}
+      >
+        <Result ok={share.installationLive}>
+          {share.installationLive
+            ? `Gets leads from ${holder.name}'s GoHighLevel sub-account (shared)`
+            : `The app was uninstalled from ${holder.name}'s sub-account.`}
+        </Result>
+        <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+          {tags.length > 0
+            ? `Leads tagged ${tags.map((t) => `“${t}”`).join(", ")} count here${takesUntagged ? ", plus leads with no client's tag" : ""}.`
+            : takesUntagged
+              ? "Leads with no client's tag count here."
+              : "No tag picked yet, so no lead counts here."}
+        </p>
+        <a
+          href={`/c/${holder.slug}/setup#${SETUP_SECTION.ghl}`}
+          className="mt-3 inline-block rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
+          style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+        >
+          Change the tags on {holder.name}&apos;s Connections page
+        </a>
+        <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+          To reconnect GoHighLevel, use Reconnect on {holder.name}&apos;s Connections page.
+        </p>
+      </Card>
+    );
+  }
+
   const active = installation && !installation.uninstalledAt;
   // Connected the original way — bound to a location and already streaming
   // events — but with no captured OAuth install row. Events are flowing, so the
@@ -472,6 +528,9 @@ function InstallStep({
           >
             Reconnect
           </a>
+          {share && (share.role === "holder" || share.canShare) && (
+            <GhlSharePanel clientId={clientId} state={share} />
+          )}
         </>
       ) : connectedViaWebhook ? (
         <>
@@ -523,7 +582,74 @@ function InstallStep({
           </p>
         </>
       )}
+      {share && share.formerCopies > 0 && share.canManage && <PurgeCopies clientId={clientId} count={share.formerCopies} />}
     </Card>
+  );
+}
+
+/**
+ * Growth Guild only: copies of leads this client still holds from a
+ * sub-account it no longer shares (it moved agency, or a link never finished).
+ */
+function PurgeCopies({ clientId, count }: { clientId: string; count: number }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; msg: string } | null>(null);
+  async function purge() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/ghl-share`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ purge: true }),
+      });
+      const body = (await res.json().catch(() => null)) as { contacts?: number; error?: string } | null;
+      if (!res.ok) setMsg({ ok: false, msg: body?.error ?? "Nothing was removed." });
+      else {
+        setMsg({ ok: true, msg: `Removed ${(body?.contacts ?? 0).toLocaleString("en-US")} copied contacts.` });
+        router.refresh();
+      }
+    } catch {
+      setMsg({ ok: false, msg: "Couldn't reach the server. Reload the page to see whether they were removed." });
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+  return (
+    <div className="mt-4 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+      <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+        This client still holds copies of {count.toLocaleString("en-US")} leads from a sub-account it no longer shares.
+        Removing them deletes this client’s copied leads and stage history. Nothing is deleted from any other client.
+      </p>
+      {confirming ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button type="button" onClick={purge} disabled={busy} className="btn-accent disabled:opacity-50">
+            {busy ? "Removing…" : "Remove them"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            disabled={busy}
+            className="rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
+            style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          className="mt-2 rounded-[var(--radius-sm)] border px-3 py-2 text-[13px] font-medium"
+          style={{ borderColor: "var(--border-strong)", color: "var(--text-secondary)" }}
+        >
+          Remove copied GoHighLevel leads
+        </button>
+      )}
+      {msg && <Result ok={msg.ok}>{msg.msg}</Result>}
+    </div>
   );
 }
 
@@ -1100,13 +1226,23 @@ function StageStep({
   clientId,
   stages,
   tagMapping,
+  share = null,
   onDone,
 }: {
   clientId: string;
   stages: StageRow[];
   tagMapping?: { allowed: boolean; mode: CrmMode };
+  share?: SharePanelState | null;
   onDone: () => void;
 }) {
+  /*
+   * A shared sub-account has ONE stage mapping, the holder's: a member's stages
+   * are its copy, shown read-only, and the holder is told its mapping counts
+   * for the others too.
+   */
+  const memberOf = share?.role === "member" ? (share.holder ?? null) : null;
+  const sharedWith =
+    share?.role === "holder" ? share.clients.filter((c) => !c.isHolder && !c.archived).map((c) => c.name) : [];
   const [rows, setRows] = useState(stages);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -1270,9 +1406,41 @@ function StageStep({
       )}
 
       {view === "tags" ? (
-        <TagMappingPanel clientId={clientId} savedMode={savedMode} onSaved={onDone} />
+        <TagMappingPanel
+          clientId={clientId}
+          savedMode={savedMode}
+          onSaved={onDone}
+          sharedFrom={memberOf?.name ?? null}
+        />
+      ) : memberOf ? (
+        <div>
+          <p className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
+            This client&apos;s pipeline stages follow {memberOf.name}&apos;s mapping, because they share one
+            GoHighLevel sub-account. Change them on{" "}
+            <a href={`/c/${memberOf.slug}/setup#${SETUP_SECTION.stages}`} className="underline">
+              {memberOf.name}&apos;s Connections page
+            </a>
+            .
+          </p>
+          {tagsAllowed && (
+            <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+              Most of this client&apos;s leads have no pipeline card, so few of them count. To count them, set Count
+              leads by to Tags and tick “Count every lead this shared sub-account gives this client”.
+            </p>
+          )}
+          {rows.length > 0 && (
+            <p className="mt-2 text-[11px]" style={{ color: "var(--text-muted)" }}>
+              {rows.length} stages across {groups.length} pipeline{groups.length === 1 ? "" : "s"} · {totalMapped} mapped
+            </p>
+          )}
+        </div>
       ) : (
       <>
+      {sharedWith.length > 0 && (
+        <p className="mb-3 text-xs" style={{ color: "var(--text-muted)" }}>
+          Pipeline stages on this page also count for {sharedWith.join(", ")}, so they&apos;re mapped once, here.
+        </p>
+      )}
       {savedMode === "tags" && (
         <SwitchToPipeline
           clientId={clientId}
@@ -3140,6 +3308,7 @@ function BackfillStep({
   step,
   hasTiktok,
   hasGoogle,
+  sharedFrom = null,
 }: {
   clientId: string;
   slug: string;
@@ -3148,6 +3317,11 @@ function BackfillStep({
   hasTiktok: boolean;
   /** Same for Google: an import with no account behind it can only fail. */
   hasGoogle: boolean;
+  /**
+   * In a shared sub-account: the holder's name on a member, "" on the holder
+   * itself. The import always runs on the holder and updates every client.
+   */
+  sharedFrom?: string | null;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -3461,6 +3635,13 @@ function BackfillStep({
         </button>
       </div>
 
+      {sharedFrom !== null && (
+        <p className="mt-3 text-xs" style={{ color: "var(--text-secondary)" }}>
+          {sharedFrom
+            ? `This sub-account is shared. Importing here imports it on ${sharedFrom} and updates every client that shares it.`
+            : "This sub-account is shared. Importing updates every client that shares it."}
+        </p>
+      )}
       <p className="mt-3 text-xs" style={{ color: "var(--text-muted)" }}>
         GoHighLevel keeps no record of the stages a lead passed through, so the
         import knows when each lead came in, its source and ad, and the stage it

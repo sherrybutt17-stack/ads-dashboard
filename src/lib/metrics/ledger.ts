@@ -28,12 +28,30 @@ import { CANONICAL_STAGES, STAGE_LABELS } from "@/lib/stages";
  * The join is LEFT, with a missing client read as pipeline, so a row is never
  * dropped for want of its client — the foreign key makes that impossible in
  * production, and the test harness inserts ledger rows without clients.
+ *
+ * ── Shared sub-accounts ────────────────────────────────────────────────
+ *
+ * A client that shares a GoHighLevel sub-account (`src/lib/ghl/share.ts`)
+ * holds a FULL copy of it, and only the people the split gives it count:
+ * `share_counted` is true on its copy of them and false on the rest. Every
+ * relation here drops the false rows. NULL — every client that doesn't share —
+ * reads as counted, so those clients' numbers cannot move. A query that reads
+ * `contacts`, `opportunities` or `stage_transitions` directly would count the
+ * whole sub-account for every client in the share, AND show one business's
+ * lead names to the other's logins — `share-census.test.ts` guards against it.
+ *
+ * Transitions are dropped through their opportunity, not their contact: a
+ * transition's contact_id can be NULL. The anti-join reads a partial index
+ * holding only false rows, which is empty for clients that don't share.
  */
 export const FUNNEL_TRANSITIONS: SQL = sql`(
   SELECT ftr.*
   FROM stage_transitions ftr
   LEFT JOIN clients fcl ON fcl.id = ftr.client_id
   WHERE (ftr.source::text = 'tag') = (COALESCE(fcl.crm_mapping_mode::text, 'pipeline') = 'tags')
+    AND NOT EXISTS (
+      SELECT 1 FROM opportunities fsx WHERE fsx.id = ftr.opportunity_id AND fsx.share_counted = false
+    )
 )`;
 
 /** The opportunities that belong to a client's funnel — see `FUNNEL_TRANSITIONS`. */
@@ -42,7 +60,48 @@ export const FUNNEL_OPPORTUNITIES: SQL = sql`(
   FROM opportunities fop
   LEFT JOIN clients fcl ON fcl.id = fop.client_id
   WHERE fop.from_tags = (COALESCE(fcl.crm_mapping_mode::text, 'pipeline') = 'tags')
+    AND fop.share_counted IS NOT FALSE
 )`;
+
+/**
+ * The contacts that are this client's — every contact for a client that
+ * doesn't share; only the people the split gives it for one that does. Every
+ * read of `contacts` that is not a join from an already-filtered ledger row
+ * goes through this. See `FUNNEL_TRANSITIONS`.
+ */
+export const FUNNEL_CONTACTS: SQL = sql`(
+  SELECT fct.* FROM contacts fct WHERE fct.share_counted IS NOT FALSE
+)`;
+
+/**
+ * Narrows outbound-call rows from `webhook_events` (aliased by `w`) to calls to
+ * this client's own leads.
+ *
+ * Always drops calls to a contact whose copy here is not this client's. For a
+ * client in a share it also requires a copy that IS this client's: every
+ * delivery is copied to every client in the share, so a call to the other
+ * business's lead must not count. A client that doesn't share keeps counting
+ * calls to contacts we never stored — leads from before the app was installed —
+ * exactly as before.
+ */
+export function SHARE_CALL_FILTER(w: SQL): SQL {
+  return sql`
+    AND NOT EXISTS (
+      SELECT 1 FROM contacts fxc
+       WHERE fxc.client_id = ${w}.client_id
+         AND fxc.ghl_contact_id = ${w}.payload->>'contactId'
+         AND fxc.share_counted = false
+    )
+    AND (
+      NOT EXISTS (SELECT 1 FROM clients fsc WHERE fsc.id = ${w}.client_id AND fsc.ghl_share_installation_id IS NOT NULL)
+      OR EXISTS (
+        SELECT 1 FROM contacts fcc
+         WHERE fcc.client_id = ${w}.client_id
+           AND fcc.ghl_contact_id = ${w}.payload->>'contactId'
+           AND fcc.share_counted IS NOT FALSE
+      )
+    )`;
+}
 
 /**
  * The step a tag lead is in now, stored on its stand-in opportunity as

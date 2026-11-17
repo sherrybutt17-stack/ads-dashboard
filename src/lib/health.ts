@@ -3,16 +3,13 @@ import { getFunnelCounts } from "@/lib/metrics/queries";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
-  contacts,
   fbDailyMetrics,
   googleAdAccounts,
   googleDailyMetrics,
   tiktokAdAccounts,
   tiktokDailyMetrics,
   metaAdAccounts,
-  opportunities,
   pipelineStages,
-  stageTransitions,
   syncRuns,
   tagStageMappings,
   REQUIRED_CANONICAL_STAGES,
@@ -42,6 +39,12 @@ import { formatCurrency } from "@/lib/metrics/compute";
 // Shared with the dashboard's own pipe status, so the checklist and the panels
 // can never disagree about whether a client is behind.
 import { getAdPipeStatus, FULL_SYNC_KINDS } from "@/lib/metrics/pipe-status";
+import { FUNNEL_CONTACTS, FUNNEL_TRANSITIONS } from "@/lib/metrics/ledger";
+import { loadShareForClient, shareClients, type Share } from "@/lib/ghl/share";
+
+function resultRows<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] })?.rows ?? []) as T[];
+}
 
 /**
  * Connection health checks.
@@ -109,8 +112,9 @@ export async function runHealthChecks(
   viewer: HealthViewer = {},
 ): Promise<HealthReport> {
   const checks: HealthCheck[] = [];
+  const share = client.ghlShareInstallationId ? await loadShareForClient(db, client.id) : null;
 
-  checks.push(await checkGhlToken(client));
+  checks.push(await checkGhlToken(client, share));
   /*
    * A client counted by tags has no use for its pipeline mapping — an empty
    * one is not a fault there, and a stage seen in a webhook changes nothing it
@@ -120,9 +124,10 @@ export async function runHealthChecks(
     checks.push(await checkTagMapping(client));
   } else {
     checks.push(await checkStageMapping(client));
-    checks.push(await checkUnmappedStages(client));
+    checks.push(await checkUnmappedStages(client, share));
   }
   checks.push(await checkWebhookAlive(client));
+  if (share) checks.push(await checkShare(client, share));
 
   /*
    * 🔴 Every platform's checks are opt-in, INCLUDING Meta's.
@@ -235,8 +240,32 @@ function worst(levels: HealthLevel[]): HealthLevel {
 
 /* ------------------------------------------------------------------ */
 
-async function checkGhlToken(client: Client): Promise<HealthCheck> {
+async function checkGhlToken(client: Client, share: Share | null = null): Promise<HealthCheck> {
   const base = { id: "ghl_token", label: "GoHighLevel connection" };
+
+  /*
+   * A member of a shared sub-account has no connection of its own: its leads
+   * come through the holder's app installation, which is what is checked —
+   * with no GoHighLevel call, the holder's own row does that.
+   */
+  if (share && share.holder.id !== client.id) {
+    const [inst] = resultRows<{ live: boolean }>(
+      await db.execute(sql`SELECT (uninstalled_at IS NULL) AS live FROM ghl_installations WHERE id = ${share.installationId}`),
+    );
+    if (!inst?.live) {
+      return {
+        ...base,
+        level: "red",
+        message: `The app was uninstalled from ${share.holder.name}'s sub-account.`,
+        hint: `Reinstall it from ${share.holder.name}'s Connections page.`,
+      };
+    }
+    return {
+      ...base,
+      level: "green",
+      message: `Gets leads from ${share.holder.name}'s sub-account (shared app connection).`,
+    };
+  }
 
   const hasCredential =
     client.ghlAuthMethod === "oauth" || Boolean(client.ghlTokenEncrypted);
@@ -392,7 +421,7 @@ async function checkTagMapping(client: Client): Promise<HealthCheck> {
 }
 
 /** A stage the client added in GHL after onboarding. */
-async function checkUnmappedStages(client: Client): Promise<HealthCheck> {
+async function checkUnmappedStages(client: Client, share: Share | null = null): Promise<HealthCheck> {
   const base = { id: "unknown_stages", label: "Unrecognised stages" };
   const rows = await db
     .select({ id: pipelineStages.ghlStageId, name: pipelineStages.ghlStageName })
@@ -408,11 +437,154 @@ async function checkUnmappedStages(client: Client): Promise<HealthCheck> {
   if (rows.length === 0) {
     return { ...base, level: "green", message: "None" };
   }
+  const member = share && share.holder.id !== client.id;
   return {
     ...base,
     level: "amber",
     message: `${rows.length} stage(s) seen in webhooks but not mapped`,
-    hint: "Their transitions ARE being recorded and can be reclassified — map them in Setup.",
+    hint: member
+      ? `This client's stages follow ${share!.holder.name}'s mapping. Map them on ${share!.holder.name}'s Connections page.`
+      : "Their transitions ARE being recorded and can be reclassified — map them in Setup.",
+  };
+}
+
+/**
+ * A shared GoHighLevel sub-account: is the split between its clients working?
+ *
+ * The split is only as good as the tags the users chose and the tag updates
+ * GoHighLevel sends, and every way it can go quietly wrong — a lead nobody
+ * tagged, a tag renamed, updates stopped — shows here first, worst first.
+ */
+async function checkShare(client: Client, share: Share): Promise<HealthCheck> {
+  const base = { id: "ghl_share", label: "Shared sub-account" };
+  const I = share.installationId;
+  const H = share.holder;
+  const all = shareClients(share);
+  const me = all.find((c) => c.id === client.id);
+  const window = trailingWindowInclusive(30, client.timezone);
+  const untaggedTo = all.find((c) => c.getsUntagged);
+  const untaggedName = untaggedTo ? untaggedTo.name : "no one";
+  const holderPage = `${H.name}'s Connections page`;
+
+  const [s] = resultRows<{
+    recent: number;
+    untagged: number;
+    both: number;
+    unread: number;
+    not_split: number;
+    waiting: number;
+    last_update: string | Date | null;
+    moved_late: number;
+  }>(
+    await db.execute(sql`
+      WITH recent AS (
+        SELECT h.ghl_contact_id, h.attribution_fetched_at,
+               (SELECT c.share_reason FROM contacts c
+                 WHERE c.share_installation_id = ${I} AND c.ghl_contact_id = h.ghl_contact_id
+                   AND c.share_reason IS NOT NULL LIMIT 1) AS reason
+          FROM contacts h
+         WHERE h.client_id = ${H.id} AND COALESCE(h.ghl_created_at, h.created_at) >= ${window.startUtc}
+      ),
+      updates AS (
+        SELECT COALESCE(payload->>'contactId', payload->>'contact_id', payload->>'id') AS gid, max(received_at) AS at
+          FROM webhook_events
+         WHERE client_id = ${H.id} AND event_type = 'ContactTagUpdate' AND received_at > now() - interval '7 days'
+         GROUP BY 1
+      )
+      SELECT (SELECT COUNT(*)::int FROM recent) AS recent,
+             (SELECT COUNT(*)::int FROM recent r WHERE r.reason = 'no_tag'
+                 AND NOT EXISTS (SELECT 1 FROM updates u WHERE u.gid = r.ghl_contact_id
+                                   AND (r.attribution_fetched_at IS NULL OR r.attribution_fetched_at < u.at + interval '10 minutes'))) AS untagged,
+             (SELECT COUNT(*)::int FROM recent WHERE reason = 'both_tags') AS both,
+             (SELECT COUNT(*)::int FROM recent WHERE reason = 'unread') AS unread,
+             (SELECT COUNT(*)::int FROM contacts c WHERE c.client_id = ${H.id} AND c.share_installation_id = ${I}
+                 AND c.share_reason IS NULL AND c.created_at < now() - interval '10 minutes') AS not_split,
+             /*
+              * Every tag update gets one settling re-read at the next hourly
+              * sweep, so only one the sweep has already missed is a backlog
+              * worth a warning (a bulk retag); anything newer is just queued.
+              */
+             (SELECT COUNT(*)::int FROM updates u JOIN contacts h ON h.client_id = ${H.id} AND h.ghl_contact_id = u.gid
+                 WHERE u.at < now() - interval '70 minutes'
+                   AND (h.attribution_fetched_at IS NULL OR h.attribution_fetched_at < u.at + interval '10 minutes')) AS waiting,
+             (SELECT max(received_at) FROM webhook_events
+                 WHERE client_id = ${H.id} AND event_type = 'ContactTagUpdate') AS last_update,
+             (SELECT COUNT(*)::int FROM audit_log a
+                 WHERE a.client_id = ${client.id} AND a.action = 'ghl_share.moved' AND a.at >= ${window.startUtc}) AS moved_late
+    `),
+  );
+  const counts = resultRows<{ client_id: string; n: number }>(
+    await db.execute(sql`
+      SELECT c.client_id::text AS client_id, COUNT(*)::int AS n
+        FROM contacts c
+       WHERE c.share_installation_id = ${I} AND c.share_counted
+         AND COALESCE(c.ghl_created_at, c.created_at) >= ${window.startUtc}
+       GROUP BY 1
+    `),
+  );
+  const n = (id: string) => counts.find((r) => r.client_id === id)?.n ?? 0;
+  const lastUpdate = s?.last_update ? new Date(s.last_update) : null;
+  const hoursSinceUpdate = lastUpdate ? (Date.now() - lastUpdate.getTime()) / 3_600_000 : Infinity;
+
+  const amber = (message: string, hint: string): HealthCheck => ({ ...base, level: "amber", message, hint });
+  if (me && me.tags.length === 0 && !me.getsUntagged) {
+    return amber(
+      "No tag picked for this client yet, so no lead counts here.",
+      `Pick its tag under Share this sub-account on ${holderPage}.`,
+    );
+  }
+  if (Number(s?.not_split) > 0) {
+    return amber(
+      `${s!.not_split} new lead${s!.not_split === 1 ? " is" : "s are"} not split yet, so ${s!.not_split === 1 ? "it counts" : "they count"} nowhere.`,
+      `Press Re-split now on ${holderPage}, or wait for the hourly check.`,
+    );
+  }
+  if (Number(s?.waiting) > 0) {
+    return amber(
+      `${s!.waiting} tag update${s!.waiting === 1 ? " is" : "s are"} waiting to be read from GoHighLevel.`,
+      `They're read at the hourly check. Import history on ${H.name} reads them now.`,
+    );
+  }
+  if (Number(s?.recent) > 0 && hoursSinceUpdate > 72) {
+    return amber(
+      `No tag updates from GoHighLevel for ${Number.isFinite(hoursSinceUpdate) ? `${Math.floor(hoursSinceUpdate / 24)} days` : "a long time"}, while new leads kept arriving. New leads may count for the wrong client.`,
+      `Check that the app is still installed on ${H.name}'s sub-account.`,
+    );
+  }
+  if (Number(s?.both) > 0) {
+    return amber(
+      `${s!.both} lead${s!.both === 1 ? "" : "s"} got two clients' tags at the same time. ${s!.both === 1 ? "It counts" : "They count"} for ${untaggedName}.`,
+      "Remove the wrong tag in GoHighLevel.",
+    );
+  }
+  if (Number(s?.unread) > 0) {
+    return amber(
+      `${s!.unread} lead${s!.unread === 1 ? "" : "s"} couldn't be read from GoHighLevel yet, so their tags are unknown. They count for ${untaggedName} until they are.`,
+      `Check the GoHighLevel connection, or import history on ${H.name}.`,
+    );
+  }
+  if (Number(s?.untagged) > 0) {
+    return amber(
+      `${s!.untagged} of the ${s!.recent} contacts added in the last 30 days have no client's tag. They count for ${untaggedName}.`,
+      "Tag them in GoHighLevel, or add the tag they carry under Share this sub-account.",
+    );
+  }
+  if (Number(s?.moved_late) > 0) {
+    return amber(
+      `${s!.moved_late} lead${s!.moved_late === 1 ? "" : "s"} moved to another client more than 30 days after arriving, and past bookings moved with ${s!.moved_late === 1 ? "it" : "them"}.`,
+      "This happens when a past patient of one business becomes a lead for the other.",
+    );
+  }
+
+  const others = all.filter((c) => c.id !== client.id && c.status !== "archived");
+  const ago = lastUpdate ? ` Last tag update ${formatAgo(hoursSinceUpdate)} ago.` : "";
+  return {
+    ...base,
+    level: "green",
+    message:
+      `Shared with ${others.map((c) => c.name).join(", ")}. Last 30 days: ${n(client.id)} counted here` +
+      others.map((c) => `, ${n(c.id)} for ${c.name}`).join("") +
+      `.${ago}`,
   };
 }
 
@@ -1034,22 +1206,20 @@ async function checkSpendLeadCoherence(client: Client): Promise<HealthCheck> {
 
   const [parts, leadRows] = await Promise.all([
     platformSpend(client, window),
+    /*
+     * This client's own funnel only, through the ledger relation: tag rows or
+     * pipeline rows by its mode, and in a shared sub-account only the people
+     * the split gives it.
+     */
     db
-      .select({
-        leads: sql<number>`COUNT(DISTINCT ${stageTransitions.opportunityId})::int`,
-      })
-      .from(stageTransitions)
-      .where(
-        and(
-          eq(stageTransitions.clientId, client.id),
-          eq(stageTransitions.toCanonical, "new_lead"),
-          gte(stageTransitions.changedAt, window.startUtc),
-          // This client's own funnel only: tag rows or pipeline rows, never both.
-          client.crmMappingMode === "tags"
-            ? sql`${stageTransitions.source}::text = 'tag'`
-            : sql`${stageTransitions.source}::text <> 'tag'`,
-        ),
-      ),
+      .execute(sql`
+        SELECT COUNT(DISTINCT st.opportunity_id)::int AS leads
+          FROM ${FUNNEL_TRANSITIONS} st
+         WHERE st.client_id = ${client.id}
+           AND st.to_canonical::text = 'new_lead'
+           AND st.changed_at >= ${window.startUtc}
+      `)
+      .then((r) => resultRows<{ leads: number }>(r)),
   ]);
 
   // Positivity only — safe across currencies in a way a comparison would not be.
@@ -1162,29 +1332,25 @@ async function checkAttribution(client: Client): Promise<HealthCheck> {
   const base = { id: "attribution", label: "Campaign attribution" };
   const window = trailingWindowInclusive(30, client.timezone);
 
-  const [row] = await db
-    .select({
-      total: sql<number>`COUNT(*)::int`,
-      /*
-       * 🔴 Any platform's campaign id counts. `parseAttribution` routes each id
-       * to EXACTLY ONE platform's column — a Google lead's campaign id lands in
-       * `google_campaign_id` and deliberately never in `meta_campaign_id`,
-       * because guessing would move that lead's whole pipeline value to the
-       * wrong platform's cost-per-lead. Counting only the Meta column therefore
-       * reported a perfectly attributed Google client as entirely unattributed,
-       * under a hint telling them to add URL parameters they already had.
-       */
-      attributed: sql<number>`COUNT(COALESCE(
-        ${contacts.metaCampaignId}, ${contacts.googleCampaignId}, ${contacts.tiktokCampaignId}
-      ))::int`,
-    })
-    .from(contacts)
-    .where(
-      and(
-        eq(contacts.clientId, client.id),
-        gte(contacts.createdAt, window.startUtc),
-      ),
-    );
+  /*
+   * 🔴 Any platform's campaign id counts. `parseAttribution` routes each id
+   * to EXACTLY ONE platform's column — a Google lead's campaign id lands in
+   * `google_campaign_id` and deliberately never in `meta_campaign_id`,
+   * because guessing would move that lead's whole pipeline value to the
+   * wrong platform's cost-per-lead. Counting only the Meta column therefore
+   * reported a perfectly attributed Google client as entirely unattributed,
+   * under a hint telling them to add URL parameters they already had.
+   *
+   * Through FUNNEL_CONTACTS: in a shared sub-account, only this client's people.
+   */
+  const [row] = resultRows<{ total: number; attributed: number }>(
+    await db.execute(sql`
+      SELECT COUNT(*)::int AS total,
+             COUNT(COALESCE(c.meta_campaign_id, c.google_campaign_id, c.tiktok_campaign_id))::int AS attributed
+        FROM ${FUNNEL_CONTACTS} c
+       WHERE c.client_id = ${client.id} AND c.created_at >= ${window.startUtc}
+    `),
+  );
 
   const total = Number(row?.total ?? 0);
   const attributed = Number(row?.attributed ?? 0);
@@ -1232,15 +1398,13 @@ async function checkAdAttribution(client: Client): Promise<HealthCheck> {
   const base = { id: "ad_attribution", label: "Ad-level attribution" };
   const window = trailingWindowInclusive(30, client.timezone);
 
-  const [row] = await db
-    .select({
-      total: sql<number>`COUNT(*)::int`,
-      withAd: sql<number>`COUNT(${contacts.metaAdId})::int`,
-    })
-    .from(contacts)
-    .where(
-      and(eq(contacts.clientId, client.id), gte(contacts.createdAt, window.startUtc)),
-    );
+  const [row] = resultRows<{ total: number; withAd: number }>(
+    await db.execute(sql`
+      SELECT COUNT(*)::int AS total, COUNT(c.meta_ad_id)::int AS "withAd"
+        FROM ${FUNNEL_CONTACTS} c
+       WHERE c.client_id = ${client.id} AND c.created_at >= ${window.startUtc}
+    `),
+  );
 
   const total = Number(row?.total ?? 0);
   const withAd = Number(row?.withAd ?? 0);
@@ -1300,23 +1464,17 @@ async function checkDealValues(client: Client): Promise<HealthCheck> {
     };
   }
 
-  const [row] = await db
-    .select({
-      won: sql<number>`COUNT(DISTINCT ${opportunities.id})::int`,
-      valued: sql<number>`COUNT(DISTINCT ${opportunities.id}) FILTER (WHERE ${opportunities.monetaryValue} > 0)::int`,
-    })
-    .from(stageTransitions)
-    .innerJoin(
-      opportunities,
-      eq(opportunities.id, stageTransitions.opportunityId),
-    )
-    .where(
-      and(
-        eq(stageTransitions.clientId, client.id),
-        eq(stageTransitions.toCanonical, "closed_won"),
-        gte(stageTransitions.changedAt, window.startUtc),
-      ),
-    );
+  const [row] = resultRows<{ won: number; valued: number }>(
+    await db.execute(sql`
+      SELECT COUNT(DISTINCT o.id)::int AS won,
+             COUNT(DISTINCT o.id) FILTER (WHERE o.monetary_value > 0)::int AS valued
+        FROM ${FUNNEL_TRANSITIONS} st
+        JOIN opportunities o ON o.id = st.opportunity_id
+       WHERE st.client_id = ${client.id}
+         AND st.to_canonical::text = 'closed_won'
+         AND st.changed_at >= ${window.startUtc}
+    `),
+  );
 
   const won = Number(row?.won ?? 0);
   const valued = Number(row?.valued ?? 0);
@@ -1357,10 +1515,19 @@ function formatAgo(hours: number): string {
  * calls. The full checklist (runHealthChecks) does the live verification.
  */
 export async function quickHealth(client: Client): Promise<HealthLevel> {
-  const ghlConnected =
+  let ghlConnected =
     client.ghlAuthMethod === "oauth"
       ? Boolean(client.ghlLocationId)
       : Boolean(client.ghlTokenEncrypted);
+  // A member of a shared sub-account is connected while the holder's app is.
+  if (!ghlConnected && client.ghlShareInstallationId) {
+    const [inst] = resultRows<{ live: boolean }>(
+      await db.execute(
+        sql`SELECT (uninstalled_at IS NULL) AS live FROM ghl_installations WHERE id = ${client.ghlShareInstallationId}`,
+      ),
+    );
+    ghlConnected = Boolean(inst?.live);
+  }
 
   /*
    * 🔴 Any ad platform, not just Meta.

@@ -3,7 +3,7 @@ import { db } from "@/db";
 import type { Client } from "@/db/schema";
 import type { DateWindow } from "@/lib/dates";
 import { paidLeadPredicate, type PaidLeadFilter } from "@/lib/metrics/queries";
-import { FROM_AD, seedTagHistory } from "./index";
+import { FROM_AD, ensureTagHistory } from "./index";
 import { normalizeTag } from "./project";
 
 /*
@@ -57,6 +57,10 @@ export async function previewLeadCounts(
           ${paid ? sql`JOIN contacts c ON c.id = st.contact_id` : sql``}
           WHERE st.client_id = ${client.id}
             AND ${tagRows ? sql`st.source::text = 'tag'` : sql`st.source::text <> 'tag'`}
+            -- In a shared sub-account, only the people the split gives this client.
+            AND NOT EXISTS (
+              SELECT 1 FROM opportunities fsx WHERE fsx.id = st.opportunity_id AND fsx.share_counted = false
+            )
             AND st.to_canonical::text = 'new_lead'
             AND st.changed_at >= ${window.startUtc}
             AND st.changed_at < ${window.endUtc}
@@ -80,11 +84,12 @@ export async function previewLeadCounts(
   let proposed = 0;
   try {
     await db.transaction(async (tx) => {
-      await seedTagHistory(tx, client.id);
+      await ensureTagHistory(tx, client.id);
       const res = await tx.execute<{ n: number }>(sql`
         SELECT COUNT(*)::int AS n
         FROM contacts c
         WHERE c.client_id = ${client.id}
+          AND c.share_counted IS NOT FALSE
           AND COALESCE(c.ghl_created_at, c.created_at) >= ${window.startUtc}
           AND COALESCE(c.ghl_created_at, c.created_at) < ${window.endUtc}
           AND (${sql.join(isLead, sql` OR `)})

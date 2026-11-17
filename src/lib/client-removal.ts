@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   clients,
@@ -9,6 +9,7 @@ import {
   users,
 } from "@/db/schema";
 import { markUninstalledForClient } from "@/lib/ghl/oauth";
+import { assertMayArchive, onMemberStatusChange, shareRoleOf } from "@/lib/ghl/share-actions";
 
 /**
  * Remove a client and disconnect everything attached to it.
@@ -40,6 +41,7 @@ export interface RemoveClientResult {
 
 export async function removeClient(
   clientId: string,
+  opts: { superadmin?: boolean } = {},
 ): Promise<RemoveClientResult> {
   const [client] = await db
     .select()
@@ -47,6 +49,13 @@ export async function removeClient(
     .where(eq(clients.id, clientId))
     .limit(1);
   if (!client) throw new Error("Client not found");
+
+  // A sub-account shared with other clients can't lose its holder (ShareError, 409).
+  let member = false;
+  if (client.ghlShareInstallationId) {
+    await assertMayArchive(client.id, { superadmin: Boolean(opts.superadmin) });
+    member = (await shareRoleOf(client.id))?.role === "member";
+  }
 
   // 1. Disconnect GoHighLevel.
   let ghlDisconnected = false;
@@ -62,6 +71,14 @@ export async function removeClient(
     await markUninstalledForClient(client.id).catch(() => {});
     ghlDisconnected = true;
   }
+  /*
+   * And let the sub-account go. Left bound to an archived client, it could
+   * never be connected to any other client again — every attempt was refused
+   * as "already connected to another client here".
+   */
+  await db
+    .execute(sql`UPDATE ghl_installations SET client_id = NULL, updated_at = now() WHERE client_id = ${client.id}`)
+    .catch(() => {});
 
   /*
    * 2. Soft-remove every ad-account connection, keeping its historical metrics
@@ -133,6 +150,10 @@ export async function removeClient(
     .update(clients)
     .set({ status: "archived", ghlTokenEncrypted: null, updatedAt: new Date() })
     .where(eq(clients.id, clientId));
+
+  // 5. A member of a shared sub-account: its leads now count for no active
+  //    client, and it gets no new copies.
+  if (member) await onMemberStatusChange(client.id, "archived").catch(() => {});
 
   return {
     ghlDisconnected,

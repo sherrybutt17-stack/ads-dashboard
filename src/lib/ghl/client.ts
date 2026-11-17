@@ -239,9 +239,13 @@ export class GhlClient {
       maxPages = 400,
       limits,
     }: { pageLimit?: number; searchAfter?: unknown[]; maxPages?: number; limits?: CallLimits } = {},
-  ): AsyncGenerator<{ contacts: GhlContact[]; next: unknown[] | null; total: number | null }> {
+  ): AsyncGenerator<{ contacts: GhlContact[]; next: unknown[] | null; total: number | null; requestedAt: Date }> {
     let after = searchAfter;
     for (let page = 0; page < maxPages; page++) {
+      // When the read STARTED: a tag on the page was there by then, and a tag
+      // added during the read may or may not be — the shared-sub-account split
+      // dates what it did not watch arrive no earlier than this.
+      const requestedAt = new Date();
       const res = await this.request<{ contacts?: GhlContact[]; total?: number }>(`/contacts/search`, {
         method: "POST",
         body: JSON.stringify({ locationId, pageLimit, ...(after ? { searchAfter: after } : {}) }),
@@ -251,7 +255,7 @@ export class GhlClient {
       if (contacts.length === 0) return;
       const last = contacts[contacts.length - 1] as { searchAfter?: unknown };
       const next = Array.isArray(last.searchAfter) && contacts.length >= pageLimit ? last.searchAfter : null;
-      yield { contacts, next, total: typeof res.total === "number" ? res.total : null };
+      yield { contacts, next, total: typeof res.total === "number" ? res.total : null, requestedAt };
       if (!next) return;
       after = next;
     }

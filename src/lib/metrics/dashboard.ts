@@ -800,11 +800,25 @@ export async function loadDashboard(
    * instead of silently dropping them — otherwise a client running Instant Forms
    * sees real leads in the KPI row but "0 attributed leads" in the table.
    */
-  const unattributedLeads = leadsByCampaign.get("") ?? 0;
+  let unattributedLeads = leadsByCampaign.get("") ?? 0;
+  /*
+   * In a shared GoHighLevel sub-account the users' tags decide whose lead it
+   * is, so a lead counted here can carry a campaign that ANOTHER client's ad
+   * account ran. That campaign has no spend row here and would drop out of the
+   * table, so it joins the pseudo-row, renamed to say so. Clients that don't
+   * share keep the row exactly as before.
+   */
+  const shared = Boolean(client.ghlShareInstallationId);
+  if (shared) {
+    const ownCampaigns = new Set(campaignRows.map((c) => c.campaignId));
+    for (const [id, n] of leadsByCampaign) {
+      if (id !== "" && !ownCampaigns.has(id)) unattributedLeads += n;
+    }
+  }
   if (unattributedLeads > 0) {
     campaigns.push({
       campaignId: "",
-      campaignName: "Unattributed",
+      campaignName: shared ? "Other / unattributed" : "Unattributed",
       platform,
       spend: 0,
       impressions: 0,

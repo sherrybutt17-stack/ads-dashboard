@@ -111,13 +111,25 @@ export function cleanMappings(input: readonly { tag: string; canonicalStage: str
   return [...byTag].map(([tag, canonicalStage]) => ({ tag, canonicalStage }));
 }
 
-/** Every tag on the client's contacts, most used first, with mapped tags kept even at zero. */
-export async function clientTags(clientId: string): Promise<{ tag: string; contacts: number }[]> {
+/**
+ * Every tag on the client's contacts, most used first, with mapped tags kept
+ * even at zero.
+ *
+ * A client in a shared sub-account counts only the people the split gives it,
+ * so the step-mapping picker shows the tags on ITS leads. `{ all: true }`
+ * counts every contact the client holds — the "which tag belongs to which
+ * client" picker on the holder, which must list the whole sub-account.
+ */
+export async function clientTags(
+  clientId: string,
+  opts: { all?: boolean } = {},
+): Promise<{ tag: string; contacts: number }[]> {
   const result = await db.execute<{ tag: string; contacts: number }>(sql`
     SELECT tag, SUM(n)::int AS contacts FROM (
       SELECT t.tag, COUNT(DISTINCT c.id) AS n
       FROM contacts c CROSS JOIN LATERAL unnest(c.tags) AS t(tag)
       WHERE c.client_id = ${clientId} AND t.tag <> ''
+        ${opts.all ? sql`` : sql`AND c.share_counted IS NOT FALSE`}
       GROUP BY t.tag
       UNION ALL
       SELECT tag, 0 FROM tag_stage_mappings WHERE client_id = ${clientId}
@@ -197,13 +209,66 @@ export async function seedTagHistory(exec: Pick<Tx, "execute">, clientId: string
     ON CONFLICT (contact_id, tag) DO NOTHING
   `);
 
+  /*
+   * For a client that shares its sub-account, the split orders two clients'
+   * tags by when each was seen, so a tag we did not watch arrive must never
+   * sort ahead of one we did. On a contact that already has rows, it is dated
+   * no earlier than the last read that showed it and strictly after the latest
+   * row held; only a contact with no rows at all takes the creation floor.
+   * Every other client keeps the creation floor, as before.
+   */
   await exec.execute(sql`
     INSERT INTO contact_tag_history (contact_id, client_id, tag, first_seen_at, exact)
-    SELECT c.id, c.client_id, t.tag, COALESCE(c.ghl_created_at, c.created_at), false
-    FROM contacts c CROSS JOIN LATERAL unnest(c.tags) AS t(tag)
+    SELECT c.id, c.client_id, t.tag,
+           CASE
+             WHEN k.ghl_share_installation_id IS NOT NULL AND held.latest IS NOT NULL
+               THEN GREATEST(
+                 COALESCE(c.attribution_fetched_at, c.ghl_created_at, c.created_at),
+                 held.latest + interval '1 millisecond'
+               )
+             ELSE COALESCE(c.ghl_created_at, c.created_at)
+           END,
+           false
+    FROM contacts c
+    JOIN clients k ON k.id = c.client_id
+    CROSS JOIN LATERAL (
+      SELECT max(x.first_seen_at) AS latest FROM contact_tag_history x WHERE x.contact_id = c.id
+    ) held
+    CROSS JOIN LATERAL unnest(c.tags) AS t(tag)
     WHERE c.client_id = ${clientId} AND t.tag <> ''
     ON CONFLICT (contact_id, tag) DO NOTHING
   `);
+}
+
+/**
+ * Make sure a client's tag history is complete before its tag funnel is built
+ * from it.
+ *
+ * A member of a shared sub-account never seeds from its own copies: its
+ * history IS the holder's, copied with the holder's dates, so both dashboards
+ * date a step identically. Everyone else seeds as before.
+ */
+export async function ensureTagHistory(exec: Pick<Tx, "execute">, clientId: string): Promise<void> {
+  const holder = rows<{ holder: string | null }>(
+    await exec.execute(sql`
+      SELECT i.client_id::text AS holder
+        FROM clients c JOIN ghl_installations i ON i.id = c.ghl_share_installation_id
+       WHERE c.id = ${clientId}
+    `),
+  )[0]?.holder;
+  if (holder && holder !== clientId) {
+    await exec.execute(sql`
+      INSERT INTO contact_tag_history (contact_id, client_id, tag, first_seen_at, exact)
+      SELECT mc.id, ${clientId}, h.tag, h.first_seen_at, h.exact
+        FROM contact_tag_history h
+        JOIN contacts hc ON hc.id = h.contact_id
+        JOIN contacts mc ON mc.client_id = ${clientId} AND mc.ghl_contact_id = hc.ghl_contact_id
+       WHERE h.client_id = ${holder}
+      ON CONFLICT (contact_id, tag) DO NOTHING
+    `);
+    return;
+  }
+  await seedTagHistory(exec, clientId);
 }
 
 /**
@@ -216,32 +281,38 @@ export async function seedTagHistory(exec: Pick<Tx, "execute">, clientId: string
  *
  * Never throws: this rides on webhook processing, and a failure here must not
  * cost the event. A missed rebuild is repaired by the next save or import.
+ *
+ * A client that shares its GoHighLevel sub-account records history in either
+ * mode, because the split between the clients reads it (`src/lib/ghl/share.ts`).
+ * For it, a tag that was already on the previous read but has no row yet — one
+ * we did not watch arrive — is dated after every tag we did, never to the
+ * contact's creation, so it cannot jump ahead of them.
  */
 export async function recordContactTags(
-  client: Pick<Client, "id" | "agencyId" | "crmMappingMode" | "tagMappingAllowed">,
+  client: Pick<Client, "id" | "agencyId" | "crmMappingMode" | "tagMappingAllowed"> &
+    Partial<Pick<Client, "ghlShareInstallationId">>,
   before: Pick<Contact, "tags" | "attributionFetchedAt"> | null,
   after: Pick<Contact, "id" | "tags" | "ghlCreatedAt" | "createdAt">,
   now: Date = new Date(),
 ): Promise<void> {
   try {
-    // Only clients that can be counted by tags at all; nobody else pays for this.
-    if (!(await tagMappingAllowed(client))) return;
+    const sharing = Boolean(client.ghlShareInstallationId);
+    // Only clients that can be counted by tags, or that share; nobody else pays for this.
+    if (!sharing && !(await tagMappingAllowed(client))) return;
 
     const knewTags = Boolean(before?.attributionFetchedAt);
     const old = new Set(before?.tags ?? []);
     const arrived = after.ghlCreatedAt ?? after.createdAt;
-    const seen = [...new Set((after.tags ?? []).map(normalizeTag).filter(Boolean))].map((tag) => {
-      const added = knewTags && !old.has(tag);
-      return {
-        contactId: after.id,
-        clientId: client.id,
-        tag,
-        firstSeenAt: added ? now : arrived,
-        exact: added,
-      };
-    });
+    const tags = [...new Set((after.tags ?? []).map(normalizeTag).filter(Boolean))];
 
     await db.transaction(async (tx) => {
+      /*
+       * A shared sub-account's deliveries also wait on the split's locks, so
+       * this gives up after 5 s rather than holding GoHighLevel's request open:
+       * a missed row is filled by the hourly sweep. Everyone else keeps
+       * waiting for a Map-by-tag save, as before.
+       */
+      if (sharing) await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
       /*
        * 🔴 The mode is read HERE, under the lock a save holds — not taken from
        * the client this request loaded. A lead arriving while the client is
@@ -252,15 +323,40 @@ export async function recordContactTags(
        */
       await lockClient(tx, client.id);
       const [row] = await tx
-        .select({ mode: clients.crmMappingMode, everyContact: clients.tagLeadEveryContact })
+        .select({
+          mode: clients.crmMappingMode,
+          everyContact: clients.tagLeadEveryContact,
+          share: clients.ghlShareInstallationId,
+        })
         .from(clients)
         .where(eq(clients.id, client.id))
         .limit(1);
-      if (!row || row.mode !== "tags") return;
-      if (seen.length > 0) {
+      if (!row) return;
+      const shares = Boolean(row.share);
+      if (row.mode !== "tags" && !shares) return;
+
+      if (tags.length > 0) {
+        let unwatched = arrived;
+        if (shares && knewTags) {
+          const latest = rows<{ at: string | Date | null }>(
+            await tx.execute(sql`SELECT max(first_seen_at) AS at FROM contact_tag_history WHERE contact_id = ${after.id}`),
+          )[0]?.at;
+          const prior = before!.attributionFetchedAt!.getTime();
+          unwatched = new Date(Math.max(prior, latest ? new Date(latest).getTime() + 1 : prior));
+        }
+        const seen = tags.map((tag) => {
+          const added = knewTags && !old.has(tag);
+          return {
+            contactId: after.id,
+            clientId: client.id,
+            tag,
+            firstSeenAt: added ? now : shares && knewTags ? unwatched : arrived,
+            exact: added,
+          };
+        });
         await tx.insert(contactTagHistory).values(seen).onConflictDoNothing();
       }
-      await projectAndWrite(tx, client.id, [after.id], row.everyContact);
+      if (row.mode === "tags") await projectAndWrite(tx, client.id, [after.id], row.everyContact);
     });
   } catch (err) {
     console.error(
@@ -306,7 +402,7 @@ export async function rebuildTagFunnel(
       if (!opts.contactIds) await clearTagRows(tx, clientId);
       return null;
     }
-    if (opts.seed) await seedTagHistory(tx, clientId);
+    if (opts.seed) await ensureTagHistory(tx, clientId);
     return projectAndWrite(tx, clientId, opts.contactIds ?? null, client.everyContact);
   });
 }
@@ -321,12 +417,23 @@ async function clearTagRows(tx: Pick<Tx, "execute">, clientId: string): Promise<
   `);
 }
 
-async function lockClient(tx: Pick<Tx, "execute">, clientId: string) {
+/**
+ * The per-client lock every tag-funnel write holds. Also taken, in client-id
+ * order, by a shared sub-account's split (`src/lib/ghl/share.ts`) for every
+ * client in the share, so no stand-in can be written mid-split.
+ */
+export async function lockClient(tx: Pick<Tx, "execute">, clientId: string) {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`tag-funnel:${clientId}`}, 0))`);
 }
 
-/** Load the scope's inputs, project them, and write the result — inside `tx`. */
-async function projectAndWrite(
+/**
+ * Load the scope's inputs, project them, and write the result — inside `tx`.
+ *
+ * Each stand-in carries its contact's shared-sub-account flags, so in a share a
+ * client's stand-in counts only when the person is that client's: "every new
+ * contact" and ad leads then count only the people the split gives it.
+ */
+export async function projectAndWrite(
   tx: Executor,
   clientId: string,
   scope: string[] | null,
@@ -348,16 +455,23 @@ async function projectAndWrite(
     name: string | null;
     lead_at: string | Date;
     from_ad: boolean;
+    share_installation_id: string | null;
+    share_counted: boolean | null;
   }>(
     await tx.execute(sql`
       SELECT c.id::text AS id,
              c.ghl_contact_id,
              COALESCE(NULLIF(TRIM(CONCAT(c.first_name, ' ', c.last_name)), ''), c.email, c.phone) AS name,
              COALESCE(c.ghl_created_at, c.created_at) AS lead_at,
-             ${FROM_AD} AS from_ad
+             ${FROM_AD} AS from_ad,
+             c.share_installation_id::text AS share_installation_id,
+             c.share_counted
       FROM contacts c
       WHERE c.client_id = ${clientId} ${inScope(sql`c.id`)}
     `),
+  );
+  const shareFlags = new Map(
+    contactRows.map((r) => [r.id, { installationId: r.share_installation_id, counted: r.share_counted }]),
   );
   const contacts: TagFunnelContact[] = contactRows.map((r) => ({
     id: r.id,
@@ -385,7 +499,7 @@ async function projectAndWrite(
   }));
 
   const leads = projectTagLeads(contacts, observations, map, { everyContact });
-  return writeLeads(tx, clientId, scope, leads);
+  return writeLeads(tx, clientId, scope, leads, shareFlags);
 }
 
 /**
@@ -401,6 +515,7 @@ async function writeLeads(
   clientId: string,
   scope: string[] | null,
   leads: TagLead[],
+  shareFlags: ReadonlyMap<string, { installationId: string | null; counted: boolean | null }> = new Map(),
 ): Promise<RebuildResult> {
   const scopeSql = scope ? sql`AND contact_id = ANY(${sql.param(scope)}::uuid[])` : sql``;
 
@@ -439,6 +554,8 @@ async function writeLeads(
           ghlCreatedAt: l.leadAt,
           lastStageChangeAt: l.current.at,
           fromTags: true,
+          shareInstallationId: shareFlags.get(l.contactId)?.installationId ?? null,
+          shareCounted: shareFlags.get(l.contactId)?.counted ?? null,
           updatedAt: now,
         })),
       )
@@ -455,6 +572,8 @@ async function writeLeads(
           ghlCreatedAt: sql`excluded.ghl_created_at`,
           lastStageChangeAt: sql`excluded.last_stage_change_at`,
           fromTags: sql`true`,
+          shareInstallationId: sql`excluded.share_installation_id`,
+          shareCounted: sql`excluded.share_counted`,
           updatedAt: sql`excluded.updated_at`,
         },
       })
@@ -540,7 +659,7 @@ export async function saveTagMapping(
       await clearTagRows(tx, clientId);
       return null;
     }
-    await seedTagHistory(tx, clientId);
+    await ensureTagHistory(tx, clientId);
     return projectAndWrite(tx, clientId, null, updated.everyContact);
   });
 }

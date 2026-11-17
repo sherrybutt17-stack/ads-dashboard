@@ -14,6 +14,7 @@ import {
   index,
   primaryKey,
   customType,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { CANONICAL_STAGES } from "@/lib/stages";
@@ -409,6 +410,30 @@ export const clients = pgTable(
     /** Cached from the verification call, shown back during onboarding. */
     ghlLocationName: text("ghl_location_name"),
 
+    // --- Shared GoHighLevel sub-account (src/lib/ghl/share.ts) ---
+    /**
+     * The share this client is in: the `ghlInstallations` row of the shared
+     * sub-account. Set on the HOLDER (the client the app connection is bound
+     * to) and on every MEMBER fed from it. NULL = not sharing, and then every
+     * column below is inert.
+     */
+    ghlShareInstallationId: uuid("ghl_share_installation_id").references(
+      (): AnyPgColumn => ghlInstallations.id,
+      { onDelete: "set null" },
+    ),
+    /** GHL tags (normalised by `normalizeTag`) that mark this client's leads in its share. */
+    ghlShareTags: text("ghl_share_tags").array().notNull().default([]),
+    /** Takes the share's leads that carry no client's tag. At most one per share; none = No one. */
+    ghlShareGetsUntagged: boolean("ghl_share_gets_untagged").notNull().default(false),
+    /** When this client joined its share. */
+    ghlShareSince: timestamp("ghl_share_since", { withTimezone: true }),
+    /** HOLDER row only: a lead stays with its client after its tag is removed. */
+    ghlShareKeepRemoved: boolean("ghl_share_keep_removed").notNull().default(true),
+    /** HOLDER row only: bumped by every rules, membership or archive change (the 409 check). */
+    ghlShareVersion: integer("ghl_share_version").notNull().default(0),
+    /** HOLDER row only: the version the last completed full split ran on. */
+    ghlShareSplitVersion: integer("ghl_share_split_version").notNull().default(0),
+
     // --- Meta ---
     // Ad accounts live in their own table (metaAdAccounts) — a client can hold
     // several, summed into one dashboard. These two are a DISPLAY cache derived
@@ -525,6 +550,12 @@ export const clients = pgTable(
     // Every scoped read in Phase 2 filters on this. Cheap now, and adding it
     // later means an index build on a table under load.
     index("clients_agency_idx").on(t.agencyId),
+    index("clients_ghl_share_idx")
+      .on(t.ghlShareInstallationId)
+      .where(sql`${t.ghlShareInstallationId} IS NOT NULL`),
+    uniqueIndex("clients_ghl_share_one_untagged_key")
+      .on(t.ghlShareInstallationId)
+      .where(sql`${t.ghlShareGetsUntagged}`),
   ],
 );
 
@@ -922,6 +953,20 @@ export const contacts = pgTable(
      */
     alertedAt: timestamp("alerted_at", { withTimezone: true }),
 
+    /**
+     * Shared sub-account copies (`src/lib/ghl/share.ts`). NULL on every client
+     * that doesn't share, which reads as counted, so their numbers never move.
+     *
+     * In a share every client holds a copy of the person, and `shareCounted`
+     * says which copy counts: true on exactly one (a partial unique index makes
+     * a second impossible), false on the rest. Readers go through
+     * `FUNNEL_CONTACTS` in `src/lib/metrics/ledger.ts`, never the bare table.
+     */
+    shareInstallationId: uuid("share_installation_id"),
+    shareCounted: boolean("share_counted"),
+    /** Why the split put this person where it did: tag | first_tag | both_tags | kept | no_tag | unread. */
+    shareReason: text("share_reason"),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -933,6 +978,12 @@ export const contacts = pgTable(
     uniqueIndex("contacts_client_ghl_key").on(t.clientId, t.ghlContactId),
     index("contacts_client_campaign_idx").on(t.clientId, t.metaCampaignId),
     index("contacts_client_created_idx").on(t.clientId, t.ghlCreatedAt),
+    index("contacts_share_idx")
+      .on(t.shareInstallationId, t.ghlContactId)
+      .where(sql`${t.shareInstallationId} IS NOT NULL`),
+    uniqueIndex("contacts_share_one_counted_key")
+      .on(t.shareInstallationId, t.ghlContactId)
+      .where(sql`${t.shareCounted}`),
   ],
 );
 
@@ -986,6 +1037,15 @@ export const opportunities = pgTable(
      */
     fromTags: boolean("from_tags").notNull().default(false),
 
+    /**
+     * Shared sub-account copies, exactly as on `contacts`: NULL when the client
+     * doesn't share; otherwise true on the one copy that counts (the card
+     * follows its contact's verdict) and false on the rest. Read through
+     * `FUNNEL_OPPORTUNITIES` / `FUNNEL_TRANSITIONS`.
+     */
+    shareInstallationId: uuid("share_installation_id"),
+    shareCounted: boolean("share_counted"),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -1002,6 +1062,15 @@ export const opportunities = pgTable(
     index("opportunities_client_from_tags_idx")
       .on(t.clientId)
       .where(sql`${t.fromTags}`),
+    uniqueIndex("opportunities_share_one_counted_key")
+      .on(t.shareInstallationId, t.ghlOpportunityId)
+      .where(sql`${t.shareCounted}`),
+    index("opportunities_share_excluded_idx")
+      .on(t.id)
+      .where(sql`${t.shareCounted} = false`),
+    index("opportunities_share_contact_idx")
+      .on(t.shareInstallationId, t.ghlContactId)
+      .where(sql`${t.shareInstallationId} IS NOT NULL`),
   ],
 );
 

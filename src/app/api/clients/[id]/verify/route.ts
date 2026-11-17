@@ -7,6 +7,8 @@ import { encrypt, decryptNullable } from "@/lib/crypto";
 import { verifyGhl } from "@/lib/clients";
 import { isSuperadmin, requireClient } from "@/lib/auth";
 import { safeFailure } from "@/lib/api-failure";
+import { LocationTakenError, assertLocationIdAvailable } from "@/lib/ghl/oauth";
+import { ShareError, assertMaySetLocation } from "@/lib/ghl/share-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +46,22 @@ export async function POST(
       { error: "Invalid input", details: parsed.error.flatten() },
       { status: 400 },
     );
+  }
+
+  /*
+   * The location a token is saved against is checked like any typed location:
+   * never a member's (it gets GoHighLevel through its holder), never moving a
+   * sharing holder, and never another client's live install — the same rule
+   * the PATCH route applies, which this path used to skip.
+   */
+  try {
+    if (client.ghlShareInstallationId) await assertMaySetLocation(client.id);
+    await assertLocationIdAvailable(client.agencyId, parsed.data.locationId, client.id);
+  } catch (err) {
+    // Both are our own words, written for this screen.
+    if (err instanceof ShareError) return NextResponse.json({ ok: false, error: err.message }, { status: err.status });
+    if (err instanceof LocationTakenError) return NextResponse.json({ ok: false, error: err.message }, { status: 409 });
+    throw err;
   }
 
   try {

@@ -10,6 +10,8 @@ import { isSuperadmin, requireClient } from "@/lib/auth";
 import { safeFailure } from "@/lib/api-failure";
 import { rateLimit } from "@/lib/rate-limit";
 import { record } from "@/lib/audit";
+import { getClientByIdForSession } from "@/lib/clients";
+import { shareRoleOf } from "@/lib/ghl/share-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -157,7 +159,18 @@ export async function POST(
          * imports: every write is idempotent, so overlapping runs only repeat
          * work.
          */
-        const limited = rateLimit(`ghl-history:${client.id}`, GHL_HISTORY_REQUESTS_PER_HOUR, 60 * 60 * 1000);
+        /*
+         * A member of a shared sub-account has no GoHighLevel of its own: its
+         * import is the holder's — the same cursor, the same rate limit — and
+         * every page is copied and split for every client in the share.
+         */
+        const role = client.ghlShareInstallationId ? await shareRoleOf(client.id) : null;
+        const source =
+          role?.role === "member" ? await getClientByIdForSession(session, role.share.holder.id) : client;
+        if (!source) {
+          return NextResponse.json({ ok: false, error: "Client not found" }, { status: 404 });
+        }
+        const limited = rateLimit(`ghl-history:${source.id}`, GHL_HISTORY_REQUESTS_PER_HOUR, 60 * 60 * 1000);
         if (!limited.ok) {
           return NextResponse.json(
             { ok: false, error: "Too many imports in the last hour. Try again later." },
@@ -171,7 +184,7 @@ export async function POST(
             { status: 400 },
           );
         }
-        const res = await importGhlHistory(client, { cursor });
+        const res = await importGhlHistory(source, { cursor });
         await record({
           action: "client.ghl_history_import",
           targetType: "client",

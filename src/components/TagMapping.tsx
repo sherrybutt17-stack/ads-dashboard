@@ -396,7 +396,7 @@ export function SwitchToPipeline({
  * click elsewhere closes it. Picking a tag, or Escape, hands focus back to the
  * button, so a keyboard user can add the next tag straight away.
  */
-function TagPicker({
+export function TagPicker({
   stageLabel,
   tags,
   disabled,
@@ -594,10 +594,16 @@ export function TagMappingPanel({
   clientId,
   savedMode,
   onSaved,
+  sharedFrom = null,
 }: {
   clientId: string;
   savedMode: CrmMode;
   onSaved: () => void;
+  /**
+   * The holder's name when this client gets its leads from a shared
+   * sub-account: "every contact" then means every person the split gives it.
+   */
+  sharedFrom?: string | null;
 }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -728,11 +734,12 @@ export function TagMappingPanel({
         />
         <span>
           <span className="block text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>
-            Count every new contact as a lead
+            {sharedFrom ? "Count every lead this shared sub-account gives this client" : "Count every new contact as a lead"}
           </span>
           <span className="block text-xs" style={{ color: "var(--text-muted)" }}>
-            For clients whose leads carry no tag. Tagged or not, every contact that
-            arrives counts.
+            {sharedFrom
+              ? "Every person whose leads count for this client is a lead, tagged or not."
+              : "For clients whose leads carry no tag. Tagged or not, every contact that arrives counts."}
           </span>
         </span>
       </label>

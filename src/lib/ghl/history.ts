@@ -16,6 +16,9 @@ import { parseAttribution } from "./attribution";
 import { isTransientGhlFailure, type CallLimits } from "./client";
 import { normalizeStatus, parseDate } from "./normalize";
 import { extractTags, getGhlClientAsync } from "./process";
+import { syncShare } from "./share";
+import { dispatchShareAlerts } from "./share-actions";
+import { shareStamp } from "./share-stamp";
 import type { GhlContact, GhlOpportunity } from "./types";
 
 /**
@@ -234,10 +237,21 @@ export async function importGhlHistory(
       });
     }
 
+    /*
+     * A holder that shares its sub-account: every row starts uncounted, each
+     * page's tags are dated by the share's rule, and each page is copied to
+     * the other clients and split as it lands. A member's import runs this
+     * holder's (the sync route sends it here).
+     */
+    const sharing = client.ghlShareInstallationId ?? null;
+    const stamp = shareStamp(client);
+
     /* ---------------- contacts ---------------- */
     if (!opts.cursor || opts.cursor.phase === "contacts") {
       for await (const page of ghl.iterateContacts(locationId, { searchAfter: opts.cursor?.after, limits })) {
-        const r = await upsertContacts(client.id, page.contacts);
+        const prior = sharing ? await priorReads(client.id, page.contacts) : null;
+        const r = await upsertContacts(client.id, page.contacts, { stamp, readAt: sharing ? page.requestedAt : null });
+        if (sharing && prior) await shareContactsPage(client.id, sharing, prior);
         totals.contacts += r.written;
         totals.skipped += r.skipped;
         resumeAt = page.next ? { phase: "contacts", after: page.next as HistoryCursor["after"] } : { phase: "opportunities" };
@@ -253,7 +267,12 @@ export async function importGhlHistory(
     const stages = await stageIndex(client.id);
     const oppAfter = opts.cursor?.phase === "opportunities" ? opts.cursor.oppAfter : undefined;
     for await (const page of ghl.iterateOpportunityPages(locationId, { after: oppAfter, limits })) {
-      const r = await importOpportunities(client.id, page.opportunities, stages);
+      const r = await importOpportunities(client.id, page.opportunities, stages, stamp);
+      if (sharing) {
+        const ids = page.opportunities.map((o) => (o?.id ? String(o.id) : null)).filter((x): x is string => Boolean(x));
+        const out = await syncShare(sharing, { ghlOpportunityIds: ids });
+        await dispatchShareAlerts(out.placed);
+      }
       totals.opportunities += r.opportunities;
       totals.transitions += r.transitions;
       totals.leads += r.leads;
@@ -429,7 +448,11 @@ function take(col: AnyPgColumn): SQL {
  * attribution parsing, the same tag normalisation, and the same rule that a
  * value GHL omits never overwrites one already captured.
  */
-async function upsertContacts(clientId: string, page: readonly GhlContact[]): Promise<{ written: number; skipped: number }> {
+async function upsertContacts(
+  clientId: string,
+  page: readonly GhlContact[],
+  opts: { stamp?: ReturnType<typeof shareStamp>; readAt?: Date | null } = {},
+): Promise<{ written: number; skipped: number }> {
   const byId = new Map<string, GhlContact>();
   for (const raw of page) {
     const c = storable(raw);
@@ -466,9 +489,10 @@ async function upsertContacts(clientId: string, page: readonly GhlContact[]): Pr
         attributionSource: remote.attributionSource ?? null,
         lastAttributionSource: remote.lastAttributionSource ?? null,
       },
-      attributionFetchedAt: now,
+      attributionFetchedAt: opts.readAt ?? now,
       ghlCreatedAt: parseDate(remote.dateAdded),
       updatedAt: now,
+      ...opts.stamp,
     };
   });
   const write = async (batch: typeof rows) =>
@@ -516,6 +540,50 @@ async function upsertContacts(clientId: string, page: readonly GhlContact[]): Pr
   return { written: r.written.length, skipped: r.skipped };
 }
 
+/** Each page contact's previous read (null: never read), before the page overwrites it. */
+async function priorReads(clientId: string, page: readonly GhlContact[]): Promise<Map<string, Date | null>> {
+  const ids = [...new Set(page.map((c) => (c?.id ? String(c.id) : null)).filter((x): x is string => Boolean(x)))];
+  const prior = new Map<string, Date | null>(ids.map((id) => [id, null]));
+  if (ids.length === 0) return prior;
+  const held = await db
+    .select({ gid: contacts.ghlContactId, at: contacts.attributionFetchedAt })
+    .from(contacts)
+    .where(and(eq(contacts.clientId, clientId), inArray(contacts.ghlContactId, ids)));
+  for (const h of held) prior.set(h.gid, h.at);
+  return prior;
+}
+
+/**
+ * A sharing holder's contacts page: record the tags it found, then copy the
+ * page to the other clients and split it.
+ *
+ * An import cannot tell when a tag was added, so none of these dates is exact:
+ * a contact read before gets no earlier than that read, and strictly after
+ * every tag we already hold for it; a contact never read gets its creation.
+ * Never the import day — that would make every tag look brand new.
+ */
+async function shareContactsPage(clientId: string, installationId: string, prior: Map<string, Date | null>): Promise<void> {
+  const gids = [...prior.keys()];
+  if (gids.length === 0) return;
+  const fetched = gids.map((g) => prior.get(g)?.toISOString() ?? null);
+  await db.execute(sql`
+    INSERT INTO contact_tag_history (contact_id, client_id, tag, first_seen_at, exact)
+    SELECT c.id, c.client_id, t.tag,
+           CASE WHEN p.fetched IS NOT NULL
+                THEN GREATEST(p.fetched, COALESCE(held.latest + interval '1 millisecond', p.fetched))
+                ELSE COALESCE(c.ghl_created_at, c.created_at) END,
+           false
+      FROM unnest(${sql.param(gids)}::text[], ${sql.param(fetched)}::timestamptz[]) AS p(gid, fetched)
+      JOIN contacts c ON c.client_id = ${clientId} AND c.ghl_contact_id = p.gid
+      CROSS JOIN LATERAL (SELECT max(x.first_seen_at) AS latest FROM contact_tag_history x WHERE x.contact_id = c.id) held
+      CROSS JOIN LATERAL unnest(c.tags) AS t(tag)
+     WHERE t.tag <> ''
+    ON CONFLICT (contact_id, tag) DO NOTHING
+  `);
+  const out = await syncShare(installationId, { ghlContactIds: gids });
+  await dispatchShareAlerts(out.placed);
+}
+
 /* ------------------------------------------------------------------ *
  * Opportunities
  * ------------------------------------------------------------------ */
@@ -556,6 +624,7 @@ async function importOpportunities(
   clientId: string,
   page: readonly GhlOpportunity[],
   stages: StageIndex,
+  stamp: ReturnType<typeof shareStamp> = {},
 ): Promise<PageResult> {
   const byId = new Map<string, GhlOpportunity>();
   for (const raw of page) {
@@ -565,10 +634,10 @@ async function importOpportunities(
   const remotes = [...byId.values()];
   if (remotes.length === 0) return { opportunities: 0, transitions: 0, leads: 0, skipped: 0 };
   try {
-    return await writeOpportunities(clientId, remotes, stages, false);
+    return await writeOpportunities(clientId, remotes, stages, false, stamp);
   } catch (err) {
     if (!refusedValue(err)) throw err;
-    return writeOpportunities(clientId, remotes, stages, true);
+    return writeOpportunities(clientId, remotes, stages, true, stamp);
   }
 }
 
@@ -583,6 +652,7 @@ async function writeOpportunities(
   remotes: readonly GhlOpportunity[],
   stages: StageIndex,
   rowAtATime: boolean,
+  stamp: ReturnType<typeof shareStamp> = {},
 ): Promise<PageResult> {
   return db.transaction(async (tx) => {
     const each = async <T, R>(rows: T[], write: (batch: T[]) => Promise<R[]>) =>
@@ -602,7 +672,7 @@ async function writeOpportunities(
       if (missing.length > 0) {
         await tx
           .insert(contacts)
-          .values(missing.map((ghlContactId) => ({ clientId, ghlContactId })))
+          .values(missing.map((ghlContactId) => ({ clientId, ghlContactId, ...stamp })))
           .onConflictDoNothing({ target: [contacts.clientId, contacts.ghlContactId] });
         const added = await tx
           .select({ id: contacts.id, ghlContactId: contacts.ghlContactId })
@@ -661,7 +731,7 @@ async function writeOpportunities(
     });
 
     const upserted = await each(
-      plans.map((p) => p.values),
+      plans.map((p) => ({ ...p.values, ...stamp })),
       async (batch) =>
         tx
           .insert(opportunities)

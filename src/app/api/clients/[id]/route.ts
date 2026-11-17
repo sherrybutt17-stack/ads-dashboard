@@ -7,8 +7,15 @@ import { encrypt } from "@/lib/crypto";
 import { webhookUrlFor } from "@/lib/clients";
 import { removeClient } from "@/lib/client-removal";
 import { isValidTimeZone } from "@/lib/dates";
-import { requireClient } from "@/lib/auth";
+import { isSuperadmin, requireClient } from "@/lib/auth";
 import { assertLocationIdAvailable } from "@/lib/ghl/oauth";
+import {
+  ShareError,
+  assertMayArchive,
+  assertMaySetLocation,
+  onMemberStatusChange,
+  shareRoleOf,
+} from "@/lib/ghl/share-actions";
 import * as audit from "@/lib/audit";
 
 export const runtime = "nodejs";
@@ -63,7 +70,7 @@ export async function PATCH(
   const { id } = await ctx.params;
   const got = await requireClient(id);
   if ("denied" in got) return got.denied;
-  const { client } = got;
+  const { client, session } = got;
 
   const body = await req.json().catch(() => null);
   const parsed = PatchSchema.safeParse(body);
@@ -75,6 +82,18 @@ export async function PATCH(
   }
 
   const d = parsed.data;
+  // A shared sub-account's holder can't be archived, nor any client in a share re-pointed.
+  try {
+    if (client.ghlShareInstallationId && d.status === "archived" && client.status !== "archived") {
+      await assertMayArchive(client.id, { superadmin: isSuperadmin(session) });
+    }
+    if (client.ghlShareInstallationId && d.ghlLocationId !== undefined && d.ghlLocationId !== client.ghlLocationId) {
+      await assertMaySetLocation(client.id);
+    }
+  } catch (err) {
+    if (err instanceof ShareError) return NextResponse.json({ error: err.message }, { status: err.status });
+    throw err;
+  }
   const updates: Record<string, unknown> = { updatedAt: new Date() };
   if (d.name !== undefined) updates.name = d.name;
   if (d.timezone !== undefined) updates.timezone = d.timezone;
@@ -108,6 +127,16 @@ export async function PATCH(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // A member archived or brought back: its share re-splits.
+  if (
+    client.ghlShareInstallationId &&
+    d.status !== undefined &&
+    d.status !== client.status &&
+    (await shareRoleOf(client.id))?.role === "member"
+  ) {
+    await onMemberStatusChange(client.id, updated.status === "archived" ? "archived" : "active").catch(() => {});
+  }
+
   // Record which fields changed. A token rotation is called out explicitly as
   // its own security-relevant event.
   void audit.record({
@@ -138,12 +167,18 @@ export async function DELETE(
   const { id } = await ctx.params;
   const got = await requireClient(id);
   if ("denied" in got) return got.denied;
-  const { client } = got;
+  const { client, session } = got;
 
   // `client.id` rather than the raw `id` param: the same value, but taken
   // from the row `requireClient` actually authorized, so the check and the
   // use cannot drift apart in a later edit.
-  const result = await removeClient(client.id);
+  let result;
+  try {
+    result = await removeClient(client.id, { superadmin: isSuperadmin(session) });
+  } catch (err) {
+    if (err instanceof ShareError) return NextResponse.json({ error: err.message }, { status: err.status });
+    throw err;
+  }
 
   void audit.record({
     action: "client.remove",

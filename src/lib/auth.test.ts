@@ -133,7 +133,16 @@ function satisfying(tier: Tier): string[] {
  * impersonation, billing — it goes here, and the test below then refuses an
  * `agencyGuard` on it.
  */
-const SUPERADMIN_ROUTES: string[] = [];
+const SUPERADMIN_ROUTES: string[] = [
+  /*
+   * "Share this sub-account": adding a client to a shared GoHighLevel
+   * sub-account copies one business's lead names and phone numbers into
+   * another client, and stopping deletes a client's copy — Growth Guild only.
+   * Changing which tag belongs to which client is the agency-tier route beside
+   * it (`ghl-share/tags`).
+   */
+  "clients/[id]/ghl-share/route.ts",
+];
 
 /**
  * Routes a client-role user may legitimately reach for their OWN client.

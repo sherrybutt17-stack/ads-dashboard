@@ -12,6 +12,8 @@ import { reclassifyTransitions } from "@/lib/ghl/backfill";
 import { isSuperadmin, requireClient } from "@/lib/auth";
 import { safeFailure } from "@/lib/api-failure";
 import { record, requestContext } from "@/lib/audit";
+import { getClientByIdForSession } from "@/lib/clients";
+import { mirrorShareStages, shareRoleOf } from "@/lib/ghl/share-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +30,15 @@ export async function GET(
 
   if (req.nextUrl.searchParams.get("refresh") === "1") {
     try {
-      await importPipelineStages(client);
+      /*
+       * A shared sub-account has one stage list, the holder's: a refresh on
+       * any client in it imports the holder's and copies it to the others.
+       */
+      const role = client.ghlShareInstallationId ? await shareRoleOf(client.id) : null;
+      const holder =
+        role?.role === "member" ? await getClientByIdForSession(session, role.share.holder.id) : client;
+      await importPipelineStages(holder ?? client);
+      if (role) await mirrorShareStages(role.share.holder.id);
     } catch (err) {
       return NextResponse.json(
         safeFailure(
@@ -91,6 +101,17 @@ export async function PUT(
   if ("denied" in got) return got.denied;
   const { client } = got;
 
+  // One mapping per shared sub-account: the holder's.
+  const role = client.ghlShareInstallationId ? await shareRoleOf(client.id) : null;
+  if (role?.role === "member") {
+    return NextResponse.json(
+      {
+        error: `This client's stages follow ${role.holderName}'s mapping. Change them on ${role.holderName}'s Connections page.`,
+      },
+      { status: 409 },
+    );
+  }
+
   const body = await req.json().catch(() => null);
   const parsed = PutSchema.safeParse(body);
   if (!parsed.success) {
@@ -136,6 +157,21 @@ export async function PUT(
       reclassifiedTransitions: reclassified,
     },
   });
+
+  // The holder's mapping is every member's too: copy it and relabel their moves.
+  if (role?.role === "holder") {
+    await mirrorShareStages(client.id);
+    for (const m of role.share.members.filter((x) => x.status !== "archived")) {
+      await record({
+        action: "stages.remap",
+        targetType: "client",
+        targetId: m.id,
+        clientId: m.id,
+        ...ctxInfo,
+        metadata: { mappings: parsed.data.mappings.length, sharedFrom: client.name },
+      });
+    }
+  }
 
   return NextResponse.json({ ok: true, reclassifiedTransitions: reclassified });
 }

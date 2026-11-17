@@ -18,14 +18,22 @@ import { useRouter } from "next/navigation";
  * client's systems IS disconnected: the GHL install, every ad account on every
  * platform with its stored credential, and any login left with no dashboard.
  */
+/** This client's place in a shared GoHighLevel sub-account, for the warning. */
+export type RemoveShared =
+  | { role: "member"; holderName: string; superadmin: boolean }
+  | { role: "holder"; holderName: string; others: string[]; superadmin: boolean }
+  | null;
+
 export function RemoveClient({
   clientId,
   clientName,
   variant = "panel",
+  shared = null,
 }: {
   clientId: string;
   clientName: string;
   variant?: "panel" | "row";
+  shared?: RemoveShared;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -95,6 +103,21 @@ export function RemoveClient({
         archives the client. Funnel history is retained — GoHighLevel cannot
         supply it again, so this is archive, not delete.
       </p>
+      {shared?.role === "member" && (
+        <p className="mt-2 text-xs" style={{ color: "var(--status-warning)" }}>
+          {clientName} gets its leads from {shared.holderName}&apos;s shared sub-account. After removal, leads with
+          its tag count for no one. To give them to {shared.holderName} instead,{" "}
+          {shared.superadmin ? "stop sharing first." : "ask Growth Guild to stop sharing first."}
+        </p>
+      )}
+      {shared?.role === "holder" && shared.others.length > 0 && (
+        <p className="mt-2 text-xs" style={{ color: "var(--status-warning)" }}>
+          {clientName}&apos;s GoHighLevel sub-account is shared with {shared.others.join(", ")}.{" "}
+          {shared.superadmin
+            ? "Stop sharing before removing or archiving it."
+            : "Ask Growth Guild to stop sharing first."}
+        </p>
+      )}
       <button
         onClick={remove}
         disabled={busy}

@@ -1,7 +1,7 @@
 import { after, NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "@/db";
-import { clients, webhookEvents } from "@/db/schema";
+import { clients, webhookEvents, type Client } from "@/db/schema";
 import {
   processWebhookEvent,
   finalizeEvent,
@@ -18,6 +18,7 @@ import {
 import { normalizeWebhookPayload } from "@/lib/ghl/normalize";
 import { alertNewLead } from "@/lib/alerts/send";
 import { headersToStore } from "@/lib/webhook-headers";
+import { copyShareEvent, syncShare } from "@/lib/ghl/share";
 
 /**
  * App-level GHL webhook receiver.
@@ -94,6 +95,13 @@ export async function POST(req: NextRequest) {
    * being installed and the client record being wired up.
    */
   let client = null;
+  /*
+   * A sub-account shared between clients ("Share this sub-account"): the
+   * installation's client is the HOLDER and processes every delivery exactly as
+   * before; the copy to the other clients and the split follow, before the 200.
+   * Unshared locations take no extra query.
+   */
+  let shareInstallationId: string | null = null;
   if (evt.locationId) {
     const installation = await getInstallationByLocation(evt.locationId);
     if (installation?.clientId) {
@@ -103,14 +111,19 @@ export async function POST(req: NextRequest) {
         .where(eq(clients.id, installation.clientId))
         .limit(1);
       client = row ?? null;
+      if (client?.ghlShareInstallationId && client.ghlShareInstallationId === installation.id) {
+        shareInstallationId = installation.id;
+      }
     }
     if (!client) {
       // Fall back to a direct locationId match, covering clients connected by
       // PIT before the app existed.
+      // Oldest live client first: never an arbitrary row when two share a typed location id.
       const [row] = await db
         .select()
         .from(clients)
-        .where(eq(clients.ghlLocationId, evt.locationId))
+        .where(and(eq(clients.ghlLocationId, evt.locationId), ne(clients.status, "archived")))
+        .orderBy(clients.createdAt)
         .limit(1);
       client = row ?? null;
     }
@@ -145,6 +158,7 @@ export async function POST(req: NextRequest) {
       transitionCreated: false,
       reason: "app install event",
     });
+    if (shareInstallationId) await copyToShare(() => copyShareEvent(shareInstallationId!, event.id));
     return NextResponse.json({ ok: true });
   }
   if (eventType === "UNINSTALL" || eventType === "AppUninstall") {
@@ -227,10 +241,29 @@ export async function POST(req: NextRequest) {
    * claim, so an extra call is free.
    */
   if (evt.contactId) {
-    const c = client;
+    /*
+     * In a shared sub-account every client in it may be the one the split gives
+     * this person to; the alert's own query lets only that client's counted
+     * copy — placed by its tag — send.
+     */
+    const recipients: Client[] = [client];
+    if (shareInstallationId) {
+      recipients.push(
+        ...(await db
+          .select()
+          .from(clients)
+          .where(
+            and(
+              eq(clients.ghlShareInstallationId, shareInstallationId),
+              ne(clients.id, client.id),
+              ne(clients.status, "archived"),
+            ),
+          )),
+      );
+    }
     const contactId = evt.contactId;
     after(async () => {
-      await alertNewLead(c, contactId);
+      for (const c of recipients) await alertNewLead(c, contactId);
     });
   }
 
@@ -247,13 +280,29 @@ export async function POST(req: NextRequest) {
           : "call for unknown contact"
         : "message touch",
     });
+    if (shareInstallationId) {
+      await copyToShare(() => copyShareEvent(shareInstallationId!, event.id, evt.contactId));
+    }
     return NextResponse.json({ ok: true, isCall: touch.isCall });
   }
+
+  /** Copy and split what this delivery wrote, for a shared sub-account. */
+  const share = async () => {
+    if (!shareInstallationId) return;
+    await copyToShare(() =>
+      syncShare(shareInstallationId!, {
+        ghlContactIds: [evt.contactId],
+        ghlOpportunityIds: [evt.opportunityId],
+        eventId: event.id,
+      }),
+    );
+  };
 
   try {
     const result = await processWebhookEvent(event.id, client, payload);
     await finalizeEvent(event.id, result);
     await touchClientWebhookMarkers(client.id);
+    await share();
     return NextResponse.json({
       ok: true,
       eventId: event.id,
@@ -266,7 +315,22 @@ export async function POST(req: NextRequest) {
       error: err instanceof Error ? err.message : String(err),
     });
     await touchClientWebhookMarkers(client.id);
+    await share();
     return NextResponse.json({ ok: true, eventId: event.id, deferred: true });
+  }
+}
+
+/**
+ * The copy to a shared sub-account's other clients never fails the delivery:
+ * the holder's rows are already safe, and what didn't copy or split is
+ * repaired by the hourly sweep (new rows wait there uncounted, never counted
+ * twice).
+ */
+async function copyToShare(work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch (err) {
+    console.error("[webhook] shared sub-account copy deferred to the sweep:", err instanceof Error ? err.message : err);
   }
 }
 

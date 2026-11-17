@@ -77,6 +77,15 @@ CREATE TABLE clients (
   crm_mapping_mode text NOT NULL DEFAULT 'pipeline',
   tag_lead_every_contact boolean NOT NULL DEFAULT false,
   tag_mapping_allowed boolean NOT NULL DEFAULT false,
+  -- No foreign key here: ghl_installations is created further down. Production
+  -- has REFERENCES ghl_installations(id) ON DELETE SET NULL (0035).
+  ghl_share_installation_id uuid,
+  ghl_share_tags text[] NOT NULL DEFAULT '{}',
+  ghl_share_gets_untagged boolean NOT NULL DEFAULT false,
+  ghl_share_since timestamptz,
+  ghl_share_keep_removed boolean NOT NULL DEFAULT true,
+  ghl_share_version integer NOT NULL DEFAULT 0,
+  ghl_share_split_version integer NOT NULL DEFAULT 0,
   last_synced_at timestamptz,
   last_meta_reconciled_at timestamptz,
   last_google_reconciled_at timestamptz,
@@ -92,6 +101,10 @@ CREATE TABLE clients (
   CONSTRAINT clients_slug_key UNIQUE (slug),
   CONSTRAINT clients_webhook_token_key UNIQUE (webhook_token)
 );
+CREATE INDEX clients_ghl_share_idx
+  ON clients (ghl_share_installation_id) WHERE ghl_share_installation_id IS NOT NULL;
+CREATE UNIQUE INDEX clients_ghl_share_one_untagged_key
+  ON clients (ghl_share_installation_id) WHERE ghl_share_gets_untagged;
 
 CREATE TABLE users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -142,10 +155,17 @@ CREATE TABLE contacts (
   first_call_at timestamptz,
   first_touch_at timestamptz,
   alerted_at timestamptz,
+  share_installation_id uuid,
+  share_counted boolean,
+  share_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT contacts_client_ghl_key UNIQUE (client_id, ghl_contact_id)
 );
+CREATE INDEX contacts_share_idx
+  ON contacts (share_installation_id, ghl_contact_id) WHERE share_installation_id IS NOT NULL;
+CREATE UNIQUE INDEX contacts_share_one_counted_key
+  ON contacts (share_installation_id, ghl_contact_id) WHERE share_counted;
 
 CREATE TABLE webhook_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -175,10 +195,18 @@ CREATE TABLE opportunities (
   ghl_created_at timestamptz,
   last_stage_change_at timestamptz,
   from_tags boolean NOT NULL DEFAULT false,
+  share_installation_id uuid,
+  share_counted boolean,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT opportunities_client_ghl_key UNIQUE (client_id, ghl_opportunity_id)
 );
+CREATE UNIQUE INDEX opportunities_share_one_counted_key
+  ON opportunities (share_installation_id, ghl_opportunity_id) WHERE share_counted;
+CREATE INDEX opportunities_share_excluded_idx
+  ON opportunities (id) WHERE share_counted = false;
+CREATE INDEX opportunities_share_contact_idx
+  ON opportunities (share_installation_id, ghl_contact_id) WHERE share_installation_id IS NOT NULL;
 
 CREATE TABLE pipeline_stages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

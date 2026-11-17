@@ -11,6 +11,7 @@ import { listGoogleAccounts } from "@/lib/google/accounts";
 import { isGoogleConfigured } from "@/lib/google/oauth";
 import { HealthChecklist } from "@/components/HealthChecklist";
 import { tagMappingAllowed } from "@/lib/tag-funnel";
+import { loadSharePanel } from "@/lib/ghl/share-panel";
 import { SetupWizard } from "@/components/SetupWizard";
 import { BrandingSettings } from "@/components/BrandingSettings";
 import { getClientBranding } from "@/lib/branding-store";
@@ -91,6 +92,7 @@ export default async function SetupPage({
     branding,
     alertDestination,
     tagsAllowed,
+    share,
   ] = await Promise.all([
     // Raw upstream errors are superadmin-only — an agency owner legitimately
     // reads this page and still must not read our infrastructure back off it.
@@ -110,6 +112,8 @@ export default async function SetupPage({
     getClientBranding(client.id),
     describeDestination(client.id),
     tagMappingAllowed(client),
+    // "Share this sub-account": this client's place in a shared GoHighLevel sub-account.
+    loadSharePanel(client, session),
   ]);
 
   return (
@@ -201,6 +205,7 @@ export default async function SetupPage({
             status: a.status as "active" | "paused" | "removed",
           }))}
           tagMapping={{ allowed: tagsAllowed, mode: client.crmMappingMode }}
+          share={share}
           stages={stages.map((s) => ({
             id: s.id,
             name: s.ghlStageName,
@@ -241,7 +246,22 @@ export default async function SetupPage({
           }
         />
 
-        <RemoveClient clientId={client.id} clientName={client.name} />
+        <RemoveClient
+          clientId={client.id}
+          clientName={client.name}
+          shared={
+            share.role === "member" && share.holder
+              ? { role: "member", holderName: share.holder.name, superadmin: share.canManage }
+              : share.role === "holder"
+                ? {
+                    role: "holder",
+                    holderName: client.name,
+                    others: share.clients.filter((c) => !c.isHolder && !c.archived).map((c) => c.name),
+                    superadmin: share.canManage,
+                  }
+                : null
+          }
+        />
         </div>
       </main>
     </AppShell>

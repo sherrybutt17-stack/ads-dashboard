@@ -14,6 +14,7 @@ import { GhlClient } from "./client";
 import { normalizeWebhookPayload, normalizeStatus, parseDate } from "./normalize";
 import { parseAttribution } from "./attribution";
 import { recordContactTags } from "@/lib/tag-funnel";
+import { shareStamp } from "./share-stamp";
 import type { GhlContact } from "./types";
 
 export interface ProcessResult {
@@ -203,7 +204,8 @@ export async function processWebhookEvent(
       // whole event, and defer its ledger write to a later retry.
       const [inserted] = await tx
         .insert(opportunities)
-        .values(values)
+        // A new card in a shared sub-account starts uncounted; the split decides.
+        .values({ ...values, ...shareStamp(client) })
         .onConflictDoUpdate({
           target: [opportunities.clientId, opportunities.ghlOpportunityId],
           set: values,
@@ -356,6 +358,13 @@ async function upsertContactFromEvent(
     Date.now() - existing.attributionFetchedAt.getTime() > 24 * 60 * 60 * 1000;
 
   let remote: GhlContact | null = null;
+  /*
+   * For a holder that shares its sub-account, the read is stamped with when it
+   * STARTED: a slower read written after a newer one then looks older than the
+   * tag update that followed it, and the sweep's settle re-read corrects it.
+   * Everyone else keeps the time it returned.
+   */
+  const readStartedAt = new Date();
   if (stale) {
     const ghl = await getGhlClientAsync(client);
     if (ghl) {
@@ -371,7 +380,7 @@ async function upsertContactFromEvent(
     if (existing) return existing;
     const [created] = await db
       .insert(contacts)
-      .values({ clientId: client.id, ghlContactId })
+      .values({ clientId: client.id, ghlContactId, ...shareStamp(client) })
       .onConflictDoNothing({
         target: [contacts.clientId, contacts.ghlContactId],
       })
@@ -422,14 +431,14 @@ async function upsertContactFromEvent(
       attributionSource: remote.attributionSource ?? null,
       lastAttributionSource: remote.lastAttributionSource ?? null,
     },
-    attributionFetchedAt: new Date(),
+    attributionFetchedAt: client.ghlShareInstallationId ? readStartedAt : new Date(),
     ghlCreatedAt: parseDate(remote.dateAdded),
     updatedAt: new Date(),
   };
 
   const [row] = await db
     .insert(contacts)
-    .values(values)
+    .values({ ...values, ...shareStamp(client) })
     .onConflictDoUpdate({
       target: [contacts.clientId, contacts.ghlContactId],
       // A later re-fetch that omits attribution / name / lead-in time must NEVER
@@ -473,6 +482,23 @@ async function upsertContactFromEvent(
    */
   if (row) await recordContactTags(client, existing ?? null, row);
   return row;
+}
+
+/**
+ * Re-read one contact from GoHighLevel now, exactly as a tag-update delivery
+ * would (tags, attribution, tag history) — for the shared-sub-account sweep,
+ * which settles contacts whose last read may have missed a tag change.
+ * Returns whether GoHighLevel answered.
+ */
+export async function rereadContact(client: Client, ghlContactId: string): Promise<boolean> {
+  const before = await db
+    .select({ at: contacts.attributionFetchedAt })
+    .from(contacts)
+    .where(and(eq(contacts.clientId, client.id), eq(contacts.ghlContactId, ghlContactId)))
+    .limit(1);
+  const row = await upsertContactFromEvent(client, ghlContactId, { force: true });
+  const after = row?.attributionFetchedAt?.getTime() ?? null;
+  return after !== null && after !== (before[0]?.at?.getTime() ?? null);
 }
 
 /** GHL returns tags as a string array; normalise defensively. */

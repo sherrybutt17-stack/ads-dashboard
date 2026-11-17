@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { safeFailureMessage } from "@/lib/api-failure";
-import { claimInstallation, exchangeCode, pickInstall } from "@/lib/ghl/oauth";
+import { ShareGuardError, claimInstallation, exchangeCode, pickInstall } from "@/lib/ghl/oauth";
 import { importPipelineStages } from "@/lib/clients";
 import { getClientUnscoped } from "@/lib/clients";
 
@@ -62,11 +62,20 @@ export async function GET(req: NextRequest) {
     const subs = await exchangeCode(code, clientId || null);
     const pick = clientId ? pickInstall(clientId, subs) : null;
     if (pick?.kind === "elsewhere") {
-      // Nothing moves: a sub-account already another client's stays theirs.
+      /*
+       * Nothing moves: a sub-account already another client's stays theirs.
+       * When it really does hold this client's leads too, sharing is the way —
+       * which only happens within one agency, as a cross-agency install clears
+       * the binding before this point, so naming it here reveals nothing.
+       */
       const names = [...new Set(pick.names)].join(", ");
+      const target = await getClientUnscoped(clientId, "oauth_state");
       return redirectWithError(
         req,
-        `${names} is already connected to another client here, so it was left where it is. Try again, ticking only this client's own sub-account.`,
+        target
+          ? `${names} is already connected to another client here, so it was left where it is. If it also holds ${target.name}'s leads, ask Growth Guild to share it with ${target.name} from that client's Connections page.`
+          : `${names} is already connected to another client here, so it was left where it is. Try again, ticking only this client's own sub-account.`,
+        target?.slug,
       );
     }
     const installation =
@@ -83,7 +92,13 @@ export async function GET(req: NextRequest) {
        */
       const client = await getClientUnscoped(clientId, "oauth_state");
       if (client) {
-        await claimInstallation(installation.id, client);
+        try {
+          await claimInstallation(installation.id, client);
+        } catch (err) {
+          // A shared sub-account's rule: shown as written, back on this client's page.
+          if (err instanceof ShareGuardError) return redirectWithError(req, err.message, client.slug);
+          throw err;
+        }
         slug = client.slug;
 
         // Pull pipelines now so the mapping step is immediately usable.
@@ -136,10 +151,11 @@ export async function GET(req: NextRequest) {
   }
 }
 
-function redirectWithError(req: NextRequest, message: string) {
+function redirectWithError(req: NextRequest, message: string, slug?: string | null) {
   const url = req.nextUrl.clone();
   url.pathname = "/oauth/result";
-  url.search = `?status=error&message=${encodeURIComponent(message)}`;
+  // The slug only steers "Back to setup"; the result page checks the session before reading it.
+  url.search = `?status=error&message=${encodeURIComponent(message)}${slug ? `&slug=${encodeURIComponent(slug)}` : ""}`;
   return NextResponse.redirect(url);
 }
 

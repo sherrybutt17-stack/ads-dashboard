@@ -125,12 +125,18 @@ export default async function ClientsPage() {
         name: c.name,
         slug: c.slug,
         adLabel: ads.label,
-        ghlLocationName: c.ghlLocationName,
+        /*
+         * A member of a shared sub-account has no location of its own, and is
+         * never shown the holder's sub-account name: this list renders for
+         * client-role users too, and that name is the other business's.
+         */
+        ghlLocationName:
+          c.ghlShareInstallationId && !c.ghlLocationId ? "GoHighLevel (shared)" : c.ghlLocationName,
         firstWebhookAt: c.firstWebhookAt,
         // No webhookUrl: this list renders for client-role users too, and the
         // token in it is the GHL shared secret. Nothing here rendered it.
         adAccounts: ads.count,
-        ghlConnected: Boolean(c.ghlLocationId),
+        ghlConnected: Boolean(c.ghlLocationId || c.ghlShareInstallationId),
         accent: accentFor(c.id, branding),
         health: await quickHealth(c),
         churn: churnLevel.get(c.slug),

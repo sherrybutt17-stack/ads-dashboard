@@ -91,6 +91,21 @@ export async function POST(
     return NextResponse.json({ ok: true, ignored: true });
   }
 
+  /*
+   * A client in a shared sub-account gets every event through the app
+   * connection, once, and split. A workflow webhook left over from before
+   * would process the same events a second time, outside the split — so it is
+   * stored and set aside.
+   */
+  if (client.ghlShareInstallationId) {
+    await finalizeEvent(event.id, {
+      status: "ignored",
+      transitionCreated: false,
+      reason: "handled by the shared sub-account's app connection",
+    });
+    return NextResponse.json({ ok: true, ignored: true });
+  }
+
   try {
     const result = await processWebhookEvent(event.id, client, payload);
     await finalizeEvent(event.id, result);
