@@ -43,10 +43,10 @@ import {
  * "Share this sub-account" — what the buttons do. The engine (copying and
  * splitting) is `./share.ts`; the rule is `./share-rule.ts`.
  *
- * Who may do what (decision 1 of the design): only a Growth Guild superadmin
- * adds a client to a share or stops sharing; the agency's own logins and Growth
- * Guild change which tag belongs to which client. The routes enforce it; these
- * functions trust their caller on the role and check everything else.
+ * Who may do what: the agency decides — its own logins (Reflexion's Salman and
+ * RJ) and Growth Guild add a client to a share, stop sharing and change which
+ * tag belongs to which client, for their own agency's clients only. The routes
+ * enforce the role and the tenant; these functions check everything else.
  */
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -441,7 +441,7 @@ const COPY_BATCH = 2000;
 const EVENT_BATCH = 5000;
 
 /**
- * Add a client to the holder's sub-account (Growth Guild only).
+ * Add a client to the holder's sub-account.
  *
  *  1. Check everything (`planLink`).
  *  2. Give the client the holder's lead settings: mode, tag mapping, paid rule.
@@ -653,7 +653,7 @@ async function auditMoves(moved: readonly MovedLead[], known: readonly Pick<Clie
 }
 
 /* ------------------------------------------------------------------ *
- * Changing the tags (agency logins and Growth Guild)
+ * Changing the tags
  * ------------------------------------------------------------------ */
 
 async function shareOrThrow(clientId: string): Promise<{ share: Share; holder: Client; live: Client[] }> {
@@ -740,7 +740,7 @@ export async function saveShareTags(
 }
 
 /* ------------------------------------------------------------------ *
- * Stopping (Growth Guild)
+ * Stopping
  * ------------------------------------------------------------------ */
 
 /**
@@ -903,7 +903,6 @@ export async function onMemberStatusChange(clientId: string, status: "archived" 
 /**
  * Remove the copied leads a client still holds from a sub-account it no longer
  * shares (one that moved to another agency, or an abandoned link). Growth
- * Guild only.
  */
 export async function purgeFormerMember(clientId: string, actor: ShareActor): Promise<{ contacts: number }> {
   const client = await loadClient(clientId);
@@ -974,16 +973,15 @@ const list = (names: readonly string[]) =>
 
 /**
  * Removing or archiving the holder would cut every client in the share off,
- * so it is refused until sharing stops. Agency logins are told who can do that,
- * never to press a button they don't have.
+ * so it is refused until sharing stops.
  */
-export async function assertMayArchive(clientId: string, opts: { superadmin: boolean }): Promise<void> {
+export async function assertMayArchive(clientId: string): Promise<void> {
   const r = await shareRoleOf(clientId);
   if (!r || r.role !== "holder" || r.others.length === 0) return;
   throw new ShareError(
     409,
     `${r.holderName}'s GoHighLevel sub-account is shared with ${list(r.others)}. ` +
-      (opts.superadmin ? "Stop sharing before removing or archiving it." : "Ask Growth Guild to stop sharing first."),
+      "Stop sharing before removing or archiving it.",
   );
 }
 

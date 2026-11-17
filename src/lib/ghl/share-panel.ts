@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import type { Client } from "@/db/schema";
-import { isSuperadmin } from "@/lib/auth";
+import { isOperatorRole } from "@/lib/roles";
 import type { SessionPayload } from "@/lib/session";
 import { trailingWindowInclusive } from "@/lib/dates";
 import { clientTags } from "@/lib/tag-funnel";
@@ -42,9 +42,9 @@ export interface SharePanelCandidate {
 }
 
 export interface SharePanelState {
-  /** Growth Guild: add a client, stop sharing, remove copied leads. */
+  /** Add a client, stop sharing, remove copied leads: the agency's logins and Growth Guild. */
   canManage: boolean;
-  /** Agency logins and Growth Guild: change the tags (decision 1). */
+  /** Change which tag belongs to which client: the agency's logins and Growth Guild. */
   canEditTags: boolean;
   role: "holder" | "member" | null;
   /** The client holding the connection — this one when it holds it. */
@@ -61,7 +61,7 @@ export interface SharePanelState {
   tags: { tag: string; contacts: number }[];
   /** Contacts in the sub-account, for tag-coverage warnings. */
   totalContacts: number;
-  /** Clients of the same agency that could be added (Growth Guild only). */
+  /** Clients of the same agency that could be added. */
   candidates: SharePanelCandidate[];
   maxClients: number;
   /** Copied leads this client still holds from a sub-account it no longer shares. */
@@ -69,7 +69,8 @@ export interface SharePanelState {
 }
 
 export async function loadSharePanel(client: Client, session: SessionPayload | null): Promise<SharePanelState> {
-  const superadmin = isSuperadmin(session);
+  // Any agency login, or Growth Guild: the agency decides who shares (18 Nov).
+  const manager = isOperatorRole(session?.role);
   const share = client.ghlShareInstallationId ? await loadShareForClient(db, client.id) : null;
   const holderId = share?.holder.id ?? client.id;
 
@@ -88,7 +89,7 @@ export async function loadSharePanel(client: Client, session: SessionPayload | n
     : share.holder.id === client.id;
 
   const base: SharePanelState = {
-    canManage: superadmin,
+    canManage: manager,
     canEditTags: true,
     role: share ? (share.holder.id === client.id ? "holder" : "member") : null,
     holder: holderRow ? { id: holderId, name: holderRow.name, slug: holderRow.slug } : null,
@@ -158,7 +159,7 @@ export async function loadSharePanel(client: Client, session: SessionPayload | n
   );
   base.totalContacts = Number(total?.n) || 0;
 
-  if (superadmin && (!share || liveMembers(share).length + 1 < MAX_SHARE_CLIENTS)) {
+  if (manager && (!share || liveMembers(share).length + 1 < MAX_SHARE_CLIENTS)) {
     const installationId = share?.installationId ?? live[0]?.id ?? null;
     base.candidates = rows<{ id: string; name: string; in_share: boolean; own: boolean }>(
       await db.execute(sql`

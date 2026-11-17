@@ -1,7 +1,7 @@
 -- One GoHighLevel sub-account feeding several clients ("Share this sub-account").
 --
 -- Some sub-accounts hold more than one business's leads: Aloha LASER Vision's
--- also holds Aloha Laser Aesthetic's. A Growth Guild superadmin can now let the
+-- also holds Aloha Laser Aesthetic's. The agency (or Growth Guild) can now let the
 -- client that holds the app connection (the HOLDER) share its sub-account with
 -- up to four other clients of the same agency (MEMBERS). The users pick the GHL
 -- tag that marks each client's leads, and each person counts on ONE dashboard.

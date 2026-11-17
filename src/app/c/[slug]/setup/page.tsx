@@ -251,13 +251,12 @@ export default async function SetupPage({
           clientName={client.name}
           shared={
             share.role === "member" && share.holder
-              ? { role: "member", holderName: share.holder.name, superadmin: share.canManage }
+              ? { role: "member", holderName: share.holder.name }
               : share.role === "holder"
                 ? {
                     role: "holder",
                     holderName: client.name,
                     others: share.clients.filter((c) => !c.isHolder && !c.archived).map((c) => c.name),
-                    superadmin: share.canManage,
                   }
                 : null
           }

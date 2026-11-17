@@ -7,7 +7,7 @@ import { encrypt } from "@/lib/crypto";
 import { webhookUrlFor } from "@/lib/clients";
 import { removeClient } from "@/lib/client-removal";
 import { isValidTimeZone } from "@/lib/dates";
-import { isSuperadmin, requireClient } from "@/lib/auth";
+import { requireClient } from "@/lib/auth";
 import { assertLocationIdAvailable } from "@/lib/ghl/oauth";
 import {
   ShareError,
@@ -70,7 +70,7 @@ export async function PATCH(
   const { id } = await ctx.params;
   const got = await requireClient(id);
   if ("denied" in got) return got.denied;
-  const { client, session } = got;
+  const { client } = got;
 
   const body = await req.json().catch(() => null);
   const parsed = PatchSchema.safeParse(body);
@@ -85,7 +85,7 @@ export async function PATCH(
   // A shared sub-account's holder can't be archived, nor any client in a share re-pointed.
   try {
     if (client.ghlShareInstallationId && d.status === "archived" && client.status !== "archived") {
-      await assertMayArchive(client.id, { superadmin: isSuperadmin(session) });
+      await assertMayArchive(client.id);
     }
     if (client.ghlShareInstallationId && d.ghlLocationId !== undefined && d.ghlLocationId !== client.ghlLocationId) {
       await assertMaySetLocation(client.id);
@@ -167,14 +167,14 @@ export async function DELETE(
   const { id } = await ctx.params;
   const got = await requireClient(id);
   if ("denied" in got) return got.denied;
-  const { client, session } = got;
+  const { client } = got;
 
   // `client.id` rather than the raw `id` param: the same value, but taken
   // from the row `requireClient` actually authorized, so the check and the
   // use cannot drift apart in a later edit.
   let result;
   try {
-    result = await removeClient(client.id, { superadmin: isSuperadmin(session) });
+    result = await removeClient(client.id);
   } catch (err) {
     if (err instanceof ShareError) return NextResponse.json({ error: err.message }, { status: err.status });
     throw err;

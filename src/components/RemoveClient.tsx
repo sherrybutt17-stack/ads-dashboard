@@ -20,8 +20,8 @@ import { useRouter } from "next/navigation";
  */
 /** This client's place in a shared GoHighLevel sub-account, for the warning. */
 export type RemoveShared =
-  | { role: "member"; holderName: string; superadmin: boolean }
-  | { role: "holder"; holderName: string; others: string[]; superadmin: boolean }
+  | { role: "member"; holderName: string }
+  | { role: "holder"; holderName: string; others: string[] }
   | null;
 
 export function RemoveClient({
@@ -106,16 +106,13 @@ export function RemoveClient({
       {shared?.role === "member" && (
         <p className="mt-2 text-xs" style={{ color: "var(--status-warning)" }}>
           {clientName} gets its leads from {shared.holderName}&apos;s shared sub-account. After removal, leads with
-          its tag count for no one. To give them to {shared.holderName} instead,{" "}
-          {shared.superadmin ? "stop sharing first." : "ask Growth Guild to stop sharing first."}
+          its tag count for no one. To give them to {shared.holderName} instead, stop sharing first.
         </p>
       )}
       {shared?.role === "holder" && shared.others.length > 0 && (
         <p className="mt-2 text-xs" style={{ color: "var(--status-warning)" }}>
-          {clientName}&apos;s GoHighLevel sub-account is shared with {shared.others.join(", ")}.{" "}
-          {shared.superadmin
-            ? "Stop sharing before removing or archiving it."
-            : "Ask Growth Guild to stop sharing first."}
+          {clientName}&apos;s GoHighLevel sub-account is shared with {shared.others.join(", ")}. Stop sharing before
+          removing or archiving it.
         </p>
       )}
       <button

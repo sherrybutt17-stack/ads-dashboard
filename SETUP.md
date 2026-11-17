@@ -593,9 +593,9 @@ Some sub-accounts hold more than one business's leads. The client the app is
 installed on (the **holder**) can feed up to four other clients of the same
 agency. Each lead then counts on ONE dashboard, chosen by GoHighLevel tags.
 
-- **Who:** only a Growth Guild superadmin adds a client or stops sharing. The
-  agency's own logins (and Growth Guild) choose which tag belongs to which
-  client.
+- **Who:** the agency decides. Its own logins (and Growth Guild) add a client,
+  stop sharing and choose which tag belongs to which client — for their own
+  agency's clients only.
 - **How:** holder's Connections page → *Connect GoHighLevel* → **Share this
   sub-account** → add the client → pick each client's tag → choose where leads
   with no client's tag go → **Preview the split** → **Share and split leads**.

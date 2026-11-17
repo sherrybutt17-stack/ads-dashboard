@@ -41,7 +41,6 @@ export interface RemoveClientResult {
 
 export async function removeClient(
   clientId: string,
-  opts: { superadmin?: boolean } = {},
 ): Promise<RemoveClientResult> {
   const [client] = await db
     .select()
@@ -53,7 +52,7 @@ export async function removeClient(
   // A sub-account shared with other clients can't lose its holder (ShareError, 409).
   let member = false;
   if (client.ghlShareInstallationId) {
-    await assertMayArchive(client.id, { superadmin: Boolean(opts.superadmin) });
+    await assertMayArchive(client.id);
     member = (await shareRoleOf(client.id))?.role === "member";
   }
 

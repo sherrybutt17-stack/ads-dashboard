@@ -588,7 +588,7 @@ function InstallStep({
 }
 
 /**
- * Growth Guild only: copies of leads this client still holds from a
+ * Copies of leads this client still holds from a
  * sub-account it no longer shares (it moved agency, or a link never finished).
  */
 function PurgeCopies({ clientId, count }: { clientId: string; count: number }) {

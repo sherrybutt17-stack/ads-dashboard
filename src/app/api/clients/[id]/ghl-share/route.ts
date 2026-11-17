@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { isSuperadmin, requireClient } from "@/lib/auth";
+import { requireClient } from "@/lib/auth";
 import { requestContext } from "@/lib/audit";
 import { getClientByIdForSession } from "@/lib/clients";
 import {
@@ -17,18 +17,18 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * "Share this sub-account" — the Growth Guild half: add a client to the
+ * "Share this sub-account" — who shares with whom: add a client to the
  * sub-account the page's client holds (POST, or a preview with
  * `{ preview: true }`), stop sharing with one (DELETE `{ memberId }`), or remove
  * the copied leads a former member still holds (DELETE `{ purge: true }` on
  * that client).
  *
- * Superadmin only (decision 1 of the share design): adding a client copies one
- * business's lead names and phone numbers into another client. Never named
- * `share` — share links already use that path.
+ * The agency decides (the owner's call, 18 Nov): any agency login — Reflexion's
+ * Salman and RJ — and Growth Guild. `requireClient` proves the agency tier and
+ * that the page's client is the caller's agency's; the client being added or
+ * removed must also be one this login may see, and the link itself refuses
+ * clients of another agency. Never named `share` — share links use that path.
  */
-
-const FORBIDDEN = "Only Growth Guild can add or remove clients on a shared sub-account.";
 
 const RulesSchema = z.object({
   clients: z
@@ -59,7 +59,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const got = await requireClient(id);
   if ("denied" in got) return got.denied;
   const { client, session } = got;
-  if (!isSuperadmin(session)) return NextResponse.json({ error: FORBIDDEN }, { status: 403 });
 
   const parsed = PostSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
@@ -92,7 +91,6 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   const got = await requireClient(id);
   if ("denied" in got) return got.denied;
   const { client, session } = got;
-  if (!isSuperadmin(session)) return NextResponse.json({ error: FORBIDDEN }, { status: 403 });
 
   const parsed = DeleteSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {

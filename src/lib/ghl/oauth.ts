@@ -803,7 +803,7 @@ export async function assertLocationIdAvailable(
     .limit(1);
   if (bound?.share === existing.id) {
     throw new LocationTakenError(
-      "That GoHighLevel sub-account is shared between other clients here. Ask Growth Guild to add this client to it.",
+      "That GoHighLevel sub-account is shared between other clients here. Add this client to it under Share this sub-account, on the Connections page of the client that holds it.",
     );
   }
 

@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
       return redirectWithError(
         req,
         target
-          ? `${names} is already connected to another client here, so it was left where it is. If it also holds ${target.name}'s leads, ask Growth Guild to share it with ${target.name} from that client's Connections page.`
+          ? `${names} is already connected to another client here, so it was left where it is. If it also holds ${target.name}'s leads, share it with ${target.name} from that client's Connections page, under Share this sub-account.`
           : `${names} is already connected to another client here, so it was left where it is. Try again, ticking only this client's own sub-account.`,
         target?.slug,
       );

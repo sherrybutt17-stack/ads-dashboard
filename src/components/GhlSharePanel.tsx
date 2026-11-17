@@ -11,9 +11,9 @@ import type { SharePreview } from "@/lib/ghl/share-actions";
  * "Share this sub-account" — on the Connections page of the client that holds
  * a GoHighLevel connection.
  *
- * Growth Guild picks which other clients of the agency this sub-account also
- * feeds; the agency's own logins (and Growth Guild) pick the tag that marks
- * each client's leads. Each lead then counts on ONE dashboard. Nothing changes
+ * The agency (its own logins, and Growth Guild) picks which other clients of
+ * the agency this sub-account also feeds, and the tag that marks each client's
+ * leads. Each lead then counts on ONE dashboard. Nothing changes
  * until the before/after preview has been seen and confirmed, because every
  * past month is recounted too.
  */
@@ -214,14 +214,8 @@ export function GhlSharePanel({ clientId, state }: { clientId: string; state: Sh
     router.refresh();
   }
 
-  /* ---------------- not shared, agency login ---------------- */
-  if (!shared && !state.canManage) {
-    return (
-      <p className="mt-4 text-xs" style={muted}>
-        Does this sub-account also hold another client&apos;s leads? Ask Growth Guild to share it.
-      </p>
-    );
-  }
+  /* ---------------- a login that can't share (not reached by agency logins) ---------------- */
+  if (!shared && !state.canManage) return null;
 
   const editable = state.canEditTags && !busy;
   const showRules = shared || Boolean(candidate);
@@ -229,19 +223,9 @@ export function GhlSharePanel({ clientId, state }: { clientId: string; state: Sh
 
   return (
     <section className="mt-5 border-t pt-4" style={{ borderColor: "var(--border)" }} aria-label="Share this sub-account">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-[13px] font-semibold" style={{ color: "var(--text-primary)" }}>
-          Share this sub-account
-        </h3>
-        {state.canManage && (
-          <span
-            className="tint-badge rounded-full px-2 py-0.5 text-[11px] font-medium"
-            style={{ "--tint": "var(--accent)" } as CSSProperties}
-          >
-            Growth Guild only
-          </span>
-        )}
-      </div>
+      <h3 className="text-[13px] font-semibold" style={{ color: "var(--text-primary)" }}>
+        Share this sub-account
+      </h3>
 
       {!shared && (
         <p className="mt-1 text-xs" style={muted}>
@@ -294,11 +278,6 @@ export function GhlSharePanel({ clientId, state }: { clientId: string; state: Sh
             ))}
             .
           </p>
-          {!state.canManage && (
-            <p className="mt-1 text-xs" style={muted}>
-              Growth Guild manages which clients share this sub-account. You can change the tags.
-            </p>
-          )}
         </div>
       )}
 
