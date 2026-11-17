@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
 import { CANONICAL_STAGES, STAGE_LABELS, type CanonicalStage } from "@/lib/stages";
 
 /**
@@ -376,6 +384,212 @@ export function SwitchToPipeline({
 /* ------------------------------------------------------------------ */
 
 /** The tag editor: which tags mean which step, and "every new contact". */
+/**
+ * "+ Add tag" for one step: a search box over the client's tags.
+ *
+ * A sub-account can carry hundreds of tags (the list holds up to 1,000, most
+ * used first), and a plain dropdown of them can only be scrolled. Typing a few
+ * letters narrows it instead: tags that START with what was typed come first,
+ * then tags that contain it, each group still most used first.
+ *
+ * Arrow keys move through the list, Enter adds the highlighted tag, Escape or a
+ * click elsewhere closes it. Picking a tag, or Escape, hands focus back to the
+ * button, so a keyboard user can add the next tag straight away.
+ */
+function TagPicker({
+  stageLabel,
+  tags,
+  disabled,
+  onPick,
+}: {
+  stageLabel: string;
+  /** Tags not yet used by any step, most used first. */
+  tags: readonly TagCount[];
+  disabled: boolean;
+  onPick: (tag: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const backToButton = useRef(false);
+  const id = useId();
+  const listId = `${id}-tags`;
+  const optionId = (i: number) => `${id}-tag-${i}`;
+
+  const q = query.trim().toLowerCase();
+  const matches = useMemo(() => {
+    if (!q) return tags;
+    const starts: TagCount[] = [];
+    const contains: TagCount[] = [];
+    for (const t of tags) {
+      const name = t.tag.toLowerCase();
+      if (name.startsWith(q)) starts.push(t);
+      else if (name.includes(q)) contains.push(t);
+    }
+    return [...starts, ...contains];
+  }, [tags, q]);
+
+  const close = (focusButton: boolean) => {
+    backToButton.current = focusButton;
+    setOpen(false);
+    setQuery("");
+    setActive(0);
+  };
+
+  // Opening puts the cursor in the search box; closing by Escape or a pick
+  // returns it to the button.
+  useEffect(() => {
+    if (open) {
+      input.current?.focus();
+    } else if (backToButton.current) {
+      backToButton.current = false;
+      button.current?.focus();
+    }
+  }, [open]);
+
+  // A click anywhere outside closes it.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+        setActive(0);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // Keep the highlighted tag in view while arrowing through a long list.
+  useEffect(() => {
+    if (!open) return;
+    list.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  const pick = (tag: string) => {
+    onPick(tag);
+    close(true);
+  };
+
+  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => Math.min(i + 1, Math.max(matches.length - 1, 0)));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const t = matches[active];
+      if (t) pick(t.tag);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      close(true);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        ref={button}
+        type="button"
+        onClick={() => setOpen(true)}
+        disabled={disabled || tags.length === 0}
+        aria-haspopup="listbox"
+        aria-label={`Add a tag to ${stageLabel}`}
+        className="max-w-full rounded-[var(--radius-sm)] border px-2 py-1 text-[12px] disabled:opacity-50"
+        style={inputStyle}
+      >
+        + Add tag
+      </button>
+    );
+  }
+
+  return (
+    <div ref={root} className="relative w-[17rem] max-w-full">
+      <input
+        ref={input}
+        type="text"
+        role="combobox"
+        aria-expanded="true"
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={matches[active] ? optionId(active) : undefined}
+        aria-label={`Search tags to add to ${stageLabel}`}
+        placeholder="Search tags…"
+        autoComplete="off"
+        spellCheck={false}
+        value={query}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setActive(0);
+        }}
+        onKeyDown={onKey}
+        onBlur={(e) => {
+          // Tabbing away closes it; a click inside the list never blurs (below).
+          if (!root.current?.contains(e.relatedTarget as Node | null)) close(false);
+        }}
+        className="w-full rounded-[var(--radius-sm)] border px-2 py-1 text-[12px]"
+        style={inputStyle}
+      />
+      <div
+        // Keeps the cursor in the search box while the list, or its scrollbar, is clicked.
+        onMouseDown={(e) => e.preventDefault()}
+        className="absolute left-0 top-full z-30 mt-1 w-full rounded-[var(--radius-sm)] border"
+        style={{
+          borderColor: "var(--border-strong)",
+          background: "var(--surface-raised)",
+          boxShadow: "var(--shadow-overlay)",
+        }}
+      >
+        <ul
+          ref={list}
+          id={listId}
+          role="listbox"
+          aria-label={`Tags you can add to ${stageLabel}`}
+          className="max-h-64 overflow-y-auto py-1"
+        >
+          {matches.map((t, i) => (
+            <li
+              key={t.tag}
+              id={optionId(i)}
+              role="option"
+              aria-selected={i === active}
+              title={t.tag}
+              onClick={() => pick(t.tag)}
+              onMouseMove={() => {
+                if (i !== active) setActive(i);
+              }}
+              className="flex cursor-pointer items-baseline justify-between gap-3 px-2.5 py-1.5 text-[12px]"
+              style={{
+                color: "var(--text-primary)",
+                background: i === active ? "var(--surface-2)" : undefined,
+              }}
+            >
+              <span className="min-w-0 truncate">{t.tag}</span>
+              <span className="shrink-0 tabular-nums" style={{ color: "var(--text-muted)" }}>
+                {fmt(t.contacts)} contact{t.contacts === 1 ? "" : "s"}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {matches.length === 0 && (
+          <p role="status" className="px-2.5 py-2 text-[12px]" style={{ color: "var(--text-muted)" }}>
+            No tags match “{query.trim()}”.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TagMappingPanel({
   clientId,
   savedMode,
@@ -574,22 +788,12 @@ export function TagMappingPanel({
                     </button>
                   </span>
                 ))}
-                <select
-                  id={`tag-add-${stage}`}
-                  aria-label={`Add a tag to ${STAGE_LABELS[stage]}`}
-                  value=""
-                  onChange={(e) => add(stage, e.target.value)}
-                  disabled={busy || available.length === 0}
-                  className="max-w-full rounded-[var(--radius-sm)] border px-2 py-1 text-[12px] disabled:opacity-50"
-                  style={inputStyle}
-                >
-                  <option value="">+ Add tag</option>
-                  {available.map((t) => (
-                    <option key={t.tag} value={t.tag}>
-                      {t.tag} · {fmt(t.contacts)} contact{t.contacts === 1 ? "" : "s"}
-                    </option>
-                  ))}
-                </select>
+                <TagPicker
+                  stageLabel={STAGE_LABELS[stage]}
+                  tags={available}
+                  disabled={busy}
+                  onPick={(tag) => add(stage, tag)}
+                />
               </div>
             </div>
           );
